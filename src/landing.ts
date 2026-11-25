@@ -573,7 +573,8 @@ export function landingAnnotation(
 export type RootVerdict = { taskId: string; verdict: LandingVerdict; notice?: string; takenIn?: true; reraised?: true };
 
 /** 盤面がまだ着地を運ぶ根(GLOSSARY.md「着地」)。`outlivedForkSource` は lineage が読んだ事実で、PR を開く前の追いつきに
- *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として人間に失敗を見せる。 */
+ *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として門を読み、開いていれば人間に失敗を見せる
+ *  (ADR 0241 決定3)。 */
 interface LandingRoot {
   task: Task;
   outlivedForkSource: boolean;
@@ -749,7 +750,7 @@ function landingCandidateIds(db: Db): string[] {
  *  その回で自分で根になる。閉じた根と断念した根の子孫は記録で外さず、lineage に任せる(ADR 0250 決定1・2)—— 閉じた根には
  *  push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。lineage が祖先のブランチへ帰る done の work は根では
  *  ない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側がその根の
- *  失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
+ *  失敗として人間に見せる —— lineage が読めない候補は、門を先に読み、開いていれば見せる(ADR 0241 決定3)。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
 function landingRootOf(
   db: Db,
   resolve: WorkspaceResolver | undefined,
@@ -1544,7 +1545,9 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   /** 根ごとの手順(ADR 0241 決定1・3、spec #1839 A): 除外 → workspace の解決 → 運ぶ内容 → 門 → workspace の
    *  quarantine → ローカルか remote か → PR の有無と状態 → profile。解決より前に、断念の枝は 門 → workspace の quarantine
-   *  → 内容の比較、hold の枝は 門 → 内容の比較 と読む(hold の Quarantine は主経路が読む)。lineage は導出(`landingRootOf`)が解いた。
+   *  → 内容の比較、hold の枝は 門 → 内容の比較 と読む(hold の Quarantine は主経路が読む)。lineage は導出(`landingRootOf`)が解いた ——
+   *  読めなかった根は解決の後に 門 → workspace の quarantine → 失敗 と読む。門の読みと、それに続く Quarantine の読み(hold の枝は門だけ)は、断念・hold・主経路・push の直前・lineage の読めない根の
+   *  どれも `rootStop` を通る。
    *  撃たずに外した根は undefined を返す。 */
   const landRoot = async (
     { task, outlivedForkSource, lineageError }: LandingRoot,
@@ -1580,6 +1583,17 @@ export function createLanding(deps: LandingDeps): Landing {
       const workspace = quietlyResolved(task);
       if (workspace) stopRootIfRefsMoved(workspace);
     };
+    /** 門 → workspace の Quarantine の止まりを読む1つの所(ADR 0241 決定3 / GLOSSARY.md「収束」): 門が閉じていれば他の理由より先に待ち、`record` なら待った記録を
+     *  刻む。門が開いていれば、`quarantine` なら `workspaceName` の Quarantine を読む(ADR 0241 決定6)。どちらでもなければ undefined。
+     *  push の直前の同期区間でも読むので await を挟まない(ADR 0370 決定1)。 */
+    const rootStop = (workspaceName: string | undefined, { record, quarantine }: { record: boolean; quarantine: boolean }): LandingVerdict | undefined => {
+      const block = landingBlock(deps.db, task.id);
+      if (block) {
+        if (record) recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
+        return { kind: "deferred", reason: block.kind, count: block.count };
+      }
+      return quarantine ? quarantinedRoot(workspaceName) : undefined;
+    };
     // ADR 0240 決定2: 人間がまだ答えていない失敗 question を、盤面が先回りして潰さない
     if (open.length > 0 && !ctx.intake) return undefined;
     // 後始末が未了の木は、その merge back がまだ帰っていない(ADR 0240 決定2)。回の途中で後始末に入ることがあるので、撃つ直前に読む
@@ -1598,13 +1612,10 @@ export function createLanding(deps: LandingDeps): Landing {
       // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
       const abandoned = ctx.intake ? undefined : declineInForce(deps.db, task.id, "pr_promotion_retry");
       if (abandoned) {
-        // 門が閉じていれば他の理由より先に待つ(GLOSSARY.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
-        const block = landingBlock(deps.db, task.id);
-        if (block) return { kind: "deferred", reason: block.kind, count: block.count };
-        // 門は Quarantine より先に読む(ADR 0241 決定3)。内容の比較は Quarantine の後 —— Quarantine が抱える根に問い直しを重ねない
-        // (ADR 0241 決定6、#3695)
+        // 待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)。内容の比較は Quarantine の後 —— Quarantine が抱える根に
+        // 問い直しを重ねない(ADR 0241 決定6、#3695)
         const name = ctx.workspaceName();
-        const stopped = quarantinedRoot(name);
+        const stopped = rootStop(name, { record: false, quarantine: true });
         if (stopped) return stopped;
         compareBeforeChangedSince(abandoned.payload.tip);
         if (!changedSince(task, abandoned.payload)) return undefined;
@@ -1628,8 +1639,8 @@ export function createLanding(deps: LandingDeps): Landing {
       // 撃たず、変わっていれば通常の経路を進んで local merge question を立て直す。merge を執行した根は候補に入らない
       const held = ctx.intake ? undefined : declineInForce(deps.db, task.id, "local_merge");
       if (held) {
-        const block = landingBlock(deps.db, task.id);
-        if (block) return { kind: "deferred", reason: block.kind, count: block.count };
+        const stopped = rootStop(undefined, { record: false, quarantine: false });
+        if (stopped) return stopped;
         compareBeforeChangedSince(held.payload.tip);
         if (!changedSince(task, held.payload)) return undefined;
       }
@@ -1673,8 +1684,10 @@ export function createLanding(deps: LandingDeps): Landing {
           ),
         ) ?? { kind: "failed", reason: "content_left_behind", error: `pushed ${root}, but the content of ${branches} has not reached it` };
       };
-      // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)
-      if (lineageError !== undefined) return failed(task, "promotion_failed", lineageError, ctx);
+      // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)—— 門が閉じていれば、見せる前に待つ(ADR 0241 決定3)
+      if (lineageError !== undefined) {
+        return rootStop(workspace.name, { record: true, quarantine: true }) ?? failed(task, "promotion_failed", lineageError, ctx);
+      }
       stopRootIfRefsMoved(workspace);
       // ADR 0371 決定10: retry は根の分解ツリーの届いていない merge back を受理と同じ条件(前半の項と clean を含む)で撃ち直してから収束する
       // (積み残しの question、text A5)。
@@ -1706,13 +1719,7 @@ export function createLanding(deps: LandingDeps): Landing {
         })();
         return { kind: "nothing_to_land", base };
       }
-      const block = landingBlock(deps.db, task.id);
-      if (block) {
-        recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
-        return { kind: "deferred", reason: block.kind, count: block.count };
-      }
-      // 門は quarantine より先に読む(ADR 0241 決定3)
-      const stopped = quarantinedRoot(workspace.name);
+      const stopped = rootStop(workspace.name, { record: true, quarantine: true });
       if (stopped) return stopped;
       if (mergedPr !== undefined) return alreadyMerged(task, mergedPr, ctx);
       if (!remoteBacked) {
@@ -1877,12 +1884,7 @@ export function createLanding(deps: LandingDeps): Landing {
           if (closed) return closed;
           // ADR 0370 決定1: 準備の await の間に動いた ref があれば、確かめた sha も運ばない —— 比較と push を同じ同期区間に置く
           stopRootIfRefsMoved(workspace);
-          const block = landingBlock(deps.db, task.id);
-          if (block) {
-            recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
-            return { kind: "deferred", reason: block.kind, count: block.count };
-          }
-          const stopped = quarantinedRoot(workspace.name);
+          const stopped = rootStop(workspace.name, { record: true, quarantine: true });
           if (stopped) return stopped;
           if (task.pr_number === null) {
             const resolved = readAuthority(task, deps.clock.now());
