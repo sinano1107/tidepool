@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { boardReadTree, CheckoutUnreadableError } from "../src/git.js";
+import { boardReadTree, boardWriteTree, CheckoutHostError, CheckoutUnreadableError } from "../src/git.js";
 import { checkoutPickupPredicates, discardUncommitted } from "../src/pickup-predicates.js";
 import { registerTask } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
-import { commitRoomCopy, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, verifyWorkspaceClean, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, NamedPlaceFetchError, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, verifyWorkspaceClean, type WorkspaceConfig } from "../src/workspace.js";
 import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, STAGING_FAILURES, submoduleSource } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -134,9 +134,16 @@ it("面接室の保護ブランチの時点で gitlink があり root が触っ�
   expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
 });
 
+/** 面接室の loose `id` を消す(`missing`)か、zlib でない byte に置き換える(`corrupt`)。 */
+function damageLoose(repo: string, id: string, damage: "missing" | "corrupt"): void {
+  const loose = join(repo, ".git", "objects", id.slice(0, 2), id.slice(2));
+  rmSync(loose);
+  if (damage === "corrupt") writeFileSync(loose, "not zlib");
+}
+
 // #3814: 出題の写しの callback は面接室にしか無い保護ブランチの親を読む。親の commit・tree の損傷は root の worktree の故障(`pose_probe` が
 // 「作業ツリーを直せ」と拒む型)にも worker の git の時間切れ(root の回収)にもならない —— 型の無い失敗は面接室の側の拒みに落ちる。
-// worktree が再現する面接室の tree(前の出題の写し)の破損は、stage が借りて読み worktree の故障に刻む —— #3814 で扱う
+// worktree が再現する面接室の tree(前の出題の写し)の破損は下の固定が扱う
 it.each([
   ["commit", "missing"],
   ["commit", "corrupt"],
@@ -148,10 +155,7 @@ it.each([
   // root の tip の閉包の外へ進める —— 親の commit と tree は面接室の loose にしか無い
   commitWork(room.path, "room-only.txt", "only in the room\n");
   const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
-  const id = git(room.path, "rev-parse", object === "commit" ? protectedHead : `${protectedHead}^{tree}`);
-  const loose = join(room.path, ".git", "objects", id.slice(0, 2), id.slice(2));
-  rmSync(loose);
-  if (damage === "corrupt") writeFileSync(loose, "not zlib");
+  damageLoose(room.path, git(room.path, "rev-parse", object === "commit" ? protectedHead : `${protectedHead}^{tree}`), damage);
 
   const failure = (() => {
     try {
@@ -166,6 +170,65 @@ it.each([
   expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
   expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
   expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe("");
+});
+
+// ADR 0412 決定1・2(#3814): 出題の写しの stage は面接室の objects を借りない —— worktree が前の写しの tree を再現しても stage は自前で書き、
+// 面接室の tree の破損は面接室への fetch が読んで落ちる。欠けなら stage が書いた tree が運ばれる
+it.each(["corrupt", "missing"] as const)("worktree が前の出題の写しの tree を再現し面接室のその tree が %s なら、出題し直しは root の worktree の故障にしない(#3814)", async (damage) => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-reposed-tree"));
+  writeFileSync(join(place.path, "notes.txt"), "not committed\n");
+  const first = commitRoomCopy(db, place, root.id);
+  // commit の日付は秒の粒度 —— 同じ秒の出題し直しは1回目と同じ commit を面接室から借りて書かず、運ぶものも確かめる自前の object も無い
+  // (面接室の外からの損傷は守らない、ADR 0398 決定3)。ここで見るのは別の commit を運ぶ出題し直し
+  await new Promise((resolve) => setTimeout(resolve, 1050 - (Date.now() % 1000)));
+  const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
+  const keptAround = git(room.path, "for-each-ref", "refs/keep-around/");
+  damageLoose(room.path, git(room.path, "rev-parse", `${first}^{tree}`), damage);
+
+  if (damage === "corrupt") {
+    expect(() => commitRoomCopy(db, place, root.id)).toThrow(NamedPlaceFetchError);
+    expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
+    expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe(keptAround);
+  } else {
+    const head = commitRoomCopy(db, place, root.id);
+    expect(git(room.path, "cat-file", "-p", `${head}:notes.txt`)).toBe("not committed");
+  }
+});
+
+// ADR 0412 決定2 / ADR 0388 決定2(#3814): stage が自前で書いた blob は運んだ後の確かめの集合に入る —— 面接室にしか無い同じ中身の blob が
+// 壊れていれば入れ直す
+it("worktree が面接室にしか無い壊れた blob と同じ中身を持てば、出題の写しは通りその blob を面接室で読めるようにする(#3814)", async () => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-room-only-blob"));
+  writeFileSync(join(place.path, "notes.txt"), "only in the room\n");
+  const blob = git(room.path, "hash-object", "-w", join(place.path, "notes.txt"));
+  damageLoose(room.path, blob, "corrupt");
+
+  commitRoomCopy(db, place, root.id);
+
+  expect(git(room.path, "cat-file", "-p", blob)).toBe("only in the room");
+});
+
+// ADR 0412 決定2(#3814): stage が名前の場所の objects を読まないことは stage の入口で強制する —— 借りた写しを渡すのは盤面の不変条件の破れで、
+// worktree の故障にも host の失敗にも数えない。worktree は読めば `CheckoutUnreadableError` になる形にして、読む前に止まることを見る
+it("objects を借りる repo を渡した stage は、worktree を読む前に型の無い失敗で止まる(#3814)", async () => {
+  const workspace = await makeWorkspace("stage-borrowed-objects");
+  breakCheckoutStaging(workspace.path, STAGING_FAILURES[0]);
+  const borrowing = join(workspace.path, ".git", "borrowing");
+  git(workspace.path, "clone", "--quiet", "--bare", "--shared", workspace.path, borrowing);
+  const use = vi.fn();
+
+  const failure = (() => {
+    try {
+      boardWriteTree(workspace.path, git(workspace.path, "rev-parse", "HEAD"), borrowing, use);
+    } catch (err) {
+      return err;
+    }
+  })();
+
+  expect(failure).toBeInstanceOf(Error);
+  expect(failure).toMatchObject({ message: expect.stringContaining("alternates") });
+  for (const typed of [CheckoutUnreadableError, CheckoutHostError, WorkerTreeGitTimeoutError]) expect(failure).not.toBeInstanceOf(typed);
+  expect(use).not.toHaveBeenCalled();
 });
 
 // ADR 0365 決定3: 出題の写しも盤面の view —— worktree の入れ子の repo は gitlink の値を供給しない
