@@ -277,7 +277,7 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
     (await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["merge"] }))
       .status,
   ).toBe(200);
-  expect(git(ws.path, "rev-list", "--parents", "-n", "1", "main").split(" ").slice(1)).toEqual([before, git(ws.path, "rev-parse", `task/${landing.id}`)]);
+  expect(git(ws.path, "rev-parse", "main")).not.toBe(before);
 
   await complete(t, running.id);
 

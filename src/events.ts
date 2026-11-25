@@ -328,8 +328,8 @@ export type EventPayload =
       outside: PrMergeQuestionContent["outside"];
       missing_branches: string[] | null;
     }
-  // ADR 0289 決定1: ローカル着地の merge 回答が保護ブランチに置いた commit(ff ならタスクブランチの tip、追いつきなら
-  // 盤面名義の merge commit)。回答と同じ transaction で根に刻み、収束はこれで根を終わらせる。`pr_merged` のローカルの対
+  // ADR 0289 決定1: ローカル着地の merge 回答が保護ブランチに置いた commit(盤面名義の、第1親が旧値の merge commit か、
+  // 取り込みの包む commit —— ADR 0418 決定1)。回答と同じ transaction で根に刻み、収束はこれで根を終わらせる。`pr_merged` のローカルの対
   | { kind: "local_merge_executed"; sha: string }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that

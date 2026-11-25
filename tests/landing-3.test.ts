@@ -58,6 +58,7 @@ import {
   leaveBaseline,
   makeLandingWorkspace,
   makeWorkspace,
+  parentsOf,
   prepareAtPickup,
   quarantineQuestion,
 } from "./harness.js";
@@ -2063,7 +2064,7 @@ it("基準どおりの ref を持つ workspace の Quarantine はローカル着
 
   await expect(answerLocalMerge(local)).resolves.toMatchObject({ status: "done" });
 
-  expect(git(workspace.path, "rev-list", "--parents", "-n", "1", "main").split(" ").slice(1)).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
+  expect(parentsOf(workspace.path, "main")).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeDefined();
 });
 
@@ -2165,16 +2166,16 @@ it("ローカル着地の hold 回答は question を立てた後に task ブラ
 
 type LocalLanding = Awaited<ReturnType<typeof landLocally>>;
 
-/** ADR 0401 決定4 の死: 旧い保護ブランチの直系の根 W を保護ブランチへ着地させ、回答の記録は刻まない(question は開いたまま)。W を持ち込んだ
+/** ADR 0401 決定4 の死: ff できる場合の根 W を保護ブランチへ着地させ、回答の記録は刻まない(question は開いたまま)。W を持ち込んだ
  *  merge commit を返す —— ff できる形でも、着地は (旧値, W の tip) の merge commit(ADR 0418 決定1)。 */
 function landDirectWithoutRecord({ db, workspace, work, base }: LocalLanding): string {
   const before = git(workspace.path, "rev-parse", "main");
   const { landed } = mergeTaskToProtected(db, workspace, work.id, { ...CLEAN_LANDING_INTAKE, workbenchBase: base });
-  expect(git(workspace.path, "rev-list", "--parents", "-n", "1", landed).split(" ").slice(1)).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
+  expect(parentsOf(workspace.path, landed)).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
   return landed;
 }
 
-/** ADR 0401 決定4 の死: 別の根を先に着地させてから根 W を保護ブランチへ着地させ、回答の記録は刻まない(question は開いたまま)。
+/** ADR 0401 決定4 の死: 別の根を先に着地させ、ff できない場合の根 W を保護ブランチへ着地させ、回答の記録は刻まない(question は開いたまま)。
  *  W を持ち込んだ merge commit を返す。 */
 async function landAfterAnotherWithoutRecord(local: LocalLanding): Promise<string> {
   const { db, clock, workspace, work, base } = local;
@@ -2190,8 +2191,8 @@ async function landAfterAnotherWithoutRecord(local: LocalLanding): Promise<strin
 }
 
 const LANDINGS_WITHOUT_RECORD: Array<[form: string, land: (local: LocalLanding) => string | Promise<string>]> = [
-  ["旧い保護ブランチの直系", landDirectWithoutRecord],
-  ["別の根の後", landAfterAnotherWithoutRecord],
+  ["ff できる場合", landDirectWithoutRecord],
+  ["ff できない場合", landAfterAnotherWithoutRecord],
 ];
 
 // ADR 0401 決定4: 保護ブランチを動かした後・記録の前に死んだローカル着地の答え直し —— merge は何も書かずに持ち込んだ commit の執行を刻み、

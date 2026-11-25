@@ -33,6 +33,7 @@ import {
 } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { CLEAN_LANDING_INTAKE, commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, lockDirInside, makeRemoteBackedWorkspace, makeShallowWorkspace, makeWorkspace, newTreePointsAtDamagedNamedBlob, notRemoved, prepareAtPickup, quarantineQuestion, seedZeroPaddedTree, sessionId, WORKER_SPAWNED, withHistoryOnlyBlob, withPushDuringWrap } from "./harness.js";
+import { openLocalMergeQuestions } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
 
@@ -1761,8 +1762,8 @@ it("帰り先から入った人間しか書けない path の変更を merge し
 // ADR 0418 決定1・2 / ADR 0401 決定4(#3646): 保護ブランチを動かした後・記録の前に死んだ根 A の着地の後に、人間担当の根 H が保護ブランチを
 // 作業台へ merge して完了・着地しても、A の答え直しが刻むのは A 自身の着地の commit —— H の着地は保護ブランチの first-parent の列から A の着地を外さない
 it.each([
-  ["旧い保護ブランチの直系で", false],
-  ["別の根の着地の後で", true],
+  ["ff できる場合で", false],
+  ["ff できない場合で", true],
 ])("A の着地が%s、着地の記録の前に死んだ後に H が保護ブランチを merge して着地しても、A の merge の答え直しは A 自身の着地の commit を local_merge_executed に刻む", async (_form, otherFirst) => {
   const b = await board("dead-landing-then-human-root");
   const h = work(b, "h", { assignee: HUMAN_ACTOR_ID });
@@ -1770,7 +1771,7 @@ it.each([
   const others = otherFirst ? [await completedHumanRoot(b, "other")] : [];
   const a = await completedHumanRoot(b, "a");
   await localLanding(b).converge();
-  const questionOf = (root: Task) => listBoard(b.db).find((q) => q.question_pending_local_merge_task_id === root.id && q.status === "todo")!;
+  const questionOf = (root: Task) => openLocalMergeQuestions(b.db, root.id)[0]!;
   for (const other of others) expect((await answerLocalMerge(b, questionOf(other).id)).status).toBe("done");
   const aQuestion = questionOf(a);
   // 死: 着地は保護ブランチを動かし、回答の記録は刻まれない

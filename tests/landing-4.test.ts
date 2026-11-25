@@ -72,6 +72,7 @@ import {
   makeLandingWorkspace,
   makeWorkspace,
   notRemoved,
+  parentsOf,
   prepareAtPickup,
   quarantineQuestion,
   queuedForAutoMerge,
@@ -253,7 +254,7 @@ it("HEAD が保護ブランチの外の着地は、checkout の insteadOf と fe
 
   const { landed } = mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE);
 
-  expect({ parents: git(workspace.path, "rev-list", "--parents", "-n", "1", landed).split(" ").slice(1), protected: git(workspace.path, "rev-parse", "refs/heads/main"), askpass: askpass.tripped(), requests: remote.requests() }).toEqual({
+  expect({ parents: parentsOf(workspace.path, landed), protected: git(workspace.path, "rev-parse", "refs/heads/main"), askpass: askpass.tripped(), requests: remote.requests() }).toEqual({
     parents: [before, tip],
     protected: landed,
     askpass: false,
@@ -263,8 +264,8 @@ it("HEAD が保護ブランチの外の着地は、checkout の insteadOf と fe
   expect(() => mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE)).toThrow(`the board recorded it at ${landed} and it now sits at ${before}`);
 });
 
-// `update-ref` の旧 sha が CAS。動いた先がタスクブランチの途中でまだ ff できる位置でも、動いたというだけで落ちる
-it("記録との突き合わせから書き込みまでに保護ブランチが動いていれば、ff の着地は書き込みで落ち、記録の基準は元の位置に畳まれる", async () => {
+// `update-ref` の旧 sha が CAS。動いた先がタスクブランチの途中の位置でも、動いたというだけで落ちる
+it("記録との突き合わせから書き込みまでに保護ブランチが動いていれば、ff できる場合の着地も書き込みで落ち、記録の基準は元の位置に畳まれる", async () => {
   const workspace = await makeWorkspace("landing-off-head-cas");
   const { db, clock } = await openBoard();
   const work = await recordedWork(db, clock, workspace);
@@ -314,7 +315,7 @@ it.each([
   commitWork(place.path, "running.txt", "work\n");
   releaseWorkspace(db, place, running, clock.now());
 
-  expect(git(workspace.path, "rev-list", "--parents", "-n", "1", "refs/heads/main").split(" ").slice(1)).toEqual([before, tip]);
+  expect(parentsOf(workspace.path, "refs/heads/main")).toEqual([before, tip]);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
@@ -334,9 +335,9 @@ it("非 ff で着地した task をもう一度着地させると、commit を�
 
 // ADR 0289 決定1: 保護ブランチの tip は他の根の commit でありうる —— 返すのはこの根を持ち込んだ commit
 it.each([
-  ["ff", 0],
-  ["非 ff", 1],
-])("%s で着地した task の後に別の根が着地しても、もう一度着地させると commit を足さずにこの根の commit を返す", async (_form, index) => {
+  ["ff できる場合", 0],
+  ["ff できない場合", 1],
+])("%s に着地した task の後に別の根が着地しても、もう一度着地させると commit を足さずにこの根の commit を返す", async (_form, index) => {
   const workspace = await makeWorkspace("landing-reanswer-after-other-root");
   const { db, clock } = await openBoard();
   const works = [];
@@ -388,7 +389,7 @@ it("基準の行が無い workspace のローカル着地の merge 回答は、�
 
   expect(holdsBaseline(db, workspace.name)).toBe(true);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
-  expect(git(workspace.path, "rev-list", "--parents", "-n", "1", "main").split(" ").slice(1)).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
+  expect(parentsOf(workspace.path, "main")).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
 });
 
 it("最初の撮りが別の workspace の封じ込めを待つ間、merge の回答はその question を名指して拒む", async () => {
@@ -498,7 +499,7 @@ it.each([
 });
 
 // ADR 0243 決定4(#1871): 休止中の merge 回答も merge commit を先に作り、口を通して `merge --ff-only` で checkout ごと動かす
-/** 休止中の直列の着地: 同じ保護ブランチから分かれ、被らないファイルを足した3件を記録し、1件目を ff で着地させた形。
+/** 休止中の直列の着地: 同じ保護ブランチから分かれ、被らないファイルを足した3件を記録し、1件目を着地させた形(ff できる場合も merge commit、ADR 0418 決定1)。
  *  2件目以降の回答は、盤面自身が進めた保護ブランチへ merge commit で追いつく。 */
 async function dormantSerialLanding(board: Db, clock: FakeClock, workspace: WorkspaceConfig) {
   const works = [];
@@ -980,7 +981,7 @@ it("走っている session の間も merge 回答は名前の場所を checkout
 
   const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
   const landed = git(workspace.path, "rev-parse", "refs/heads/main");
-  expect(git(workspace.path, "rev-list", "--parents", "-n", "1", landed).split(" ").slice(1)).toEqual([before, tip]);
+  expect(parentsOf(workspace.path, landed)).toEqual([before, tip]);
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(landed);
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
   expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("the running session's work in progress\n");
