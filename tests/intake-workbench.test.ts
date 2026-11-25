@@ -753,7 +753,7 @@ it("take in は cancel した親の下の done の子のブランチを merge �
   expect(git(b.ws.path, "show", "main:child.txt")).toBe("child.txt");
 });
 
-// ADR 0382 追記(#3825): cancel 済みの task のブランチの merge を通しても、系譜がその task を飛ばして根になった下の done の子は中身を運ばない ——
+// ADR 0382 追記2(#3825): cancel 済みの task のブランチの merge を通しても、系譜がその task を飛ばして根になった下の done の子は中身を運ばない ——
 // 子の中身は merge back で cancel 済みの親のブランチにあり、取り込みで保護ブランチに入っている
 it("cancel した親のブランチを take in した後、根になった下の done の子は nothing_to_land で終わり、question を立てず保護ブランチを動かさない", async () => {
   const b = await board();
