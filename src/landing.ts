@@ -750,7 +750,7 @@ function landingCandidateIds(db: Db): string[] {
  *  その回で自分で根になる。閉じた根と断念した根の子孫は記録で外さず、lineage に任せる(ADR 0250 決定1・2)—— 閉じた根には
  *  push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。lineage が祖先のブランチへ帰る done の work は根では
  *  ない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側がその根の
- *  失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
+ *  失敗として人間に見せる —— lineage が読めない候補は、門を先に読み、開いていれば見せる(ADR 0241 決定3)。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
 function landingRootOf(
   db: Db,
   resolve: WorkspaceResolver | undefined,
@@ -1546,7 +1546,8 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 根ごとの手順(ADR 0241 決定1・3、spec #1839 A): 除外 → workspace の解決 → 運ぶ内容 → 門 → workspace の
    *  quarantine → ローカルか remote か → PR の有無と状態 → profile。解決より前に、断念の枝は 門 → workspace の quarantine
    *  → 内容の比較、hold の枝は 門 → 内容の比較 と読む(hold の Quarantine は主経路が読む)。lineage は導出(`landingRootOf`)が解いた ——
-   *  読めなかった根は解決の後に 門 → workspace の quarantine → 失敗 と読む。4つの枝(断念・hold・主経路・push の直前)と lineage の読めない根の 門 → Quarantine の止まりは `rootStop` を通る。
+   *  読めなかった根は解決の後に 門 → workspace の quarantine → 失敗 と読む。門の読みと、それに続く Quarantine の読み(hold の枝は門だけ)は、断念・hold・主経路・push の直前・lineage の読めない根の
+   *  どれも `rootStop` を通る。
    *  撃たずに外した根は undefined を返す。 */
   const landRoot = async (
     { task, outlivedForkSource, lineageError }: LandingRoot,
@@ -1582,7 +1583,7 @@ export function createLanding(deps: LandingDeps): Landing {
       const workspace = quietlyResolved(task);
       if (workspace) stopRootIfRefsMoved(workspace);
     };
-    /** 根の止まりを読む1つの所(ADR 0241 決定3 / GLOSSARY.md「収束」): 門が閉じていれば他の理由より先に待ち、`record` なら待った記録を
+    /** 門 → workspace の Quarantine の止まりを読む1つの所(ADR 0241 決定3 / GLOSSARY.md「収束」): 門が閉じていれば他の理由より先に待ち、`record` なら待った記録を
      *  刻む。門が開いていれば、`quarantine` なら `workspaceName` の Quarantine を読む(ADR 0241 決定6)。どちらでもなければ undefined。
      *  push の直前の同期区間でも読むので await を挟まない(ADR 0370 決定1)。 */
     const rootStop = (workspaceName: string | undefined, { record, quarantine }: { record: boolean; quarantine: boolean }): LandingVerdict | undefined => {
