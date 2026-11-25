@@ -1,5 +1,7 @@
 # 完了の門は tip を記録に着けるまで `done` にせず、完了済みの解放は記録の tip だけを運ぶ —— 報告後の書き込みは記録され、名前の場所を止めない
 
+**Status 追記: 決定1 の門は、`task/<id>` を書く前に tip の履歴も見る —— 他の task のブランチの commit を持つ tip は何も書かずに拒む。完了以外の解放の WIP の退避は、同じ tip を書かずに解放の失敗にする([ADR 0417](0417-a-worker-tip-holding-another-tasks-commits-is-refused-where-the-board-receives-it-the-gate-writes-nothing-and-a-release-fails-and-keeps-the-checkout.md)、2026-11-25、issue #3824)。**
+
 **Status 追記: 決定3 の「記録から index を作る段と worker の worktree を観測する段の失敗を分ける」は、分ける相手が無くなる —— 観測の view は盤面所有の写しだけを借り、完了の門は tip を記録する手と同じ写しを使う。完了後の観測は写しを作るので、worker が自分の repo を壊した形と写しが上限を越えた形は「読めない」観測になる([ADR 0412](0412-the-boards-view-over-a-task-checkout-borrows-the-board-owned-copy-of-the-workers-tip-and-paths-the-worktree-does-not-supply-keep-the-recorded-value.md) 決定1・4・5、2026-11-24、issue #3139)。**
 
 **Status 追記: 決定1 の「`done` ⇔ tip が記録にある」は、Quarantine の選択肢「失われた ref を諦めて基準へ戻す」が失われた `task/<id>` を今の値で基準に入れた task で破れ、event `lost_refs_accepted` がその例外を記録する(その task に残す event と、レビュー・着地の後始末は [ADR 0375](0375-giving-up-lost-refs-also-settles-the-tasks-whose-branch-was-lost-a-task-whose-git-artifact-is-really-gone-counts-as-discarded-and-its-root-stops-landing.md) 決定1・4・7)。決定4 の「verb では基準を比較せず」は全 ref の比較をしないという意味で、門は自分の `task/<id>` の1行を基準と突き合わせる —— 門の掛からない解放も、同じ形で書く前に突き合わせる。完了の門が Quarantine を立てない点は変わらない([ADR 0373](0373-the-acceptance-of-a-quarantine-only-confirms-that-every-ref-equals-the-baseline-moved-refs-are-restored-by-the-board-and-only-lost-refs-enter-the-baseline-through-a-named-option.md) 決定5・12、2026-11-15、issue #3178)。**

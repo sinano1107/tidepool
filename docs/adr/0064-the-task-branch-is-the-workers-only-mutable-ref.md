@@ -1,5 +1,7 @@
 # タスクブランチは worker の唯一の可変 ref である
 
+**Status 追記: 「なぜ今か」の「自分のタスクブランチへの `git merge` は本不変条件の下で合法」は、他の task のブランチの commit を持つ tip についてだけ狭まる —— 盤面は tip を受ける口で拒む([ADR 0417](0417-a-worker-tip-holding-another-tasks-commits-is-refused-where-the-board-receives-it-the-gate-writes-nothing-and-a-release-fails-and-keeps-the-checkout.md)、2026-11-25、issue #3824)。**
+
 **Status 追記: 決定4 の「失敗した publish は `remote remove` で巻き戻る」は偽になる —— 巻き戻しは `remote add` が書いた節を外し、push の後に書いた写しを publish の前の値へ戻す。撮り直す対象がそもそも残らないことは変わらない([ADR 0066](0066-workspaces-are-born-local-and-publish-grants-the-remote.md) 決定5 の Status 追記、2026-11-19、issue #3197)。**
 
 **Status 追記: 決定4 の表の registry の3行(registry の fetch・push・`update-ref`)は消え、「唯一の保護 workspace で不変条件が最も弱くなる」と、呼び忘れが「registry の fetch は読み取りのたびに走るので即座に露見する」という論拠も当たらなくなる —— registry clone は workspace にならず、registry の書き込みはどの workspace の基準にも掛からない(「呼び忘れは誤検知として quarantine を立てる」は残る)。Considered options が「registry 編集がしょっちゅう拒まれる」で退けた直列化の案は理由が当たらなくなるが、採り直していない([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1・8、2026-11-15、issue #3178)。**
