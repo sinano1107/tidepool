@@ -144,6 +144,10 @@ function viewWith<T>(runner: Runner, cwd: string, use: (view: View, gitDir: stri
   const stage = mode === "stage";
   const format = git(objectsFrom, "rev-parse", "--show-object-format");
   const objects = git(objectsFrom, "rev-parse", "--path-format=absolute", "--git-path", "objects");
+  // ADR 0412 決定2(#3814): stage は worker の worktree と盤面の写しだけを読む —— 写しが名前の場所を借りていれば盤面の不変条件の破れで、型を付けない
+  if (stage && existsSync(join(objects, "info", "alternates"))) {
+    throw new Error(`the board cannot stage ${cwd}: the repo it stages over (${objectsFrom}) borrows other objects through objects/info/alternates`);
+  }
   const makeDirectory = () => mkdtempSync(join(tmpdir(), "tidepool-git-view-"));
   const dir = stage ? stagingHostStep(makeDirectory) : makeDirectory();
   try {

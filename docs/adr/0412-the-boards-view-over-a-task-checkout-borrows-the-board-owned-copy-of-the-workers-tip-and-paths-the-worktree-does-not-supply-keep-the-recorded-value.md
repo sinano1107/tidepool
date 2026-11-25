@@ -25,3 +25,9 @@
 ## 追記(2026-11-25 の実装、issue #3139)
 
 決定3 の「WIP の tree は、種を ref にしていたときと同じになる」は、外す path に入れ子の repo が絡む形では成り立たない。(i) tip の gitlink を ref が普通の dir に置き換えた形と、(ii) ref が足した dir を worker の worktree が入れ子の repo にした形である。種を ref にしていたときの WIP は、`add -A` がその dir を ref の entry に対して stage するので、`text=auto` の判定を通じて ref の blob の中身に依る。同じ tree を作るには ref の blob を読む必要があり、決定2 がそれを禁じる。これらの形でも決定3 の原則(worktree が供給しない path は記録の値のまま)を取り、外す path には ref の entry を重ねる。実測は #3139。
+
+## 追記(2026-11-25 の実装、issue #3814)
+
+出題の写し(ADR 0273 決定3)も、決定1・2 の「task の checkout を読む view」に入る —— root の task の checkout を読む。出題の写しは stage の前に写しへ面接室の objects を借りさせていたので、git が alternates を推移的に辿り、worktree が面接室にだけある tree / blob を再現すると `add -A` / `write-tree` がそれを書かずに借りた。面接室のその object の破損は stage の中で落ち、root の worktree の故障として刻まれた。解放の WIP と同じく、借りは `write-tree` の後(親を読む手の前)に置く。
+
+決定2 の不変条件(`add -A` / `write-tree` は名前の場所の object を読まない)は、呼び出しの順序だけでなく stage の入口で強制する: stage の view が借りる repo が `objects/info/alternates` を持てば、view を作らず worktree を読む前に止まる。盤面の不変条件の破れなので型を付けず、worker の故障にも host の失敗にも数えない。実測は #3814。

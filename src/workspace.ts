@@ -2629,11 +2629,11 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
   const room = place.namedPlace;
   return withVerifiedUntrustedTip(untrustedTaskCheckout(place), taskBranch(taskId), ({ tip, verified }) => {
     const parent = git(room.path, "rev-parse", protectedBranchRef(room));
-    // ADR 0364 決定1: 兄弟の答案を tip の検証に借りない。検証後は写しの親を読むために面接室の objects を借りる。
     const objects = namedObjects(room);
-    stagingHostStep(() => borrowObjects(verified, [objects]));
     const exclude = boardViewExcludes(db, place, taskId, tip, verified);
     return boardWriteTree(place.path, tip, verified, (tree, repo) => {
+      // ADR 0364 決定1: 兄弟の答案を tip の検証に借りない。ADR 0412 決定2: stage の後に、写しの親を読むために面接室の objects を借りる
+      stagingHostStep(() => borrowObjects(verified, [objects]));
       // ADR 0365 決定2: 受験者が populate できない gitlink を足す・進める tree は、面接室へ運ぶ前に拒む。
       const gitlinks = gitlinkChanges(diffTreeEntries(repo, `${parent}^{tree}`, tree, { workerTree: true }));
       if (gitlinks.length > 0) throw new RoomCopyGitlinkError(gitlinks);
