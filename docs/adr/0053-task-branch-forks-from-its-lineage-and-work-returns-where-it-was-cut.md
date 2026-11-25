@@ -1,5 +1,7 @@
 # タスクブランチの fork 元は系譜が決め、成果は切られた場所へ帰る
 
+**Status 追記: Status の「決定3 の ff-only 着地は ADR 0103 で置き換え済み」の先で、ADR 0103 に残っていた「ff 可能なら ff」も消える —— purely-local の着地は ff せず、常に盤面が第1親 = 保護ブランチの旧値の merge commit を書く([ADR 0418](0418-a-purely-local-landing-never-fast-forwards-it-always-writes-a-merge-commit-whose-first-parent-is-the-old-protected-value.md)、2026-11-25、issue #3646)。**
+
 **Status 追記: 決定4 の「worker がタスクブランチの土台を動かすことは検知しない」は、他の task のブランチの commit についてだけ狭まる —— 保護ブランチや帰り先を merge する操作は検知しないまま([ADR 0417](0417-a-worker-tip-holding-another-tasks-commits-is-refused-where-the-board-receives-it-the-gate-writes-nothing-and-a-release-fails-and-keeps-the-checkout.md)、2026-11-25、issue #3824)。**
 
 **Status 追記: 下の ADR 0372 の追記の「別の workspace の子は自分の保護ブランチへ自分で着地する」の子は居なくなる —— 子は親と同じ workspace に居て、別の workspace の仕事は分解元つきの根として、系譜の外で自分の保護ブランチへ着地する ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定1・3、2026-11-20、issue #1796)。**

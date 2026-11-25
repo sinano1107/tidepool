@@ -1,5 +1,7 @@
 # 盤面の外への書き込みと記録の間の死は、落ちた後の最低線だけを満たす —— fail-closed・決定が読む誤った記録を残さない・出口を名指す
 
+**Status 追記: 決定4 の「その task を持ち込んだ commit」は、保護ブランチの first-parent の列の上で task の tip を初めて含む commit と読む。purely-local の着地が ff しなくなり、列は盤面の書き込みの並びになる。答え直しが残った作業台を片付けるのは、その commit の第2親が task の tip と違う(取り込みで着地した)ときだけ([ADR 0418](0418-a-purely-local-landing-never-fast-forwards-it-always-writes-a-merge-commit-whose-first-parent-is-the-old-protected-value.md)、2026-11-25、issue #3646)。**
+
 **Status 追記: 決定6 と追記(2026-11-24、issue #3635)は段について対象を失う —— agent の既定ティアは盤面が持ち、段を下げる承認と段の改名は registry に書かない([ADR 0410](0410-an-agents-default-tier-is-held-by-the-board-and-lowering-or-renaming-a-tier-writes-nothing-to-the-registry.md)、2026-11-24、issue #3758)。**
 
 2026-11-22 の grilling(族の根 issue #3515)で決定。盤面は、外への書き込み(checkout の git、出元 repo への push、registry の commit)と盤面

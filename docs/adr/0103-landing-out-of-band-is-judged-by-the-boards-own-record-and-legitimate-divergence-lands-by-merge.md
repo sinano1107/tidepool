@@ -1,5 +1,7 @@
 # purely-local の着地の帯域外判定は盤面自身の記録で行い、正当な非 ff は Tidepool 名義の merge で追いつかせる
 
+**Status 追記: 決定2 の「ff 可能なら今日どおり ff」は置き換わる —— ff できる場合も、盤面が第1親 = 保護ブランチの旧値・第2親 = task の tip の merge commit を書く。保護ブランチの first-parent の列が着地の並びになり、死の後の答え直し(ADR 0401 決定4)はそこから着地の commit を読む。決定1・4・5 と、決定2 の「タスクブランチは書き換えない」はそのまま([ADR 0418](0418-a-purely-local-landing-never-fast-forwards-it-always-writes-a-merge-commit-whose-first-parent-is-the-old-protected-value.md)、2026-11-25、issue #3646)。**
+
 **Status 追記: 下の追記の末文「決定4 の回答拒否に従った手の解決は ref を動かすので、次の回答はこの比較に当たって Quarantine を1枚経る」は置き換わる —— conflict の拒否は作業台を開き、人間はそこで merge を commit して答え直す。回答が取り込むので Quarantine は経ない。決定4 の本文(回答拒否であって quarantine ではない)は変わらない([ADR 0371](0371-a-human-writes-in-a-workbench-the-board-opens-and-the-board-takes-its-tip-in-through-the-answers-that-already-exist.md) 決定1・2・7・11、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定1 の「着地経路で quarantine するのはこれだけ」は広がる —— 着地の回答は ref を読む同期区間の頭で全 ref を基準と比べ、保護ブランチ以外の ref の帯域外の移動も workspace の Quarantine に落ちる。同じ比較は、着地が ref を読んで運ぶか書き込みを決めるところ(収束、PR の merge の回答、無人 merge の tick)からも立つ。「snapshot に保護ブランチの行が無いときも不一致」は、基準はあるがその ref の行が無い場合に限り、基準の行そのものが無ければ着地が最初の撮りをする(今は止まる回答が通るようになる)。決定4 の回答拒否に従った手の解決は ref を動かすので、次の回答はこの比較に当たって Quarantine を1枚経る —— 文面はそれを告げる([ADR 0370](0370-landing-compares-every-ref-of-the-named-place-against-the-baseline-before-it-carries-or-records-and-the-acceptance-hole-goes-to-the-door-design.md) 決定1・7、2026-11-12、issue #3151)。**

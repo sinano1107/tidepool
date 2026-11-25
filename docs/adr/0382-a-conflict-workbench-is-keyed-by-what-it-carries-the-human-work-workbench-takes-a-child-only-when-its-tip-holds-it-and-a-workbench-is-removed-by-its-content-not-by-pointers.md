@@ -1,5 +1,7 @@
 # conflict を受ける作業台は運ばれる側で鍵を分け、人間担当の work の作業台は子を含む tip だけを子の入口が取り込む —— 作業台の寿命は指し手でなく中身で決める
 
+**Status 追記: 2026-11-25 の追記(#3769)の「local 着地の ff と merge…は今のまま」のうち ff は無くなる —— local 着地は常に merge commit を書く。着地の側に他の task の検査を足さないことは変わらない([ADR 0418](0418-a-purely-local-landing-never-fast-forwards-it-always-writes-a-merge-commit-whose-first-parent-is-the-old-protected-value.md)、2026-11-25、issue #3646)。**
+
 **Status 追記: 2026-11-25 の追記(#3769)の限界「worker の tip の履歴は検査していない」は消える —— worker の tip を受ける口も同じ数え方で拒む([ADR 0417](0417-a-worker-tip-holding-another-tasks-commits-is-refused-where-the-board-receives-it-the-gate-writes-nothing-and-a-release-fails-and-keeps-the-checkout.md)、2026-11-25、issue #3824)。**
 
 2026-11-17 の grilling(#3352)で決定。ADR 0371 は作業台を (workspace, 書く先の ref) ごとに1つとし、同じ鍵の入口に共有させた(決定1・7)。

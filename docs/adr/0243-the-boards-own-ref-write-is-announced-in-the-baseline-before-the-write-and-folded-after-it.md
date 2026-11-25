@@ -1,5 +1,7 @@
 # 盤面自身の ref の書き込みは、書く前に基準へ予告し、書いた後に畳む
 
+**Status 追記: 決定2 の「保護ブランチの ff 先は人間が承認した tip か盤面が `commit-tree` で作った merge commit」は、purely-local では後者だけになる —— 着地は ff しない([ADR 0418](0418-a-purely-local-landing-never-fast-forwards-it-always-writes-a-merge-commit-whose-first-parent-is-the-old-protected-value.md)、2026-11-25、issue #3646)。予告と畳みの規則は変わらない。**
+
 **Status 追記: 背景の「盤面が死んでも子の push は完走して写しを動かす(Mac で実測)」は偽になった —— 写しは盤面が push の後に別に書く(ADR 0052 Status 追記、#2827)ので、push の最中に死ぬと remote に載り、写しは旧い値に畳まれる。決定1・2 の予告と畳みの規則は変わらない([ADR 0401](0401-a-death-between-an-outside-write-and-its-record-needs-only-the-post-crash-minimum-fail-closed-no-wrong-record-and-a-named-exit.md) 帰結、2026-11-22、issue #3515)。**
 
 **Status 追記: 決定3 の対象の列挙から registry の fetch と registry 到達性 quarantine の受理検査の fetch が外れ、決定4 の「盤面の ref の書き込みはすべてこの口を通る」は名前の場所の ref に限る(列挙の「registry の `update-ref`」も外れる)—— registry clone は workspace にならず、予告する基準を持たない。registry の fetch に「値を先に知る」形を残すかは決めていない([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1・8、2026-11-15、issue #3178)。**
