@@ -1398,16 +1398,23 @@ export function createLanding(deps: LandingDeps): Landing {
     })();
     return true;
   };
-  /** ADR 0376 決定7: 外の push が落とした内容を問う直前に profile → 門の順に読み直し(ADR 0217 決定1・ADR 0232)、
-   *  止まればその verdict を返す。着地の面は読まない。 */
-  const askOutsidePush = (workspace: WorkspaceConfig, task: Task, prNumber: number, outside: OutsidePush, pr: PrDiff | undefined): { question: string } | LandingVerdict => {
+  /** ADR 0376 決定7(Status 追記): 外の push が落とした内容を問う直前に profile → 根の止まり(`stop`、門 → 待った記録 → workspace の
+   *  Quarantine)の順に読み直し(ADR 0217 決定1・ADR 0232 決定3)、止まればその verdict を返す。着地の面は読まない。 */
+  const askOutsidePush = (
+    workspace: WorkspaceConfig,
+    task: Task,
+    prNumber: number,
+    outside: OutsidePush,
+    pr: PrDiff | undefined,
+    stop: () => LandingVerdict | undefined,
+  ): { question: string } | LandingVerdict => {
     // ADR 0288 決定2 / ADR 0394 決定2: 執行中の回答を閉じず、tick の読みを待つ間は収束が問い直せる。
     if (inFlight.get(task.id) === "write") return failedAnswer(prInFlightRefusal(prNumber));
     const now = deps.clock.now();
     const resolved = readAuthority(task, now);
     if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
-    const block = landingBlock(deps.db, task.id);
-    if (block) return { kind: "deferred", reason: block.kind, count: block.count };
+    const stopped = stop();
+    if (stopped) return stopped;
     return { question: askMerge(deps.db, workspace, task, prNumber, now, { head: outside.head, headRef: pr?.headRef }, { kind: "rewritten", outside }, undefined, mergePathReview(workspace, pr, resolved.profile?.merge)) };
   };
   /** 回答の取り込みが根の verdict に添えるもの: 作業台を残したときの text C6 か消せなかったと言う文(`kept`)と、取り込んだこと(`takenIn`、text A10)。 */
@@ -1455,7 +1462,10 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 根の workspace の Quarantine を読む1つの所。開いていれば根はその Quarantine の verdict で止まる(ADR 0241 決定6)。 */
   const quarantinedRoot = (workspaceName: string | undefined) =>
     workspaceName !== undefined && workspaceNeedsHuman(deps.db, workspaceName) ? quarantined("workspace", workspaceName) : undefined;
-  /** 収束が根の question を立てる道はすべてこの判定を通る。tick の側の `stopForRepoMismatch` はこの外 —— tick は workspace の Quarantine
+  /** 収束が根の question を立てる道は、次の3つを除きすべてこの判定を通る。外の push の merge question(`askOutsidePush`)は門と
+   *  Quarantine を `rootStop` で読み、registry の止まりを足さず(ADR 0403 決定5)、答えている回にも立てて拒否文で名指す(ADR 0376 決定7)。
+   *  purely-local の merge question は、主経路の `rootStop` と同じ同期区間で立つ(ADR 0376 決定7 の Status 追記)。`refuseUnaskedHead` は
+   *  答えている merge question を取り替えるだけで足さない(ADR 0394 決定3)。tick の側の `stopForRepoMismatch` もこの外 —— tick は workspace の Quarantine
    *  単独では止まらず(ADR 0370 決定1)、その根を止めているのは食い違いで、信号はその question しか持たない(ADR 0399 決定5 の追記)。止まりがすでに信号を持って
    *  いれば question を重ねない(ADR 0241 決定6)—— workspace の Quarantine は根の verdict として返り(答えている回答はその verdict で
    *  拒まれる、ADR 0241 決定5)、registry の止まりは verdict を変えない(ADR 0403 決定5)。回答が答えている回(`attended`)も立てない ——
@@ -1546,8 +1556,8 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 根ごとの手順(ADR 0241 決定1・3、spec #1839 A): 除外 → workspace の解決 → 運ぶ内容 → 門 → workspace の
    *  quarantine → ローカルか remote か → PR の有無と状態 → profile。解決より前に、断念の枝は 門 → workspace の quarantine
    *  → 内容の比較、hold の枝は 門 → 内容の比較 と読む(hold の Quarantine は主経路が読む)。lineage は導出(`landingRootOf`)が解いた ——
-   *  読めなかった根は解決の後に 門 → workspace の quarantine → 失敗 と読む。門の読みと、それに続く Quarantine の読み(hold の枝は門だけ)は、断念・hold・主経路・push の直前・lineage の読めない根の
-   *  どれも `rootStop` を通る。
+   *  読めなかった根は解決の後に 門 → workspace の quarantine → 失敗 と読む。門の読みと、それに続く Quarantine の読み(hold の枝は門だけ)は、断念・hold・主経路・push の直前・lineage の読めない根・
+   *  外の push の merge question の直前の読み直し(profile の後、ADR 0376 決定7 の Status 追記)のどれも `rootStop` を通る。
    *  撃たずに外した根は undefined を返す。 */
   const landRoot = async (
     { task, outlivedForkSource, lineageError }: LandingRoot,
@@ -1585,7 +1595,7 @@ export function createLanding(deps: LandingDeps): Landing {
     };
     /** 門 → workspace の Quarantine の止まりを読む1つの所(ADR 0241 決定3 / GLOSSARY.md「収束」): 門が閉じていれば他の理由より先に待ち、`record` なら待った記録を
      *  刻む。門が開いていれば、`quarantine` なら `workspaceName` の Quarantine を読む(ADR 0241 決定6)。どちらでもなければ undefined。
-     *  push の直前の同期区間でも読むので await を挟まない(ADR 0370 決定1)。 */
+     *  push の直前の同期区間と、外の push の merge question を立てる直前(`askOutsidePush`)でも読むので await を挟まない(ADR 0370 決定1)。 */
     const rootStop = (workspaceName: string | undefined, { record, quarantine }: { record: boolean; quarantine: boolean }): LandingVerdict | undefined => {
       const block = landingBlock(deps.db, task.id);
       if (block) {
@@ -1856,7 +1866,7 @@ export function createLanding(deps: LandingDeps): Landing {
       /** ADR 0376 決定7 / ADR 0394 決定2: 収束はキューの行を外して外の部分を問い、別の失敗で開いていた昇格失敗
        *  question への retry はその question を id で名指して拒む(text D3b)。 */
       const outsidePushStep = (prNumber: number, outside: OutsidePush, pr: PrDiff | undefined): LandingVerdict => {
-        const asked = askOutsidePush(workspace, task, prNumber, outside, pr);
+        const asked = askOutsidePush(workspace, task, prNumber, outside, pr, () => rootStop(workspace.name, { record: true, quarantine: true }));
         if (!("question" in asked)) return asked;
         if (ctx.intake) {
           return failedAnswer(

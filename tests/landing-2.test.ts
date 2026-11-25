@@ -26,6 +26,7 @@ import {
 import { markTeardown } from "../src/teardown.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
+  quarantineWorkspace,
   recordDeclaredRepo,
   workspaceProtectionReader,
 } from "../src/workspace.js";
@@ -48,6 +49,7 @@ import {
   answerHoldOnPr,
   answerMergeQuestion,
   answerPromotion,
+  answerWorkspaceQuarantine,
   attachUnsettledChild,
   autoMergeOutcomeEvents,
   autoMerging,
@@ -1532,6 +1534,67 @@ it("記録済みの PR の head を読む間に門が閉じれば、収束は me
   expect(mergeQuestions(c.db)).toEqual([]);
   expect(promotionFailures(c.db, c.work.id)).toEqual([]);
   c.expectNothingCarried();
+});
+
+/** 記録済みの PR の head を書き換え、収束が PR の状態を読む await の間に `during` を走らせる根。基準の行を持つ workspace にする ——
+ *  行が無ければ、開いた Quarantine を head の読みの後の ref の比較(ADR 0370 決定1)が先に止める。 */
+async function rewrittenWhileReading(name: string, during: (c: Awaited<ReturnType<typeof pushedRoot>>) => void, options: { openFailure?: boolean } = {}) {
+  const c = await pushedRoot(name, { pr: "recorded", commits: 2, merge: "auto_if_ci_green", ...options });
+  await leaveBaseline(c.db, c.workspace);
+  await moveRecordedHead(c, "rewritten");
+  const read = c.github.getPullRequestState.bind(c.github);
+  c.github.getPullRequestState = async (ref) => {
+    const state = await read(ref);
+    c.github.getPullRequestState = read;
+    during(c);
+    return state;
+  };
+  return c;
+}
+
+const openQuarantine = (c: Awaited<ReturnType<typeof pushedRoot>>) => quarantineWorkspace(c.db, c.workspace.name, new Error("repair the checkout"), c.clock.now());
+
+// ADR 0376 決定7(Status 追記)/ ADR 0241 決定6: merge question の直前の読み直しは主経路と同じ 門 → Quarantine の止まりを通す
+it("収束が記録済みの PR の head を読む間に workspace の Quarantine が開けば、merge question を立てずキューの行も外さず Quarantine の verdict で止まり、Quarantine が閉じた後の収束が同じ merge question を立てる", async () => {
+  const c = await rewrittenWhileReading("outside-rewrite-quarantine-opens", openQuarantine);
+
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({
+    kind: "quarantined",
+    error: `workspace "${c.workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+  });
+  expect(mergeQuestions(c.db)).toEqual([]);
+  expect(promotionFailures(c.db, c.work.id)).toEqual([]);
+  c.expectNothingCarried();
+
+  await answerWorkspaceQuarantine(c, quarantineQuestion(c.db, "workspace", c.workspace.name)!);
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+  expect(mergeQuestions(c.db)).toEqual([{ pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: textA4c(c.target) }]);
+});
+
+it("収束が記録済みの PR の head を読む間に workspace の Quarantine が開いても、無人 merge キューの行は外れない", async () => {
+  const c = await rewrittenWhileReading("outside-rewrite-quarantine-keeps-queue", openQuarantine);
+
+  await convergeOn(c.landing, c.work.id);
+
+  expect(await readOnNextTick(c.landing, c.github)).toEqual([1]);
+});
+
+// ADR 0241 決定5: 答えている回答も同じ verdict で拒まれる
+it("retry が答えている収束が記録済みの PR の head を読む間に workspace の Quarantine が開けば、retry はその Quarantine の verdict で拒まれ、merge question は立たない", async () => {
+  const c = await rewrittenWhileReading("outside-rewrite-quarantine-on-retry", openQuarantine, { openFailure: true });
+  const [failure] = promotionFailures(c.db, c.work.id);
+
+  expect(await c.retry(failure!)).toContain(`workspace "${c.workspace.name}" is quarantined and needs human attention before landing`);
+
+  expect(mergeQuestions(c.db)).toEqual([]);
+});
+
+it("記録済みの PR の head を読む間に門が閉じれば、収束は待った記録を1回刻む", async () => {
+  const c = await rewrittenWhileReading("outside-rewrite-gate-closes-records", (c) => attachUnsettledChild(c.db, c.clock, c.work.id));
+
+  expect(await convergeOn(c.landing, c.work.id)).toEqual({ kind: "deferred", reason: "attached_children", count: 1 });
+
+  expect(boardEvents(c.db, c.work.id, "landing_deferred")).toHaveLength(1);
 });
 
 // spec #3273 pin D5 / text A4d: 未 push の修理が重なっても同じで、文は落とされた内容と未 push の内容を分ける
