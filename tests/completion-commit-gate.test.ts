@@ -304,7 +304,7 @@ const NOW = new Date("2026-11-25T00:00:00.000Z");
 const registerRow = (title: string, parent_id?: string): Task =>
   registerTask(db!, { type: "work", title, purpose: "why", completion_criteria: "done", parent_id }, NOW, ...HUMAN_WEBUI);
 
-/** 走行中の work の checkout と、pickup の前に名前の場所へ置いた別の根の `task/<other>`。worker は盤面の外の道(ADR 0417 の道1)で
+/** 走行中の work の checkout と、pickup の前に名前の場所へ置いた別の根の `task/<other>`。worker は盤面の外の道(#3824)で
  *  そのブランチを手に入れられる —— ここでは名前の場所から直に fetch する。 */
 async function workerBesideOtherTask(name: string) {
   const named = await makeWorkspace(name);

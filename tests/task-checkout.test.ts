@@ -176,7 +176,7 @@ it("cancelled の解放で読めない checkout は、唯一の写しを残し�
   expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
 });
 
-/** 別の根の `task/<other>` を pickup の前に名前の場所へ置き、worker が盤面の外の道(ADR 0417 の道1 —— ここでは名前の場所から直に fetch)で
+/** 別の根の `task/<other>` を pickup の前に名前の場所へ置き、worker が盤面の外の道(#3824 —— ここでは名前の場所から直に fetch)で
  *  それを merge し、未 commit の WIP も持つ checkout。 */
 async function mergedOtherTask(name: string, type: "work" | "review" = "work") {
   const named = await makeWorkspace(name);

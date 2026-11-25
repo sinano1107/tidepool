@@ -948,22 +948,22 @@ function withVerifiedUntrustedTip<T>(place: UntrustedCheckout, branch: string, u
 /** 信じない checkout を確かめの文の主語として。 */
 const subjectOf = ({ path, noun }: Pick<UntrustedCheckout, "path" | "noun">): UntrustedSubject => ({ checkout: path, noun });
 
-/** ADR 0417 決定1: worker の tip の他の task の検査 —— 省略できない(作業台の入口の `EntryChecks.otherTasks` と同じ形)。数える task の範囲と、
- *  当たったときの扱い(他の task のブランチと tip を受けて投げる)。 */
+/** ADR 0417 決定1: worker の tip の他の task の検査 —— 作業台の入口の `EntryChecks.otherTasks` と同じく省略できない。拒否文でなく、当たったときの
+ *  扱い `refuse`(他の task のブランチと tip を受けて投げる)と、数える task の範囲を持つ。 */
 type WorkerTipOtherTasks = { range: TaskRange; refuse: (branches: string[], tip: string) => never };
 
 /** worker の tip を受ける唯一の口: task の checkout の `task/<id>` の tip を、ref を書かずに名前の場所の objects へ引き、他の task のブランチの
  *  commit を持てば `otherTasks.refuse` で投げ、持たなければ検証済みの写しを開いたまま `use` に渡す。ADR 0417 決定2: 数えないのは `current`
  *  (`task/<id>` の今の値)と、保護ブランチ・帰り先の今の値にある commit。数える場所は運び終えた名前の場所 —— 検証済みの写しに名前の場所の
- *  objects を借りさせない(ADR 0412 決定2)。数える手の失敗は名前の場所の側。 */
-function fetchUntrustedTip<T>(db: Db, place: TaskCheckoutPlace, task: Task, current: string, otherTasks: WorkerTipOtherTasks, use: (read: VerifiedTip) => T): T {
+ *  objects を借りさせない(ADR 0412 決定2)。数える手の失敗は、上限超過を除いて名前の場所の側。 */
+function receiveWorkerTip<T>(db: Db, place: TaskCheckoutPlace, task: Task, current: string, otherTasks: WorkerTipOtherTasks, use: (read: VerifiedTip) => T): T {
   const checkout = untrustedTaskCheckout(place);
   const { namedPlace } = place;
   return withVerifiedUntrustedTip(checkout, taskBranch(task.id), (read) => {
     const { tip, verified, tipRef, own } = read;
     fetchFromBoardCopy(namedPlace, verified, tipRef, tip, "the task branch tip");
     ensureCarriedWhole(namedPlace, subjectOf(checkout), { own, tip, description: "the task branch tip" });
-    // 帰り先が無い・読めなければ足さない —— 数える側に倒れる(`takeInMergeBack` の `returnValue` と同じ)
+    // #3824 の spec: 帰り先は系譜の解決(`lineageTaskBranch`)が答えるブランチの値。無い・読めなければ足さない —— 数える側に倒れる
     const returnValue = () => {
       try {
         const lineage = lineageTaskBranch(db, namedPlace, task, exactProtectedBranchRef(namedPlace));
@@ -977,6 +977,8 @@ function fetchUntrustedTip<T>(db: Db, place: TaskCheckoutPlace, task: Task, curr
       const excluded = [current, ...taskWriteExcluded(namedPlace, returnValue)].filter(Boolean);
       branches = otherTaskBranches(db, namedPlace, namedPlace.path, tip, excluded, otherTasks.range);
     } catch (cause) {
+      // ADR 0357 決定2: worker の tip を辿る有界の rev-list の上限超過は worker の repo の故障
+      if (cause instanceof WorkerTreeGitTimeoutError) throw cause;
       const why = cause instanceof Error ? cause.message : String(cause);
       throw new NamedPlaceFetchError(`workspace ${namedPlace.name}: the board cannot count other tasks' commits in the task branch tip ${tip}: ${why}`, { cause });
     }
@@ -1237,7 +1239,7 @@ export function recordTaskCheckoutTip(db: Db, place: RunPlace, taskId: string, c
     );
   };
   // 比べてから worker の repo を読む —— 動いた ref を worker の repo の故障の陰に隠さない
-  return fetchUntrustedTip(db, place, getTask(db, taskId)!, old, { range: "every task", refuse }, (read) => {
+  return receiveWorkerTip(db, place, getTask(db, taskId)!, old, { range: "every task", refuse }, (read) => {
     const { tip } = read;
     if (old !== tip) boardRefWriter(db, namedPlace)(ref, tip, () => git(namedPlace.path, "update-ref", "--no-deref", ref, tip, old));
     return check ? check(tip, () => taskCheckoutChanges(db, place, taskId, read).map(({ path }) => path)) : tip;
@@ -1646,7 +1648,8 @@ type TaskRange = "every task" | "unsettled or landing-waiting";
 
 /** ADR 0382 決定4(#3352 の追記4)と追記(#3769): 作業台の tip が持つ、`excluded`(入口の入力の tip と、入口が足す帰り先・保護ブランチの今の値)の
  *  どれにも無い commit を含む task のブランチのうち、`range` の task のもの —— 入口は範囲と足す値を渡す。着地の済んだ task の commit は保護ブランチの
- *  今の値にある(保護ブランチへ書く入口では書く先、`task/*` へ書く入口では足す値)ので、範囲に入っても拒まない。 */
+ *  今の値にある(保護ブランチへ書く入口では書く先、`task/*` へ書く入口では足す値)ので、範囲に入っても拒まない。worker の tip(ADR 0417)は
+ *  名前の場所へ運んだ後に名前の場所で数える —— `verified` に名前の場所を渡す(検証済みの写しに objects を借りさせない、ADR 0412 決定2)。 */
 function otherTaskBranches(db: Db, named: WorkspaceConfig, verified: string, tip: string, excluded: string[], range: TaskRange): string[] {
   const branches = refValues(git(named.path, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/task/"));
   if (range === "unsettled or landing-waiting") {
@@ -4467,7 +4470,7 @@ function bringTaskCheckout(
       const refuse = (branches: string[]): never => {
         throw new OtherTaskCommitsError(`the tip of the task checkout contains commits of ${branches.join(", ")}, so the board did not write ${taskRef} from it — the board carries a task's work itself.`);
       };
-      wipTip = fetchUntrustedTip(db, place, task, evacuationBaseRef, { range: "every task", refuse }, ({ tip, verified }) => {
+      wipTip = receiveWorkerTip(db, place, task, evacuationBaseRef, { range: "every task", refuse }, ({ tip, verified }) => {
         // ADR 0412 決定2・3: 種は worker の tip、ref は WIP の親。ref が先にあれば、外す path は ref から導き、その entry は ref の値
         const ahead = evacuationBaseRef !== "" && evacuationBaseRef !== tip && isAncestor(namedPlace, tip, evacuationBaseRef);
         const base = ahead ? evacuationBaseRef : tip;
@@ -4572,7 +4575,8 @@ function hasOpenFailureQuestion(db: Db, taskId: string): boolean {
     .get(taskId) !== undefined;
 }
 
-/** ADR 0356 決定2: 解放で worker の repo を読めなかった。checkout を残して event に在り処と理由を刻み、`todo` に戻る決着なら
+/** ADR 0356 決定2: 解放で worker の repo を読めなかった —— または ADR 0417 決定4: 退避が他の task のブランチの commit を持つ tip を見つけた。
+ *  checkout を残して event に在り処と理由を刻み、`todo` に戻る決着なら
  *  failure question を立てる —— 既に立っている(倒された session)なら足さない。`namesCheckout` が偽なら question は在り処を名指さない。 */
 function failTaskOnRelease(db: Db, task: Task, path: string, err: unknown, now: Date, namesCheckout = true): void {
   const reason = err instanceof Error ? err.message : String(err);
