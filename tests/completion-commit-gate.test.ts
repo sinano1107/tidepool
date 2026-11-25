@@ -2,8 +2,11 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { registerTask } from "../src/tasks.js";
-import { quarantineWorkspace } from "../src/workspace.js";
+import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
+import { listEvents } from "../src/events.js";
+import { cancelTaskDirectly, getTask, registerTask, type Task } from "../src/tasks.js";
+import { quarantineWorkspace, type RunPlace, recordTaskCheckoutTip } from "../src/workspace.js";
 import {
   addSubmodule,
   api,
@@ -19,8 +22,10 @@ import {
   HUMAN_WEBUI,
   makeWorkspace,
   mcpClient,
+  prepareAtPickup,
   questions,
   registerWork,
+  seedOtherTaskBranch,
   submoduleSource,
   type Tidepool,
 } from "./harness.js";
@@ -288,6 +293,99 @@ it("同じ tip が人間しか書けない path と gitlink の両方を変え�
   const result = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
 
   expect(humanOnlyRefusal(result)).toEqual(["- .claude/settings.local.json"]);
+});
+
+let db: Db | undefined;
+afterEach(() => {
+  db?.close();
+  db = undefined;
+});
+const NOW = new Date("2026-11-25T00:00:00.000Z");
+const registerRow = (title: string, parent_id?: string): Task =>
+  registerTask(db!, { type: "work", title, purpose: "why", completion_criteria: "done", parent_id }, NOW, ...HUMAN_WEBUI);
+
+/** 走行中の work の checkout と、pickup の前に名前の場所へ置いた別の根の `task/<other>`。worker は盤面の外の道(ADR 0417 の道1)で
+ *  そのブランチを手に入れられる —— ここでは名前の場所から直に fetch する。 */
+async function workerBesideOtherTask(name: string) {
+  const named = await makeWorkspace(name);
+  db = openDb(":memory:");
+  const other = registerRow("the other root");
+  seedOtherTaskBranch(db, named, other.id);
+  const task = registerRow("build the thing");
+  const place = await prepareAtPickup(db, named, task);
+  const fork = git(named.path, "rev-parse", `task/${task.id}`);
+  commitWork(place.path, "mine.txt", "my work\n");
+  const fetchInto = (ref: string) => git(place.path, "fetch", "--quiet", named.path, ref);
+  return { named, task, other, place, fork, fetchInto };
+}
+
+/** 完了の門を撃ち、拒否なら DomainError の文を、通れば記録した tip を返す。 */
+function gate(place: RunPlace, task: Task): { refused: string } | { tip: string } {
+  try {
+    return { tip: recordTaskCheckoutTip(db!, place, task.id) };
+  } catch (err) {
+    expect(err).toBeInstanceOf(DomainError);
+    return { refused: (err as Error).message };
+  }
+}
+
+const rebuild = (base: string) =>
+  ` Rebuild the task branch with only your own commits — note their shas, \`git reset --hard ${base}\`, then \`git cherry-pick\` each of them — and call complete_task again. If your work needs that task's changes, escalate instead of copying them.`;
+
+it.each([
+  ["未着地の別の根", false, "and the board carries a task's work itself — a child's by its merge back, a root's by its landing."],
+  ["cancel 済みの task", true, "which was cancelled, so the board does not carry its work."],
+])("%s のブランチの commit を merge した tip は、完了の門が task/<id> も event も書かずに拒み、自分の commit だけで作り直す手と escalate を言う(ADR 0417 決定3)", async (_, cancelled, clause) => {
+  const { named, task, other, place, fork, fetchInto } = await workerBesideOtherTask(`gate-other-task-${cancelled ? "cancelled" : "root"}`);
+  if (cancelled) cancelTaskDirectly(db!, other, null, NOW, {}, "webui");
+  fetchInto(`task/${other.id}`);
+  git(place.path, "merge", "--quiet", "--no-ff", "-m", "take in the other task", "FETCH_HEAD");
+  const [events, row] = [listEvents(db!, task.id), getTask(db!, task.id)];
+
+  expect(gate(place, task)).toEqual({ refused: `the task branch tip contains commits of task/${other.id}, ${clause}${rebuild(fork)}` });
+  expect(git(named.path, "rev-parse", `task/${task.id}`)).toBe(fork);
+  expect(listEvents(db!, task.id)).toEqual(events);
+  expect(getTask(db!, task.id)).toEqual(row);
+});
+
+it("着地した task の commit を持つ保護ブランチを merge した tip は完了の門を通る(ADR 0417 決定2 / ADR 0064)", async () => {
+  const { named, task, other, place, fetchInto } = await workerBesideOtherTask("gate-protected-merge");
+  git(named.path, "merge", "--quiet", "--no-ff", "-m", "land the other root", `task/${other.id}`);
+  fetchInto("main");
+  git(place.path, "merge", "--quiet", "--no-ff", "-m", "take in the protected branch", "FETCH_HEAD");
+  const tip = git(place.path, "rev-parse", "HEAD");
+
+  expect(gate(place, task)).toEqual({ tip });
+  expect(git(named.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+});
+
+it("他の task の変更を cherry-pick した tip は完了の門を通る(ADR 0417 決定2 / ADR 0289 決定3)", async () => {
+  const { task, other, place, fetchInto } = await workerBesideOtherTask("gate-cherry-pick");
+  fetchInto(`task/${other.id}`);
+  git(place.path, "cherry-pick", "FETCH_HEAD");
+  const tip = git(place.path, "rev-parse", "HEAD");
+
+  expect(gate(place, task)).toEqual({ tip });
+});
+
+it("帰り先を merge した tip と、fork 元から何も足していない tip は、帰り先が他の task の commit を持っていても完了の門を通る(ADR 0417 決定2)", async () => {
+  const named = await makeWorkspace("gate-return-branch");
+  db = openDb(":memory:");
+  const parent = registerRow("the parent");
+  const parentTip = seedOtherTaskBranch(db, named, parent.id);
+  const [merging, idle] = [registerRow("merge the return branch", parent.id), registerRow("add nothing", parent.id)];
+  const [place, idlePlace] = [await prepareAtPickup(db, named, merging), await prepareAtPickup(db, named, idle)];
+  expect(git(place.path, "rev-parse", "HEAD")).toBe(parentTip);
+  // 兄弟の merge back が session の間に帰り先を進めた
+  const advanced = git(named.path, "commit-tree", `${parentTip}^{tree}`, "-p", parentTip, "-m", "a sibling's merge back");
+  git(named.path, "update-ref", `refs/heads/task/${parent.id}`, advanced, parentTip);
+  commitWork(place.path, "mine.txt", "my work\n");
+  git(place.path, "fetch", "--quiet", named.path, `task/${parent.id}`);
+  git(place.path, "merge", "--quiet", "--no-ff", "-m", "take in the return branch", "FETCH_HEAD");
+  const tip = git(place.path, "rev-parse", "HEAD");
+
+  expect(gate(place, merging)).toEqual({ tip });
+  expect(gate(idlePlace, idle)).toEqual({ tip: parentTip });
 });
 
 it("親の work branch が gitlink を進めていても、子の tip が触っていなければ子は完了できる(ADR 0365 決定2)", async () => {

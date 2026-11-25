@@ -9,9 +9,19 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { holdsBaseline, RefsMovedError, recordTaskCheckoutTip, releaseWorkspace, runPlaceReadPaths, taskForkSource, type WorkspaceConfig } from "../src/workspace.js";
+import {
+  holdsBaseline,
+  KEPT_TASK_CHECKOUT,
+  RefsMovedError,
+  recordTaskCheckoutTip,
+  redoOwedReleases,
+  releaseWorkspace,
+  runPlaceReadPaths,
+  taskForkSource,
+  type WorkspaceConfig,
+} from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, completionTreePaths, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedTaskBranch, seedZeroPaddedTree, withHistoryOnlyBlob } from "./harness.js";
+import { checkoutTaskBranch, commitWork, completionTreePaths, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedOtherTaskBranch, seedTaskBranch, seedZeroPaddedTree, withHistoryOnlyBlob } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // task の checkout(ADR 0356): work / review の worker は名前の場所でなく、pickup ごとに作って解放で消す自分の repo で走る。
@@ -162,6 +172,63 @@ it("cancelled の解放で読めない checkout は、唯一の写しを残し�
     "task_checkout_opened",
     "task_checkout_release_failed",
   ]);
+  expect(listChildren(db, task.id)).toEqual([]);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+});
+
+/** 別の根の `task/<other>` を pickup の前に名前の場所へ置き、worker が盤面の外の道(ADR 0417 の道1 —— ここでは名前の場所から直に fetch)で
+ *  それを merge し、未 commit の WIP も持つ checkout。 */
+async function mergedOtherTask(name: string, type: "work" | "review" = "work") {
+  const named = await makeWorkspace(name);
+  db = openDb(":memory:");
+  const other = register();
+  seedOtherTaskBranch(db, named, other.id);
+  // review は完了させるので走行中に
+  const task = type === "review" ? pickupTask(db, register(type), "deckhand", NOW)! : register(type);
+  const place = await prepareAtPickup(db, named, task);
+  const branch = `task/${task.id}`;
+  const fork = git(named.path, "rev-parse", branch);
+  git(place.path, "fetch", "--quiet", named.path, `task/${other.id}`);
+  git(place.path, "merge", "--quiet", "--no-ff", "-m", "take in the other task", "FETCH_HEAD");
+  writeFileSync(join(place.path, "wip.txt"), "in progress\n");
+  const reason = `the tip of the task checkout contains commits of task/${other.id}, so the board did not write refs/heads/${branch} from it — the board carries a task's work itself.`;
+  return { named, task, place, branch, fork, reason };
+}
+
+/** 開いた後の task の checkout の event(解放・失敗・残した)。 */
+const releaseEvents = (taskId: string) => listEvents(db, taskId).filter(({ kind }) => kind.startsWith("task_checkout_") && kind !== "task_checkout_opened").map(({ payload }) => payload);
+
+it("他の task のブランチの commit を持つ tip の完了以外の解放は task/<id> を書かずに失敗にし、checkout を残し、受理のやり直しは重ねず、retry はその commit を持たずに始まる(ADR 0417 決定4)", async () => {
+  const { named, task, place, branch, fork, reason } = await mergedOtherTask("task-checkout-other-task");
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(git(named.path, "rev-parse", branch)).toBe(fork);
+  expect(existsSync(join(place.path, "wip.txt"))).toBe(true);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+  expect(releaseEvents(task.id)).toEqual([{ kind: "task_checkout_release_failed", path: place.path, reason }]);
+  const [question] = listChildren(db, task.id);
+  expect(question).toMatchObject({ type: "question", question_cancel_option: "abandon" });
+  expect(question!.purpose).toContain(`${reason}\n\n${KEPT_TASK_CHECKOUT.at(place.path)}`);
+
+  redoOwedReleases(db, named, undefined, NOW, () => false);
+  expect(releaseEvents(task.id)).toHaveLength(1);
+
+  const resumed = await prepareAtPickup(db, named, getTask(db, task.id)!);
+  expect(git(resumed.path, "rev-parse", "HEAD")).toBe(fork);
+});
+
+it.each(["cancelled", "completed review"])("他の task のブランチの commit を持つ tip の %s の解放は task/<id> を書かず、event だけを刻んで question を立てず、checkout を残す(ADR 0417 決定4)", async (settled) => {
+  const review = settled === "completed review";
+  const { named, task, place, branch, fork, reason } = await mergedOtherTask(`task-checkout-other-task-${review ? "review" : "cancelled"}`, review ? "review" : "work");
+  if (review) completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+  else cancelTaskDirectly(db, task, null, NOW, {}, "webui");
+
+  releaseWorkspace(db, place, getTask(db, task.id)!, NOW, false, undefined, undefined, review);
+
+  expect(git(named.path, "rev-parse", branch)).toBe(fork);
+  expect(existsSync(join(place.path, "wip.txt"))).toBe(true);
+  expect(releaseEvents(task.id)).toEqual([{ kind: "task_checkout_release_failed", path: place.path, reason }]);
   expect(listChildren(db, task.id)).toEqual([]);
   expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
 });

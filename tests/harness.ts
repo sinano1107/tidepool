@@ -966,6 +966,17 @@ export function seedTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: strin
   recordDeclaredRepo(db, taskId, workspace);
 }
 
+/** setup のみ: 名前の場所に、保護ブランチ `main` の上に1 commit(`other.txt`)を持つ task `taskId` のブランチを置き、その sha を返す —— 盤面が
+ *  worker に渡さない、他の task の commit(ADR 0417)。名前の場所の HEAD は `main` に戻す。 */
+export function seedOtherTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string): string {
+  git(workspace.path, "switch", "--quiet", "-c", "other-work");
+  commitWork(workspace.path, "other.txt", "the other task's work\n");
+  git(workspace.path, "switch", "--quiet", "main");
+  seedTaskBranch(db, workspace, taskId, "other-work");
+  git(workspace.path, "branch", "-D", "other-work");
+  return git(workspace.path, "rev-parse", `task/${taskId}`);
+}
+
 /** setup のみ: git を持たない盤面の task に `task_branch_created` だけを残す —— 「ブランチに成果を持つ」の読み(ADR 0374 決定17)の題材。 */
 export function recordTaskBranchCreated(db: Db, taskId: string, sha = "0".repeat(40), workspace = "home"): void {
   appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_created", sha, workspace }, at: new Date(0) });
