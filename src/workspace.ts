@@ -1796,10 +1796,10 @@ function takeInExistingWorkbench(
 }
 
 /** ADR 0382 決定5 / ADR 0401 決定4: 鍵の作業台の取り込みの後の片付け —— 取り込みの直後(`taken` は取り込んだ tip と包む commit)と、
- *  取り込みで着地した後・記録の前に死んだ盤面の答え直し(`reanswer`。`taken` は着地の commit の第2親とその commit で、第2親の無い着地(ff)は
- *  取り込みではないので無い)が共有する。tip が取り込んだまま(取り込んだ tip か、答え直しでは進めた後の包む commit)で人間の作業が残っていなければ消し、
+ *  取り込みで着地した後・記録の前に死んだ盤面の答え直し(`reanswer`。`taken` は着地の commit の第2親とその commit で、着地の merge(第2親が
+ *  task の tip)と第2親の無い着地は取り込みではないので無い —— ADR 0418 決定3)が共有する。tip が取り込んだまま(取り込んだ tip か、答え直しでは進めた後の包む commit)で人間の作業が残っていなければ消し、
  *  残っていれば残してその branch を包む commit へ進め、text C6 を返す。読めなければ、最初の回答は残して進める。答え直しは、死の後に人間が
- *  commit していれば(持ち主 `mine`)残してそう言い、ff の着地・ほかへ動いた tip・読めない作業台は何もせず残す。投げない —— ref も event
+ *  commit していれば(持ち主 `mine`)残してそう言い、取り込みでない着地・ほかへ動いた tip・読めない作業台は何もせず残す。投げない —— ref も event
  *  も書いた後なので拒まない(ADR 0401 決定1 の (3))。 */
 function settleTakenInWorkbench(
   named: WorkspaceConfig,
@@ -4916,9 +4916,9 @@ function protectedValueAsRecorded(db: Db, workspace: WorkspaceConfig): string {
   return protectedSha;
 }
 
-/** ADR 0401 決定4: task の tip(`tip`、省略時は今の `task/<id>`)が保護ブランチ(`protectedSha`、省略時は今の値)に含まれていれば、この根を持ち込んだ
- *  commit —— first-parent の鎖の上で tip を含み、first parent が含まない commit(ff なら tip)。含まれていなければ undefined。含まれるかは内容(ADR 0105)でなく履歴で読む
- *  —— 別の根が同じ変更を運んでもこの根の着地ではない(ADR 0289 決定3)。鎖の先頭は他の根の commit でありうる(ADR 0289 決定1)。
+/** ADR 0401 決定4 / ADR 0418 決定2: task の tip(`tip`、省略時は今の `task/<id>`)が保護ブランチ(`protectedSha`、省略時は今の値)に含まれていれば、
+ *  この根を持ち込んだ commit —— first-parent の列の上で tip を初めて含む commit、tip 自身が列の上にあれば tip。含まれていなければ undefined。含まれるかは内容(ADR 0105)でなく履歴で読む
+ *  —— 別の根が同じ変更を運んでもこの根の着地ではない(ADR 0289 決定3)。列の先頭は他の根の commit でありうる(ADR 0289 決定1)。
  *  ADR 0401 帰結: `task/<id>` が無ければ含まれていると読まない。git が読めなければ投げる。ADR 0401 追記(#3647): hold は question が問うた tip を渡す。 */
 export function localLandingCommit(
   workspace: WorkspaceConfig,
@@ -4930,9 +4930,10 @@ export function localLandingCommit(
   if (!isAncestor(workspace, tip, protectedSha)) return undefined;
   const tipSha = git(workspace.path, "rev-parse", tip);
   const revList = (...args: string[]) => git(workspace.path, "rev-list", ...args, `${tipSha}..${protectedSha}`).split("\n").filter(Boolean);
-  // `--first-parent` と `--ancestry-path` を併せると、task の tip が第2親の先にある取り込みの commit を落とす —— 子孫を別に引いて鎖と突き合わせる
+  // `--first-parent` と `--ancestry-path` を併せると、task の tip が第2親の先にある取り込みの commit を落とす —— 子孫を別に引いて列と突き合わせる
   const descendants = new Set(revList("--ancestry-path"));
   const oldest = revList("--first-parent").filter((commit) => descendants.has(commit)).at(-1);
+  // 列の上の最古の子孫の第1親が tip(または子孫が無い)なら、tip 自身が列の上にある
   return oldest === undefined || git(workspace.path, "rev-parse", `${oldest}^1`) === tipSha ? tipSha : oldest;
 }
 
@@ -4942,9 +4943,11 @@ function settleLandedWorkbench(named: WorkspaceConfig, base: string, target: str
   try {
     const place = workbenchOnDisk(named, workbenchAt(named, base, target, carried));
     if (place === undefined) return undefined;
-    // 包む commit は (書く先の旧値, 取り込んだ tip) —— 第2親の無い着地(ff)は取り込みではない
-    const tip = gitAnswers(() => git(named.path, "rev-parse", "--verify", "--quiet", `${landed}^2`)) ? git(named.path, "rev-parse", `${landed}^2`) : undefined;
-    return settleTakenInWorkbench(named, place, target, carried, tip === undefined ? undefined : { tip, commit: landed }, true);
+    // ADR 0418 決定3: 包む commit は (書く先の旧値, 取り込んだ tip) —— 第2親が task の tip なら着地の merge で、第2親の無い着地(tip 自身)とともに取り込みではない
+    let second: string | undefined;
+    gitAnswers(() => (second = git(named.path, "rev-parse", "--verify", "--quiet", `${landed}^2`)));
+    const taken = second === undefined || second === git(named.path, "rev-parse", carried) ? undefined : { tip: second, commit: landed };
+    return settleTakenInWorkbench(named, place, target, carried, taken, true);
   } catch {
     return undefined;
   }
@@ -4957,8 +4960,8 @@ function settleLandedWorkbench(named: WorkspaceConfig, base: string, target: str
  *  位置は帯域外の書き込みだけが作る —— ff が黙って飲み込んでいた巻き戻しもこれで
  *  捕まる。記録に行が無い場合も不一致として扱う(ADR 0064 決定6 と同じ fail-closed)。
  *
- *  記録と一致していれば、非 ff は同一 workspace の正当な直列進行である(決定2):
- *  盤面が Tidepool 名義の真の merge commit で追いつかせる。タスクブランチは**決して
+ *  記録と一致していれば、非 ff は同一 workspace の正当な直列進行である(決定2)。ff できる場合も含め、盤面は
+ *  Tidepool 名義の真の merge commit(第1親が保護ブランチの旧値)で着地させる(ADR 0418 決定1)。タスクブランチは**決して
  *  書き換えない** —— 差分の恒久記録であり系譜判定の土台である(ADR 0053 根拠1)。
  *
  *  保護ブランチに置いた commit を返す —— 回答はこれを執行の記録として根に刻む(ADR 0289 決定1)。作業台を残した取り込みなら、その text C6 も、
@@ -4985,9 +4988,11 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
     checks: { approved: protectedSha, otherTasks: { range: "every task", refusalFor } },
   });
   if (taken !== undefined) return { landed: taken.commit, kept: taken.kept };
-  const landed = isAncestor(workspace, ref, task)
-    ? git(workspace.path, "rev-parse", `refs/heads/${task}`)
-    : mergeCommit(workspace, protectedSha, `refs/heads/${task}`, `Merge ${task} into ${branch}`);
+  // #3646 の仕様の完了条件4(landing-4「task のブランチが無ければ、保護ブランチに含まれていると読まない」が固定): ブランチが消えていれば、
+  // merge-tree の手前の失敗でなく task のブランチを名指す git の文で拒む
+  git(workspace.path, "cat-file", "-e", task);
+  // ADR 0418 決定1: ff できる場合も ff しない —— 第1親が旧値の merge commit で、保護ブランチの first-parent の列を着地の並びにする
+  const landed = mergeCommit(workspace, protectedSha, `refs/heads/${task}`, `Merge ${task} into ${branch}`);
   if (landed === undefined) {
     // ADR 0103 決定4: 合わないと分かっただけ —— 回答の拒否であって隔離ではない。捨てる文は無い、もう1つの出口は `hold`(text A3)
     const exit = () => "Then answer `merge` again.";

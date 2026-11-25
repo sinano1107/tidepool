@@ -758,6 +758,9 @@ export function git(dir: string, ...args: string[]): string {
     .trim();
 }
 
+/** `commit` の親(第1親から順に)。 */
+export const parentsOf = (dir: string, commit: string): string[] => git(dir, "rev-list", "--parents", "-n", "1", commit).split(" ").slice(1);
+
 /** submodule の取得元: commit を1つ持つ使い捨て repo の path。 */
 export async function submoduleSource(name: string): Promise<string> {
   const source = await makeWorkspace(name);

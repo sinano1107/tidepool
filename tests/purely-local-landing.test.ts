@@ -126,7 +126,7 @@ it("purely-local では auto_if_ci_green を無人 merge に使わず、観測�
   expect(t.github.merged).toEqual([]);
 });
 
-it("着地 question に merge と答えると保護ブランチを task branch へ fast-forward する", async () => {
+it("着地 question に merge と答えると保護ブランチに task branch を着地させる", async () => {
   const workspace = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace });
   const task = await registerWork(t, "land the feature");

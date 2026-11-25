@@ -40,6 +40,7 @@ import { workbenchPath } from "../src/workbench.js";
 import {
   dropWorkspaceState,
   holdsBaseline,
+  localLandingCommit,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   openHumanContentWorkbench,
@@ -71,6 +72,7 @@ import {
   makeLandingWorkspace,
   makeWorkspace,
   notRemoved,
+  parentsOf,
   prepareAtPickup,
   quarantineQuestion,
   queuedForAutoMerge,
@@ -232,7 +234,7 @@ it("保護ブランチがタスクブランチの祖先へ巻き戻されてい�
 });
 
 // ADR 0243 決定4 / ADR 0339 Status 追記: 着地は転送を起こさないので checkout の config が転送を書き換えていても網に出ない。記録の基準は帯域外の文で読む
-it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf と fetch.recurseSubmodules があっても網に出ずに成功し、保護ブランチと記録の基準が landed に揃う", async () => {
+it("HEAD が保護ブランチの外の着地は、checkout の insteadOf と fetch.recurseSubmodules があっても網に出ずに成功し、保護ブランチと記録の基準が landed に揃う", async () => {
   const workspace = await makeWorkspace("landing-off-head-offline");
   const remote = await startDenyingHttpRemote();
   // 登録済みの submodule の remote が網を向く: `fetch.recurseSubmodules` はこれを辿る
@@ -252,18 +254,18 @@ it("HEAD が保護ブランチの外の ff の着地は、checkout の insteadOf
 
   const { landed } = mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE);
 
-  expect({ landed, protected: git(workspace.path, "rev-parse", "refs/heads/main"), askpass: askpass.tripped(), requests: remote.requests() }).toEqual({
-    landed: tip,
-    protected: tip,
+  expect({ parents: parentsOf(workspace.path, landed), protected: git(workspace.path, "rev-parse", "refs/heads/main"), askpass: askpass.tripped(), requests: remote.requests() }).toEqual({
+    parents: [before, tip],
+    protected: landed,
     askpass: false,
     requests: [],
   });
   git(workspace.path, "update-ref", "refs/heads/main", before);
-  expect(() => mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE)).toThrow(`the board recorded it at ${tip} and it now sits at ${before}`);
+  expect(() => mergeTaskToProtected(db, workspace, work.id, CLEAN_LANDING_INTAKE)).toThrow(`the board recorded it at ${landed} and it now sits at ${before}`);
 });
 
-// `update-ref` の旧 sha が CAS。動いた先がタスクブランチの途中でまだ ff できる位置でも、動いたというだけで落ちる
-it("記録との突き合わせから書き込みまでに保護ブランチが動いていれば、ff の着地は書き込みで落ち、記録の基準は元の位置に畳まれる", async () => {
+// `update-ref` の旧 sha が CAS。動いた先がタスクブランチの途中の位置でも、動いたというだけで落ちる
+it("記録との突き合わせから書き込みまでに保護ブランチが動いていれば、ff できる場合の着地も書き込みで落ち、記録の基準は元の位置に畳まれる", async () => {
   const workspace = await makeWorkspace("landing-off-head-cas");
   const { db, clock } = await openBoard();
   const work = await recordedWork(db, clock, workspace);
@@ -295,22 +297,25 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
 it.each([
   ["書く前に落ちた(保護ブランチは記録の位置のまま)", false],
   ["書いた後に落ちた(保護ブランチは予告した位置)", true],
-])("merge の回答の途中で%s盤面の2値の記録の上で答え直すと、帯域外と読まずに保護ブランチをタスクブランチへ進める", async (_shape, written) => {
+])("merge の回答の途中で%s盤面の2値の記録の上で答え直すと、帯域外と読まずにタスクブランチを着地させる", async (_shape, written) => {
   const workspace = await makeWorkspace("landing-answer-over-announced");
   const { db, clock } = await openBoard();
   const work = await recordedWork(db, clock, workspace);
   const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
   const running = landingWork(db, clock);
   const place = await prepareAtPickup(db, workspace, running);
+  const before = git(workspace.path, "rev-parse", "refs/heads/main");
   const tip = git(workspace.path, "rev-parse", `task/${work.id}`);
-  announceThenCrash(db, workspace, "refs/heads/main", tip);
-  if (written) git(workspace.path, "update-ref", "refs/heads/main", tip);
+  // 盤面が書く着地の merge commit(ADR 0418 決定1)
+  const landing = git(workspace.path, "commit-tree", `${tip}^{tree}`, "-p", before, "-p", tip, "-m", `Merge task/${work.id} into main`);
+  announceThenCrash(db, workspace, "refs/heads/main", landing);
+  if (written) git(workspace.path, "update-ref", "refs/heads/main", landing);
 
   await answerMerge(db, clock, workspace, question);
   commitWork(place.path, "running.txt", "work\n");
   releaseWorkspace(db, place, running, clock.now());
 
-  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(tip);
+  expect(parentsOf(workspace.path, "refs/heads/main")).toEqual([before, tip]);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
@@ -330,9 +335,9 @@ it("非 ff で着地した task をもう一度着地させると、commit を�
 
 // ADR 0289 決定1: 保護ブランチの tip は他の根の commit でありうる —— 返すのはこの根を持ち込んだ commit
 it.each([
-  ["ff", 0],
-  ["非 ff", 1],
-])("%s で着地した task の後に別の根が着地しても、もう一度着地させると commit を足さずにこの根の commit を返す", async (_form, index) => {
+  ["ff できる場合", 0],
+  ["ff できない場合", 1],
+])("%s に着地した task の後に別の根が着地しても、もう一度着地させると commit を足さずにこの根の commit を返す", async (_form, index) => {
   const workspace = await makeWorkspace("landing-reanswer-after-other-root");
   const { db, clock } = await openBoard();
   const works = [];
@@ -342,6 +347,21 @@ it.each([
 
   expect(mergeTaskToProtected(db, workspace, works[index]!.id, CLEAN_LANDING_INTAKE)).toEqual({ landed: landings[index], kept: undefined });
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(after);
+});
+
+// ADR 0418 決定2: 着地の commit は保護ブランチの first-parent の列の上で tip を初めて含む commit で、tip 自身が列の上にあれば tip ——
+// 盤面の着地はもうこの形を作らない(ff しない)ので、commit を足していない task のブランチ(tip = fork 元)で固定する
+it("commit を足していない task の tip が保護ブランチの first-parent の列の上にあれば、その着地の commit は tip 自身", async () => {
+  const workspace = await makeWorkspace("landing-commit-tip-on-the-chain");
+  const { db, clock } = await openBoard();
+  const empty = landingWork(db, clock);
+  releaseWorkspace(db, await prepareAtPickup(db, workspace, empty), empty, clock.now());
+  const tip = git(workspace.path, "rev-parse", `task/${empty.id}`);
+  const other = await recordedWork(db, clock, workspace);
+  const { landed } = mergeTaskToProtected(db, workspace, other.id, CLEAN_LANDING_INTAKE);
+  expect(git(workspace.path, "rev-parse", `${landed}^1`)).toBe(tip);
+
+  expect(localLandingCommit(workspace, empty.id)).toBe(tip);
 });
 
 it("task のブランチが無ければ、保護ブランチに含まれていると読まない", async () => {
@@ -363,12 +383,13 @@ it("基準の行が無い workspace のローカル着地の merge 回答は、�
   const work = await unrecordedWork(db, clock, workspace);
   const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
   expect(holdsBaseline(db, workspace.name)).toBe(false);
+  const before = git(workspace.path, "rev-parse", "main");
 
   await expect(answerMerge(db, clock, workspace, question)).resolves.toMatchObject({ status: "done" });
 
   expect(holdsBaseline(db, workspace.name)).toBe(true);
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
-  expect(git(workspace.path, "rev-parse", "main")).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+  expect(parentsOf(workspace.path, "main")).toEqual([before, git(workspace.path, "rev-parse", `task/${work.id}`)]);
 });
 
 it("最初の撮りが別の workspace の封じ込めを待つ間、merge の回答はその question を名指して拒む", async () => {
@@ -478,7 +499,7 @@ it.each([
 });
 
 // ADR 0243 決定4(#1871): 休止中の merge 回答も merge commit を先に作り、口を通して `merge --ff-only` で checkout ごと動かす
-/** 休止中の直列の着地: 同じ保護ブランチから分かれ、被らないファイルを足した3件を記録し、1件目を ff で着地させた形。
+/** 休止中の直列の着地: 同じ保護ブランチから分かれ、被らないファイルを足した3件を記録し、1件目を着地させた形(ff できる場合も merge commit、ADR 0418 決定1)。
  *  2件目以降の回答は、盤面自身が進めた保護ブランチへ merge commit で追いつく。 */
 async function dormantSerialLanding(board: Db, clock: FakeClock, workspace: WorkspaceConfig) {
   const works = [];
@@ -759,6 +780,24 @@ it("取り込みで着地した task をもう一度着地させるとき作業�
   expect(again.kept?.endsWith(exit)).toBe(true);
 });
 
+// ADR 0418 決定3: 第2親が task の tip の着地の commit は着地の merge で、取り込みの包む commit ではない —— 答え直しは、鍵の作業台の書く先が
+// task の tip でも取り込んだままと読まず、作業台に触れない
+it("着地の merge の後に記録だけ欠けた task をもう一度着地させると、鍵の作業台の書く先が task の tip でも取り込みと読まず、作業台を消さない", async () => {
+  const workspace = await makeWorkspace("landing-reanswer-merge-not-taken-in");
+  const { db, clock } = await openBoard();
+  const base = await tempDir("tidepool-workbenches-");
+  const work = await recordedWork(db, clock, workspace);
+  const intake = { ...CLEAN_LANDING_INTAKE, workbenchBase: base };
+  const { landed } = mergeTaskToProtected(db, workspace, work.id, intake);
+  const at = workbenchPath(base, { workspace: workspace.name }, `task/${work.id}`);
+  git(base, "clone", "--quiet", "--branch", `task/${work.id}`, workspace.path, at);
+  git(at, "branch", "-m", `task/${work.id}`, "main");
+
+  expect(mergeTaskToProtected(db, workspace, work.id, intake)).toEqual({ landed, kept: undefined });
+  expect(existsSync(at)).toBe(true);
+  expect(git(at, "rev-parse", "main")).toBe(git(workspace.path, "rev-parse", `task/${work.id}`));
+});
+
 // ADR 0371 決定3・5 / spec #3273 pin A4: 受け取る条件は保護ブランチの今の値と task の tip を祖先に持つことで、人間しか書けない path は
 // この入口では拒む。拒否は何も書かない
 it.each([
@@ -932,16 +971,18 @@ async function landingUnderRunningSession(board: Db, clock: FakeClock, workspace
   return { work, question, place };
 }
 
-it("走っている session の間も merge 回答は名前の場所を checkout ごと ff し、task の checkout の WIP に触れず quarantine しない(ADR 0356 決定1・5)", async () => {
+it("走っている session の間も merge 回答は名前の場所を checkout ごと着地へ進め、task の checkout の WIP に触れず quarantine しない(ADR 0356 決定1・5)", async () => {
   const workspace = await makeWorkspace("landing-worker-on-protected");
   const { db, clock } = await openBoard();
   const { work, question, place } = await landingUnderRunningSession(db, clock, workspace, "wip.txt");
+  const before = git(workspace.path, "rev-parse", "refs/heads/main");
 
   await answerMerge(db, clock, workspace, question);
 
   const tip = git(workspace.path, "rev-parse", `refs/heads/task/${work.id}`);
-  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(tip);
-  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(tip);
+  const landed = git(workspace.path, "rev-parse", "refs/heads/main");
+  expect(parentsOf(workspace.path, landed)).toEqual([before, tip]);
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(landed);
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
   expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("the running session's work in progress\n");
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();

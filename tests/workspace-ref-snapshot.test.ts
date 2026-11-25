@@ -271,12 +271,13 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
   const running = await registerWork(t, "runs while the human answers");
   await t.clock.advance(HOUR);
   commitWork(checkoutOf(t.db, running.id), "in-flight.txt", "still working\n");
+  const before = git(ws.path, "rev-parse", "main");
 
   expect(
     (await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["merge"] }))
       .status,
   ).toBe(200);
-  expect(git(ws.path, "rev-parse", "main")).toBe(git(ws.path, "rev-parse", `task/${landing.id}`));
+  expect(git(ws.path, "rev-parse", "main")).not.toBe(before);
 
   await complete(t, running.id);
 
