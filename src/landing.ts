@@ -1462,9 +1462,10 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 根の workspace の Quarantine を読む1つの所。開いていれば根はその Quarantine の verdict で止まる(ADR 0241 決定6)。 */
   const quarantinedRoot = (workspaceName: string | undefined) =>
     workspaceName !== undefined && workspaceNeedsHuman(deps.db, workspaceName) ? quarantined("workspace", workspaceName) : undefined;
-  /** 収束が根の question を立てる道は、外の push の merge question(`askOutsidePush`)を除きすべてこの判定を通る —— その question は
-   *  門と Quarantine を `rootStop` で読み、registry の止まりを足さず(ADR 0403 決定5)、答えている回にも立てて拒否文で名指す(ADR 0376 決定7)。
-   *  tick の側の `stopForRepoMismatch` もこの外 —— tick は workspace の Quarantine
+  /** 収束が根の question を立てる道は、次の3つを除きすべてこの判定を通る。外の push の merge question(`askOutsidePush`)は門と
+   *  Quarantine を `rootStop` で読み、registry の止まりを足さず(ADR 0403 決定5)、答えている回にも立てて拒否文で名指す(ADR 0376 決定7)。
+   *  purely-local の merge question は、主経路の `rootStop` と同じ同期区間で立つ(ADR 0376 決定7 の Status 追記)。`refuseUnaskedHead` は
+   *  答えている merge question を取り替えるだけで足さない(ADR 0394 決定3)。tick の側の `stopForRepoMismatch` もこの外 —— tick は workspace の Quarantine
    *  単独では止まらず(ADR 0370 決定1)、その根を止めているのは食い違いで、信号はその question しか持たない(ADR 0399 決定5 の追記)。止まりがすでに信号を持って
    *  いれば question を重ねない(ADR 0241 決定6)—— workspace の Quarantine は根の verdict として返り(答えている回答はその verdict で
    *  拒まれる、ADR 0241 決定5)、registry の止まりは verdict を変えない(ADR 0403 決定5)。回答が答えている回(`attended`)も立てない ——

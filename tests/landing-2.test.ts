@@ -1537,7 +1537,7 @@ it("記録済みの PR の head を読む間に門が閉じれば、収束は me
 });
 
 /** 記録済みの PR の head を書き換え、収束が PR の状態を読む await の間に `during` を走らせる根。基準の行を持つ workspace にする ——
- *  行が無ければ、開いた Quarantine を head の読みの後の ref の比較が先に止める。 */
+ *  行が無ければ、開いた Quarantine を head の読みの後の ref の比較(ADR 0370 決定1)が先に止める。 */
 async function rewrittenWhileReading(name: string, during: (c: Awaited<ReturnType<typeof pushedRoot>>) => void, options: { openFailure?: boolean } = {}) {
   const c = await pushedRoot(name, { pr: "recorded", commits: 2, merge: "auto_if_ci_green", ...options });
   await leaveBaseline(c.db, c.workspace);
