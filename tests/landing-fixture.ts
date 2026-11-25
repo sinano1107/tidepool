@@ -1,5 +1,5 @@
 
-import { appendFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -674,8 +674,14 @@ export const unreadableRefsRefusal = (workspace: Pick<WorkspaceConfig, "name">) 
   );
 
 /** ref を読む git が exit 128 で落ちる checkout にする —— `rev-parse --verify --quiet` も「無い」(exit 1)とは答えない。 */
-export const breakPackedRefs = (workspace: WorkspaceConfig) =>
+export const breakPackedRefs = (workspace: Pick<WorkspaceConfig, "path">) =>
   appendFileSync(join(workspace.path, ".git", "packed-refs"), "not a packed ref\n");
+
+/** `breakPackedRefs` の行を取り除いて直す。 */
+export function repairPackedRefs(workspace: Pick<WorkspaceConfig, "path">): void {
+  const packed = join(workspace.path, ".git", "packed-refs");
+  writeFileSync(packed, readFileSync(packed, "utf8").replace("not a packed ref\n", ""));
+}
 
 // ADR 0289 決定2: ローカル着地の merge 回答も同じ述語で拒み、比べる相手はローカルのタスクブランチ
 /** purely-local の workspace で W を pickup して commit し、完了の後始末で休止位置へ戻し、収束が local merge question を立てた盤面。

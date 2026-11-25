@@ -412,13 +412,15 @@ function pointHeadRemote(path: string, url: string | undefined): void {
  *  (after it, ADR 0415 決定2). A failed fold here only fails the door: the next destination read stops the workspace (ADR 0415 決定4). */
 function writeHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefined, now: () => Date, commit: () => void): void {
   const { name, path } = workspace;
-  const settle = (declaration: WorkspaceConfig) => {
+  const foldThenCheck = (declaration: WorkspaceConfig) => {
     finishHeadRepoChange(db, declaration);
     assertRememberedHeadRepo(db, declaration, now());
   };
+  // ADR 0415 決定1: removal folds first too — its announcement forgets the old fork, so a rollback would keep that fork's copies
+  finishHeadRepoChange(db, workspace);
   // setting does not pass over a head repo edited outside the door (ADR 0373 決定13 の線); removal moves to the closed side and is
   // the exit the check's texts name, so it is not gated (#3560)
-  if (next !== undefined) settle(workspace);
+  if (next !== undefined) assertRememberedHeadRepo(db, workspace, now());
   const before = readCheckoutRemote(path, "first", HEAD_REPO_REMOTE) ?? undefined;
   announceHeadRepo(db, workspace, next);
   try {
@@ -426,7 +428,7 @@ function writeHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefi
     commit();
   } catch (err) {
     const failures: unknown[] = [];
-    for (const step of [() => pointHeadRemote(path, before), () => settle(workspace)]) {
+    for (const step of [() => pointHeadRemote(path, before), () => foldThenCheck(workspace)]) {
       try {
         step();
       } catch (failure) {
@@ -439,7 +441,7 @@ function writeHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefi
     }
     throw err;
   }
-  settle({ ...workspace, head_repo: next });
+  foldThenCheck({ ...workspace, head_repo: next });
 }
 
 /** A payload carrying dangerous values arrived without `confirm` (issue #57,

@@ -4,11 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { GhCliClient } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { createLanding } from "../src/landing.js";
-import { announceHeadRepo, finishHeadRepoChange } from "../src/workspace.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeGitHubClient } from "./fakes.js";
 import {
   addTaskChange,
+  announceAndFinishHeadRepo,
   api,
   bootTidepool,
   checkoutOf,
@@ -49,8 +49,7 @@ it("convergence sees and fetches a fork-only commit before pushing a root with n
   git(local.path, "remote", "add", "head-repo", fork);
   const workspace = { ...local, head_repo: fork };
   const { db, clock } = await openBoard();
-  announceHeadRepo(db, local, fork);
-  finishHeadRepoChange(db, workspace);
+  announceAndFinishHeadRepo(db, local, fork);
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
   const work = landingWork(db, clock, workspace.name);
@@ -113,10 +112,9 @@ it("a repair does not push to the replacement fork when its open PR still uses t
   await commitThroughTaskCheckout(db, clock, workspace, work, "repair.txt", "fixed\n");
   const replacement = await tempDir("tidepool-replacement-fork-");
   git(replacement, "clone", "--bare", previous.repo!, ".");
-  announceHeadRepo(db, workspace, replacement);
   git(workspace.path, "remote", "set-url", "head-repo", replacement);
+  announceAndFinishHeadRepo(db, workspace, replacement);
   workspace = { ...workspace, head_repo: replacement };
-  finishHeadRepoChange(db, workspace);
 
   await expect(convergeOn(landing, work.id)).resolves.toEqual({
     kind: "failed", reason: "promotion_failed", error: expect.stringContaining(`pushed to head repo ${previous.head_repo}, but workspace ${previous.name} now declares head repo ${replacement}`),
@@ -220,8 +218,7 @@ it("the board updates an old task branch on the head repo before opening its PR 
   servers.push(rest);
   const auth = new GitHubAuth(tokenFile, broker.url);
   t = await bootTidepool({ workspace, githubAuth: auth, github: new GhCliClient(auth, { ...MATCHING_GH, apiUrl: rest.url }) });
-  announceHeadRepo(t.db, local, workspace.head_repo);
-  finishHeadRepoChange(t.db, workspace);
+  announceAndFinishHeadRepo(t.db, local, workspace.head_repo);
   const task = await registerWork(t, "land the worker branch from its fork");
   const branch = `task/${task.id}`;
   const old = git(origin, "rev-parse", "refs/heads/main");

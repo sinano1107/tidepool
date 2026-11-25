@@ -714,7 +714,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
   };
   // verify both the named place's Git tree and its separation from the board's own state.
   // ADR 0373 決定2: 回答の文が選択肢を選ぶ —— 完全一致だけで、ほかの文(面接室でない名前への `run with an empty room` も)は `repaired by hand`
-  const acceptWorkspaceRepair = async (value: string, answer: string | undefined, target: WorkspaceConfig, origin: EventOrigin): Promise<{ notice?: string; withAnswer?: (questionId: string) => void } | undefined> => {
+  const acceptWorkspaceRepair = async (value: string, answer: string | undefined, target: WorkspaceConfig, origin: EventOrigin, folded: { notice?: string }): Promise<{ notice?: string; withAnswer?: (questionId: string) => void } | undefined> => {
     const room = getTask(deps.db, value)?.type === "interview";
     const giveUp = answer === GIVE_UP_THE_LOST_REFS;
     const restore = answer === RESTORE_THE_BASELINE || giveUp;
@@ -760,6 +760,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     });
     // ADR 0415 決定3: 受理が終わっていない出元 repo の変更を畳む —— 検査を通さない比較の後、検査つきの項より前。落ちれば回答ごと拒む
     const finished = await refuseOnError(() => finishHeadRepoChange(deps.db, target));
+    if (finished) folded.notice = headRepoFinishedNotice(value, finished);
     const checked = withRememberedRepoCheck(deps.db, target, () => clock.now());
     // ADR 0386 決定4: 項は pickup の門・本文と同じ並び
     const predicates = namePickupPredicates(deps.db, value, checked, resolveWorkspacesBaseDir(deps.workspacesDir), deps.boardState);
@@ -877,7 +878,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     await refuseNamingKept(noteKept(() => removeReleasedTaskCheckoutsOn(deps.db, value, deps.workspace?.name, clock.now())));
     // spec #3273 text B11: 外した値ごとに1行
     const notices = [
-      ...(finished ? [`The board finished the head repo change of workspace ${value} and deleted its checkout's copies from the previous head repo.`] : []),
+      ...(folded.notice === undefined ? [] : [folded.notice]),
       ...kept.map(keptValueNotice),
       ...keptWorkbenches,
       ...keptCheckouts,
@@ -960,7 +961,14 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     workspace: async (value, answer, origin) => {
       // resolve the named workspace fresh
       const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
-      return withWorkspaceInFlightKey(deps.db, value!, () => acceptWorkspaceRepair(value!, answer, target, origin));
+      const folded: { notice?: string } = {};
+      try {
+        return await withWorkspaceInFlightKey(deps.db, value!, () => acceptWorkspaceRepair(value!, answer, target, origin, folded));
+      } catch (err) {
+        // ADR 0415 決定3: 畳んだ後の段に拒まれても畳んだことを告げる —— 次の回答には畳むものが残らず、告げる機会が無い
+        if (folded.notice === undefined || !(err instanceof DomainError)) throw err;
+        throw new DomainError(withNotice(err.message, folded.notice));
+      }
     },
     agent: async (value) => {
       const quarantineAgentName = value!;
@@ -1234,6 +1242,12 @@ async function answerThroughConvergence(landing: Landing, question: string, orig
 }
 
 const withNotice = (message: string, notice: string | undefined) => (notice === undefined ? message : `${message}\n${notice}`);
+
+/** ADR 0415 決定3: the acceptance finished a head repo change. Names a previous head repo and deleted copies only when there were any. */
+function headRepoFinishedNotice(workspace: string, { previous, deleted }: { previous: string | null; deleted: number }): string {
+  const copies = deleted === 0 ? "" : previous === null ? " and deleted the head repo copies left in its checkout" : " and deleted its checkout's copies from the previous head repo";
+  return `The board finished the head repo change of workspace ${workspace}${copies}.`;
+}
 
 export interface CancelThroughHumanDoorDeps {
   db: Db;

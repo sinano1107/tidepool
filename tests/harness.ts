@@ -1246,10 +1246,15 @@ export async function makeLandingWorkspace(name: string) {
 /** Seed only workspaces opened with the fixture for an already configured fork. */
 export function rememberFixtureHeadRepos(db: Db): void {
   for (const workspace of landingWorkspaces) {
-    announceHeadRepo(db, workspace, workspace.head_repo);
-    finishHeadRepoChange(db, workspace);
+    announceAndFinishHeadRepo(db, workspace, workspace.head_repo);
     assertRememberedHeadRepo(db, workspace, new Date(0));
   }
+}
+
+/** 出元 repo の扉の順で覚えた値を書く: 予告してから畳む(ADR 0391 決定1、ADR 0415 決定1)。`workspace` は変更の前の宣言でよい。 */
+export function announceAndFinishHeadRepo(db: Db, workspace: WorkspaceConfig, next: string | undefined): void {
+  announceHeadRepo(db, workspace, next);
+  finishHeadRepoChange(db, { ...workspace, head_repo: next });
 }
 
 let remoteTemplate: ReturnType<typeof buildRemoteTemplate> | undefined;

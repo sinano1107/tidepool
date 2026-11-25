@@ -38,9 +38,7 @@ import {
 } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
 import {
-  announceHeadRepo,
   dropWorkspaceState,
-  finishHeadRepoChange,
   holdsBaseline,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
@@ -57,6 +55,7 @@ import {
 import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, holdAfterMerge, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote, } from "./git-http-remote.js";
 import {
+  announceAndFinishHeadRepo,
   CLEAN_LANDING_INTAKE,
   checkoutTaskBranch,
   commitWork,
@@ -2448,8 +2447,7 @@ it("着地の比較: 削除の扉が読む hold の内容の比較は、基準�
 it("着地の比較: 基準の行が無い workspace は最初の撮りをして着地し、その後の移動を捕まえる", async () => {
   const { workspace, db, github, landing, work } = await doneRootWithBaseline("landing-compare-first-capture");
   dropWorkspaceState(db, workspace.name);
-  announceHeadRepo(db, workspace, workspace.head_repo);
-  finishHeadRepoChange(db, workspace);
+  announceAndFinishHeadRepo(db, workspace, workspace.head_repo);
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
   expect(holdsBaseline(db, workspace.name)).toBe(true);
@@ -2539,8 +2537,7 @@ it("着地の比較: 最初の撮りの確認が registry を読めなければ�
 it("着地の比較: 行の無い名前自身の Quarantine の間は最初の撮りをせず、その名前で待つ", async () => {
   const { workspace, db, clock, github, landing, work } = await doneRootWithBaseline("landing-compare-own-quarantine");
   dropWorkspaceState(db, workspace.name);
-  announceHeadRepo(db, workspace, workspace.head_repo);
-  finishHeadRepoChange(db, workspace);
+  announceAndFinishHeadRepo(db, workspace, workspace.head_repo);
   quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining(`workspace "${workspace.name}"`) });
@@ -2561,8 +2558,7 @@ async function rowlessRootWithForeignOrigin(name: string) {
   const root = await doneRootWithBaseline(name);
   const { workspace, db } = root;
   dropWorkspaceState(db, workspace.name);
-  announceHeadRepo(db, workspace, workspace.head_repo);
-  finishHeadRepoChange(db, workspace);
+  announceAndFinishHeadRepo(db, workspace, workspace.head_repo);
   const other = await tempDir(`tidepool-${name}-other-`);
   git(other, "clone", "--bare", workspace.repo!, ".");
   git(workspace.path, "remote", "set-url", "origin", other);
@@ -2603,8 +2599,7 @@ const overlappingFixedPoint = (workspace: WorkspaceConfig) => [{ label: "board d
 it("着地の比較: 行の無い名前の場所が盤面の固定点と重なれば、着地は最初の撮りをせず、その名前の Quarantine で止まる", async () => {
   const { workspace, db, clock, github, work } = await doneRootWithBaseline("landing-compare-first-capture-fixed-point");
   dropWorkspaceState(db, workspace.name);
-  announceHeadRepo(db, workspace, workspace.head_repo);
-  finishHeadRepoChange(db, workspace);
+  announceAndFinishHeadRepo(db, workspace, workspace.head_repo);
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, boardState: overlappingFixedPoint(workspace) });
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined", error: expect.stringContaining(`workspace "${workspace.name}"`) });

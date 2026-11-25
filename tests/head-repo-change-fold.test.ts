@@ -1,5 +1,5 @@
 // ADR 0415: 写しを消しうる出元 repo の畳みは扉と workspace の Quarantine の受理でだけ行い、行き先の検査は終わっていない変更で1回止める(#3797)
-import { readFileSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -14,7 +14,6 @@ import { queueReturnHandler } from "../src/watchdog.js";
 import {
   announceHeadRepo,
   assertRememberedHeadRepo,
-  finishHeadRepoChange,
   pickupGate,
   quarantineWorkspace,
   UnfinishedHeadRepoChangeError,
@@ -23,7 +22,7 @@ import {
   withRememberedRepoCheck,
 } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeLandingWorkspace, makeRemoteBackedWorkspace, makeWorkspace, quarantineQuestion } from "./harness.js";
+import { announceAndFinishHeadRepo, checkoutTaskBranch, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeLandingWorkspace, makeRemoteBackedWorkspace, makeWorkspace, quarantineQuestion } from "./harness.js";
 import {
   answerWorkspaceQuarantine,
   breakPackedRefs,
@@ -35,6 +34,7 @@ import {
   profile,
   promotionFailures,
   recordPrOpenedOutsideConvergence,
+  repairPackedRefs,
 } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -42,31 +42,37 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 const NOW = new Date("2026-11-25T00:00:00.000Z");
 const copies = (workspace: WorkspaceConfig) => git(workspace.path, "for-each-ref", "--format=%(refname)", "refs/remotes/head-repo/");
+const finishedWithPreviousCopies = (workspace: WorkspaceConfig) =>
+  `The board finished the head repo change of workspace ${workspace.name} and deleted its checkout's copies from the previous head repo.`;
 
 /** 扉が予告 `[無し, fork]` と registry の宣言・checkout の remote までを書いて死んだ workspace の、done の根。 */
-async function doneRootAfterDeadDoor(name: string) {
+async function doneRootAfterDeadDoor(name: string, { withCopies = true } = {}) {
   const { workspace: local } = await makeRemoteBackedWorkspace(name);
   const fork = await tempDir("tidepool-head-repo-");
   git(fork, "clone", "--bare", local.repo!, ".");
   git(local.path, "remote", "add", "head-repo", fork);
-  git(local.path, "fetch", "--quiet", "head-repo");
+  if (withCopies) git(local.path, "fetch", "--quiet", "head-repo");
   const workspace: WorkspaceConfig = { ...local, head_repo: fork };
   const { db, clock } = await openBoard();
   announceHeadRepo(db, local, fork);
   return { ...(await doneRoot(db, clock, workspace)), fork };
 }
 
-/** 覚えた古い fork の写しを持つ workspace で、扉が新しい fork への予告 `[古い fork, 新しい fork]` と remote・registry の宣言までを書いて
- *  死んだ形の、done の根。`landing` は今の宣言を引き直す。 */
-async function doneRootMidChange(name: string) {
-  const { workspace: old } = await makeLandingWorkspace(name);
-  const { db, clock } = await openBoard();
-  git(old.path, "fetch", "--quiet", "head-repo");
+/** 扉が `old` の覚えた fork から新しい fork への予告 `[古い fork, 新しい fork]` と remote・registry の宣言までを書いて死んだ形。今の宣言を返す。 */
+async function dieChangingHeadRepo(db: Db, old: WorkspaceConfig): Promise<WorkspaceConfig> {
   const next = await tempDir("tidepool-next-fork-");
   git(next, "clone", "--bare", old.repo!, ".");
   announceHeadRepo(db, old, next);
   git(old.path, "remote", "set-url", "head-repo", next);
-  return { ...(await doneRoot(db, clock, { ...old, head_repo: next })), old };
+  return { ...old, head_repo: next };
+}
+
+/** 覚えた古い fork の写しを持つ workspace で扉が新しい fork への変更の途中で死んだ形の、done の根。 */
+async function doneRootMidChange(name: string) {
+  const { workspace: old } = await makeLandingWorkspace(name);
+  const { db, clock } = await openBoard();
+  git(old.path, "fetch", "--quiet", "head-repo");
+  return { ...(await doneRoot(db, clock, await dieChangingHeadRepo(db, old))), old };
 }
 
 async function doneRoot(db: Db, clock: FakeClock, workspace: WorkspaceConfig) {
@@ -81,13 +87,17 @@ async function doneRoot(db: Db, clock: FakeClock, workspace: WorkspaceConfig) {
 }
 
 it("予告 [無し, fork] が残り ref が読めない checkout の根の収束は、workspace の Quarantine 1つで止まり、昇格失敗 question を立てず、2回目も重ねない", async () => {
-  const { workspace, db, landing, work } = await doneRootAfterDeadDoor("unfinished-head-repo-unreadable");
+  const { workspace, fork, db, landing, work } = await doneRootAfterDeadDoor("unfinished-head-repo-unreadable");
   breakPackedRefs(workspace);
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined" });
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined" });
 
   expect(openQuarantineValues(db, "workspace")).toEqual([workspace.name]);
+  // 初めて置く変更の文は、前の出元 repo を言わない
+  expect(quarantineQuestion(db, "workspace", workspace.name)!.purpose).toContain(
+    `workspace ${workspace.name}'s change of head repo to ${fork} is not finished. Answer, and the board finishes the change; or clear the head repo in the workspace settings`,
+  );
   expect(promotionFailures(db, work.id)).toEqual([]);
 });
 
@@ -107,11 +117,36 @@ it("予告 [古い fork, 新しい fork] の workspace の Quarantine に回答�
   expect(copies(workspace)).not.toBe("");
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "quarantined" });
 
-  await answerWorkspaceQuarantine({ db, clock, workspace, landing }, quarantineQuestion(db, "workspace", workspace.name)!);
+  const answered = await answerWorkspaceQuarantine({ db, clock, workspace, landing }, quarantineQuestion(db, "workspace", workspace.name)!);
 
+  expect(answered).toMatchObject({ notice: finishedWithPreviousCopies(workspace) });
   expect(copies(workspace)).toBe("");
   expect(() => assertRememberedHeadRepo(db, workspace, NOW)).not.toThrow();
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
+});
+
+it("畳んだ後の段で拒まれた回答も変更を終えたことを告げ、次の回答は畳むものが無く受理される", async () => {
+  const { workspace, db, clock, landing, work } = await doneRootMidChange("unfinished-head-repo-answer-dirty");
+  await convergeOn(landing, work.id);
+  const question = quarantineQuestion(db, "workspace", workspace.name)!;
+  const dirty = join(workspace.path, "uncommitted");
+  writeFileSync(dirty, "dirty\n");
+
+  await expect(answerWorkspaceQuarantine({ db, clock, workspace, landing }, question)).rejects.toThrow(finishedWithPreviousCopies(workspace));
+  expect(copies(workspace)).toBe("");
+
+  rmSync(dirty);
+  await expect(answerWorkspaceQuarantine({ db, clock, workspace, landing }, question)).resolves.not.toHaveProperty("notice");
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+});
+
+it("写しの無い checkout で初めて置く変更への回答は、変更を終えたことだけを告げる", async () => {
+  const { workspace, db, clock, landing, work } = await doneRootAfterDeadDoor("unfinished-head-repo-no-copies", { withCopies: false });
+  await convergeOn(landing, work.id);
+
+  const answered = await answerWorkspaceQuarantine({ db, clock, workspace, landing }, quarantineQuestion(db, "workspace", workspace.name)!);
+
+  expect(answered).toMatchObject({ notice: `The board finished the head repo change of workspace ${workspace.name}.` });
 });
 
 it("ref が読めないままの回答は git の文つきで拒まれて Quarantine は開いたまま、直してから答えると受理される", async () => {
@@ -123,10 +158,10 @@ it("ref が読めないままの回答は git の文つきで拒まれて Quaran
   await expect(answerWorkspaceQuarantine({ db, clock, workspace, landing }, question)).rejects.toThrow("not a packed ref");
   expect(quarantineQuestion(db, "workspace", workspace.name)?.id).toBe(question.id);
 
-  const packed = join(workspace.path, ".git", "packed-refs");
-  writeFileSync(packed, readFileSync(packed, "utf8").replace("not a packed ref\n", ""));
-  await answerWorkspaceQuarantine({ db, clock, workspace, landing }, question);
+  repairPackedRefs(workspace);
+  const answered = await answerWorkspaceQuarantine({ db, clock, workspace, landing }, question);
 
+  expect(answered).toMatchObject({ notice: `The board finished the head repo change of workspace ${workspace.name} and deleted the head repo copies left in its checkout.` });
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
   expect(copies(workspace)).toBe("");
   expect(() => assertRememberedHeadRepo(db, workspace, NOW)).not.toThrow();
@@ -174,11 +209,7 @@ it("ref の移動で既に開いている workspace の Quarantine に終わっ�
   assertLandingRefs(db, old, undefined, undefined, NOW);
   git(old.path, "tag", "intruder");
   expect(() => assertLandingRefs(db, old, undefined, undefined, NOW)).toThrow();
-  const next = await tempDir("tidepool-next-fork-");
-  git(next, "clone", "--bare", old.repo!, ".");
-  announceHeadRepo(db, old, next);
-  git(old.path, "remote", "set-url", "head-repo", next);
-  const workspace = { ...old, head_repo: next };
+  const workspace = await dieChangingHeadRepo(db, old);
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: new FakeGitHubClient() });
 
   expect(() => workspaceNetworkDestination(withRememberedRepoCheck(db, workspace, () => NOW))).toThrow(UnfinishedHeadRepoChangeError);
@@ -189,9 +220,7 @@ it("ref の移動で既に開いている workspace の Quarantine に終わっ�
   git(old.path, "tag", "-d", "intruder");
   const answered = await answerWorkspaceQuarantine({ db, clock, workspace, landing }, quarantineQuestion(db, "workspace", workspace.name)!);
 
-  expect(answered).toMatchObject({
-    notice: `The board finished the head repo change of workspace ${workspace.name} and deleted its checkout's copies from the previous head repo.`,
-  });
+  expect(answered).toMatchObject({ notice: finishedWithPreviousCopies(workspace) });
   expect(copies(workspace)).toBe("");
   expect(openQuarantineValues(db, "workspace")).toEqual([]);
 });
@@ -268,22 +297,21 @@ describe("終わっていない変更に当たった行き先の読み", () => {
   it("無人 merge の tick", async () => {
     const { workspace: old } = await makeLandingWorkspace("unfinished-head-repo-tick");
     const { db, clock } = await openBoard();
-    const next = await tempDir("tidepool-next-fork-");
-    git(next, "clone", "--bare", old.repo!, ".");
-    announceHeadRepo(db, old, next);
-    git(old.path, "remote", "set-url", "head-repo", next);
-    const workspace = { ...old, head_repo: next };
+    const workspace = await dieChangingHeadRepo(db, old);
     const github = new FakeGitHubClient();
     const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, resolveAuthority: () => profile("auto_if_ci_green") });
     const work = landingWork(db, clock, workspace.name);
     github.scriptPullRequestOnBranch(`task/${work.id}`);
     recordPrOpenedOutsideConvergence(db, finish(db, clock, work), 1, clock.now(), { authority: { merge: "auto_if_ci_green" }, workspace });
+    const failures = vi.spyOn(console, "error");
 
     await landing.tick("auto_merge");
     await landing.tick("auto_merge");
 
+    // tick は覚えた repo の食い違いを止まりとして受け、「auto-merge が落ちた」とは記さない(下位型でなければこちらへ落ちる)
+    expect(failures.mock.calls.flat().filter((line) => String(line).includes("auto-merge of PR"))).toEqual([]);
     expect(openQuarantineValues(db, "workspace")).toEqual([workspace.name]);
-    expect(quarantineQuestion(db, "workspace", workspace.name)!.purpose).toContain(`change of head repo to ${next} is not finished`);
+    expect(quarantineQuestion(db, "workspace", workspace.name)!.purpose).toContain(`change of head repo to ${workspace.head_repo} is not finished`);
     expect(github.merged).toEqual([]);
     expect(mergeQuestions(db)).toEqual([]);
   });
@@ -300,8 +328,7 @@ describe("行を書くだけの畳み", () => {
     const db = openDb(":memory:");
     onTestFinished(() => { db.close(); });
     const declared = { ...workspace, head_repo: "acme/fork" };
-    announceHeadRepo(db, workspace, declared.head_repo);
-    finishHeadRepoChange(db, declared);
+    announceAndFinishHeadRepo(db, workspace, declared.head_repo);
     return { db, declared };
   }
 
