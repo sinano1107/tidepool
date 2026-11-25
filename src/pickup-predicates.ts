@@ -270,8 +270,9 @@ export function roomProvisionOf(db: Db, task: Task, rootId: string): RoomProvisi
   return head === undefined ? undefined : { what: `the posed head ${head} that ${task.id} reads`, source: () => head };
 }
 
-/** 面接室が今その task に提供する rev: ブランチがあればそれ、無ければ切る元か読む head。項はこれの閉包を門の時点で検査し、準備はブランチを
- *  立てた後にこれを fetch する。 */
+/** 面接室が今その task に提供する rev: ブランチがあればそれ、無ければ切る元か読む head。項はこれの閉包を門の時点で検査し、読み専用の
+ *  checkout はこれを fetch する。面接室で走る task の checkout は同じ答え(ブランチか、`roomForkSource` が面接室で解いた切る元)をブランチを
+ *  立てる前に fetch し、ブランチは受け取った commit に立てる(ADR 0414 決定7)。 */
 export function providedRev(room: WorkspaceConfig, { branch, source }: RoomProvision): string {
   return branch !== undefined && branchExists(room, branch) ? `refs/heads/${branch}` : source(room);
 }
