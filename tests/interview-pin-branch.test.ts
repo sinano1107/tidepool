@@ -1,9 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { listEvents, taskDecisionLog } from "../src/events.js";
+import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { questionAnnotations } from "../src/memory.js";
 import { namePickupPredicates, taskRoomPickupPredicates } from "../src/pickup-predicates.js";
@@ -17,6 +18,7 @@ import {
   CheckoutHostError,
   commitRoomCopy,
   excludeWorkspaceProjectSettings,
+  LostTaskBranchPresentError,
   openInterviewRoom,
   PickupGateError,
   PlaceNotOpenError,
@@ -1629,11 +1631,7 @@ it("受験者の初回の pickup は、面接室の task/<id> を受験者の ch
 // warning の形は root が持つ: 受験者の面接室で最初の撮りの後に ref を足すか動かすと、fetch より前に RefsMovedError で止まる(#3834 の実測)
 it("面接室を開いた直後に保護ブランチへ strict な検査だけが拒む tree が置かれた root の最初の pickup は、門を通っても準備が `zeroPaddedFilemode` を名指して面接室の名前で止まり、面接室に task/<id>・task_branch_created・root の checkout の番地を残さない(ADR 0414 決定6〜8)", async () => {
   const db = openDb(":memory:");
-  const workspace = await makeWorkspace("root-strict-room");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
-  openTestInterviewRoom(db, root);
-  const room = recordedInterviewRoom(db, root.id)!;
-  const base = dirname(room.path);
+  const { workspace, root, room, base } = await rootInOpenedRoom(db, "root-strict-room");
   seedZeroPaddedTree(room);
   await pickupGate(db, workspace, root, base, () => NOW);
 
@@ -1703,5 +1701,21 @@ it("出題の head の blob が壊れた面接室を読む監査の pickup は�
   expect(branchCreated(db, audit.id)).toEqual([]);
   expect(existsSync(join(base, audit.id))).toBe(false);
   expect(existsSync(join(base, `${audit.id}.reads`))).toBe(false);
+  db.close();
+});
+
+it("task の checkout と読み専用の checkout を作った後に固定が拒んだ監査の再 pickup は、拒んだ理由のまま投げ、新しい task の checkout の番地も読み専用の checkout の番地も残さない(ADR 0414 決定6 / ADR 0392 決定2)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, base, audit, place } = await auditPickedUp(db);
+  releaseWorkspace(db, place, audit, NOW);
+  // 失われた event が効いているのに在る `task/<id>` —— 固定(`createTaskBranch`)が拒む
+  appendEvent(db, { taskId: audit.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: git(workspace.path, "rev-parse", `task/${audit.id}`) }, at: NOW });
+  const addresses = () => [checkoutAddresses(base, audit.id), checkoutAddresses(base, `${audit.id}.reads`)];
+  const before = addresses();
+
+  const failed = await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base }).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(LostTaskBranchPresentError);
+  expect(addresses()).toEqual(before);
   db.close();
 });

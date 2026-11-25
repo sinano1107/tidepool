@@ -638,33 +638,35 @@ function openTaskCheckout(
   const at = CHECKOUT_LAYOUT.task.at(workspacesBaseDir, role === "root" ? `${task.id}.checkout` : task.id, pickup.id);
   const branch = taskBranch(task.id);
   const description = `the task checkout of ${task.id}`;
-  // 面接室が提供するものの閉包は pickup の門の (task, 面接室) の項が先に確かめている。門の後に面接室で rev を読む・fetch する・tree を
-  // 展開するのに落ちたら、この checkout でも下の読み専用の checkout でも、fetch 元の面接室の性質としてその task の項の文で面接室の名前で
-  // 止まる(ADR 0386 決定3 / ADR 0276 決定3)
+  // 面接室が提供するものの閉包は pickup の門の (task, 面接室) の項が先に確かめている。門の後に面接室から fetch する・tree を展開するのに
+  // 落ちたら、この checkout でも下の読み専用の checkout でも、fetch 元の面接室の性質としてその task の項の文で面接室の名前で止まる
+  // (ADR 0386 決定3 / ADR 0276 決定3)
   const itemOf = (room: WorkspaceConfig) => taskRoomPickupPredicates(db, [task], room.name, workspacesBaseDir)[0]?.describe;
   // ADR 0414 決定1・2・6: 複製(task の checkout と読み専用の checkout 全部)を先に作り、通ってから固定を書く —— 固定が書く `task/<id>` は
-  // checkout が受け取った commit。解けない切る元は番地を作る前に投げる(決定7)
+  // checkout が受け取った commit。解けない切る元は番地を作る前に `roomForkSource` の文のまま投げる(決定7)
   const { source, forkSource } = role === undefined ? copySourceBeforeFixing(db, named, task, () => now, fixing.defaultWorkspaceName) : roomCopySource(db, named, task);
-  const readRooms = roomsReadBy(db, task).map((room) => ({ room, at: CHECKOUT_LAYOUT.read.at(workspacesBaseDir, task.id, pickup.id, room.name), parents: CHECKOUT_LAYOUT.read.parents }));
+  const readCopies = roomsReadBy(db, task).map((room) => ({ room, at: CHECKOUT_LAYOUT.read.at(workspacesBaseDir, task.id, pickup.id, room.name) }));
+  const copies = [{ at, parents: CHECKOUT_LAYOUT.task.parents }, ...readCopies.map((copy) => ({ at: copy.at, parents: CHECKOUT_LAYOUT.read.parents }))];
   let path: string;
   let reads: ReadCheckout[];
   try {
     try {
       path = makeCheckout({ at, named, source, branch, description });
     } catch (err) {
-      // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)
+      // 番地を作れないのは host 側の失敗のまま(ADR 0356 決定2)。面接室の外の fetch の失敗は名前の場所の側で、呼び手が今までどおり
+      // 名前の場所の Quarantine にする(ADR 0411 決定5 / ADR 0414 決定5)
       if (role === undefined || err instanceof CheckoutHostError) throw err;
       throw PickupGateError.of(named, err, itemOf(named));
     }
     // 読み手の出題の head も面接室が提供する答え(ADR 0386 決定1)—— 出題前は無い
-    reads = readRooms.map(({ room, at: readAt }) => {
+    reads = readCopies.map(({ room, at: readAt }) => {
       const read = roomProvisionOf(db, task, room.name);
       return openReadCheckout(readAt, room, read && providedRev(room, read), task.id, itemOf(room));
     });
     fixing.fix(forkSource);
   } catch (err) {
     // 作りかけも番地で消す(読み専用の checkout は fetch の前に番地を作る)
-    for (const copy of [{ at, parents: CHECKOUT_LAYOUT.task.parents }, ...readRooms]) {
+    for (const copy of copies) {
       try {
         removeBoardCheckout(copy.at, copy.parents);
       } catch {
