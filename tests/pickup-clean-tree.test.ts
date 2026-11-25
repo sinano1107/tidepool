@@ -134,8 +134,9 @@ it("面接室の保護ブランチの時点で gitlink があり root が触っ�
   expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
 });
 
-// #3814: 出題の写しの stage と callback は面接室の objects を借りて読む。面接室の側の損傷を root の worktree の故障(`pose_probe` が
-// 「作業ツリーを直せ」と拒む型)や worker の git の時間切れ(root の回収)として刻まない —— 型の無い失敗は面接室の側の拒みに落ちる
+// #3814: 出題の写しの callback は面接室にしか無い保護ブランチの親を読む。親の commit・tree の損傷は root の worktree の故障(`pose_probe` が
+// 「作業ツリーを直せ」と拒む型)にも worker の git の時間切れ(root の回収)にもならない —— 型の無い失敗は面接室の側の拒みに落ちる。
+// worktree が再現する面接室の tree(前の出題の写し)の破損は、stage が借りて読み worktree の故障に刻む —— #3814 で扱う
 it.each([
   ["commit", "missing"],
   ["commit", "corrupt"],
