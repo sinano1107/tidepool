@@ -15,7 +15,7 @@ import {
   rowRefusalCause,
 } from "./cli-auth.js";
 import type { ModelSwap } from "./events.js";
-import { isRefusalNotice, parseStreamLine, readModelSwap, readRootRefusal } from "./stream-json.js";
+import { collectRefusal, parseStreamLine, readModelSwap } from "./stream-json.js";
 
 /** 答えを取りに行く Board call の system prompt(ADR 0296 決定6)。用途に依らない1つの文面で、用途ごとの指示は
  *  user prompt が持つ。翻訳は ADR 0062 決定3 の自前の文面を `systemPrompt` で渡す。Codex の runner(#2417)も
@@ -119,10 +119,7 @@ function readBoardCallStream(stdout: unknown) {
     if (parsed?.type === "result") envelope = parsed;
     const swap = readModelSwap(parsed);
     if (swap) model_swaps.push(swap);
-    const refusal = readRootRefusal(parsed);
-    if (refusal && !refusals.has(refusal.id)) refusals.set(refusal.id, refusal.category);
-    // ADR 0416 決定1: 通知は id を持たず1行が1件 —— 鍵は行ごとに新しい
-    if (isRefusalNotice(parsed)) refusals.set({}, null);
+    collectRefusal(refusals, parsed);
   }
   return { envelope, model_swaps, refusals: [...refusals.values()] };
 }

@@ -6,12 +6,11 @@ import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, rowRefusalCause } 
 import { type AdvisorRecord, type EventPayload, type ModelSwap, type RowRefusalCause, swapsMain } from "./events.js";
 import { ownEntry } from "./registry.js";
 import {
-  isRefusalNotice,
+  collectRefusal,
   isRootAssistant,
   readAdvisorOutcomes,
   readInitModel,
   readModelSwap,
-  readRootRefusal,
   readSubagentModel,
   readSubagentStart,
 } from "./stream-json.js";
@@ -386,9 +385,7 @@ export function observeClaudeLine(observed: StreamObservation, parsed: Record<st
   if (started) observed.subagents.set(started.id ?? {}, null);
   const resolved = readSubagentModel(parsed);
   if (resolved) observed.subagents.set(resolved.id ?? {}, resolved.model);
-  const refusal = readRootRefusal(parsed);
-  if (refusal && !observed.refusals.has(refusal.id)) observed.refusals.set(refusal.id, refusal.category);
-  if (isRefusalNotice(parsed)) observed.refusals.set({}, null);
+  collectRefusal(observed.refusals, parsed);
 }
 
 /** 観測 → `worker_exited` の stream 由来の欄。live の settle と起動時の復旧が同じこれを呼ぶ(ADR 0316 決定1)。 */

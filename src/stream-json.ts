@@ -205,9 +205,9 @@ export function isRootAssistant(parsed: Record<string, unknown> | null): parsed 
 
 /** 差し替え先が無いまま終わった拒否に CLI が合成する root の assistant 行(`message.model: "<synthetic>"`)の拒否
  *  (ADR 0215 決定3 / ADR 0416 決定2)。固定版 2.1.286 の binary の読みで、実物は未観測(#1614)。
- *  `id` は `message.id` —— 数える側が重複を除く。`category` は `stop_details.category` の逐語で、無ければ null。
+ *  `id` は `message.id`。`category` は `stop_details.category` の逐語で、無ければ null。
  *  同じ model で続いた1段目の拒否はこの行に現れない —— `isRefusalNotice` が読む。 */
-export function readRootRefusal(parsed: Record<string, unknown> | null): { id: unknown; category: string | null } | null {
+function readRootRefusal(parsed: Record<string, unknown> | null): { id: unknown; category: string | null } | null {
   if (!isRootAssistant(parsed)) return null;
   const message = parsed.message as { id?: unknown; stop_reason?: unknown; stop_details?: { category?: unknown } } | undefined;
   if (message?.stop_reason !== "refusal") return null;
@@ -216,9 +216,8 @@ export function readRootRefusal(parsed: Record<string, unknown> | null): { id: u
 }
 
 /** 1段目の拒否(同じ model で続いた拒否)の CLI の通知の行か(ADR 0416 決定1)。拒否された応答は stream に流れず、分類も載らない。
- *  `informational` は拒否と無関係の通知にも使われるので、`level` と CLI の定数の文の末尾で読む(先頭は model の表示名で変わる)。
- *  通知は `message.id` を持たないので、数える側は1行を1件にする。 */
-export function isRefusalNotice(parsed: Record<string, unknown> | null): boolean {
+ *  `informational` は拒否と無関係の通知にも使われるので、`level` と CLI の定数の文の末尾で読む(先頭は model の表示名で変わる)。 */
+function isRefusalNotice(parsed: Record<string, unknown> | null): boolean {
   return (
     parsed?.type === "system" &&
     parsed.subtype === "informational" &&
@@ -226,4 +225,13 @@ export function isRefusalNotice(parsed: Record<string, unknown> | null): boolean
     typeof parsed.content === "string" &&
     parsed.content.endsWith("safeguards stopped the response above · continuing once with that noted")
   );
+}
+
+/** 1行の root の拒否を `refusals` に出た順で足す(ADR 0215 決定3 / ADR 0416 決定1・2)。worker session と答えを取りに行く
+ *  Board call が同じこれで数える。読み終えた `[...refusals.values()]` が記録の `refusals`。 */
+export function collectRefusal(refusals: Map<unknown, string | null>, parsed: Record<string, unknown> | null): void {
+  const refusal = readRootRefusal(parsed);
+  if (refusal && !refusals.has(refusal.id)) refusals.set(refusal.id, refusal.category);
+  // 通知は message.id を持たず1行が1件 —— 行ごとに新しい鍵を置き、重複として除かれないようにする
+  if (isRefusalNotice(parsed)) refusals.set({}, null);
 }

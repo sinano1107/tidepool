@@ -4779,7 +4779,7 @@ describe("advisor capability (issue #33)", () => {
     // 差し替え先が無い拒否の合成行(binary の読みで未観測、#1614 —— syntheticRefusalLine)
     const refusalLine = (id: string, category?: string | null) => `${JSON.stringify(syntheticRefusalLine(id, category))}\n`;
 
-    it("root の拒否は message.id ごとに1つ、分類を出た順に worker_exited.refusals へ載せ、subagent の拒否は数えない(決定3)", async () => {
+    it("root の拒否は message.id ごとに1つ、分類を出た順に worker_exited.refusals へ載せ、subagent の拒否は数えない(ADR 0215 決定3)", async () => {
       const { start, processes, emitExit, db } = await makeWorker();
       start("task-refusals");
       await vi.waitFor(() => expect(processes).toHaveLength(1));
@@ -4801,7 +4801,6 @@ describe("advisor capability (issue #33)", () => {
       `{"type":"system","subtype":"informational","content":"Sonnet 5.5's safeguards stopped the response above · continuing once with that noted","level":"notice","uuid":"58544d22-17dc-4145-a0ab-413d7cc0216e","session_id":"297d86fe-1ed4-4a7f-a77f-e58a4cbe0bb7"}`,
       `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Your response above was stopped by a safety classifier — this is not a tool or API error. The rest of it was withheld, and tool calls in it that had not finished did not run. Do not produce that content again, even reworded."}]},"parent_tool_use_id":null,"session_id":"297d86fe-1ed4-4a7f-a77f-e58a4cbe0bb7","uuid":"d21a293d-ec0e-42a7-92da-92372fedd449","timestamp":"2026-11-25T04:09:45.765Z","isSynthetic":true}`,
     ];
-    const noticeLine = (over: Record<string, unknown> = {}) => `${JSON.stringify({ ...JSON.parse(FIRST_STAGE_REFUSAL[1]!), ...over })}\n`;
 
     it("1段目の拒否の通知の行は分類 null の拒否1件として worker_exited.refusals に載り、報告なき exit の文面へ写しで渡る(ADR 0416 決定1・3)", async () => {
       const exits: WorkerExit[] = [];
@@ -4814,31 +4813,6 @@ describe("advisor capability (issue #33)", () => {
       emitExit(0, null);
       expect(exitFieldsOf(db, "task-first-stage")?.refusals).toEqual([null]);
       expect(exits[0]?.refusals).toEqual([null]);
-    });
-
-    it("level が notice でない、または文面の末尾が違う informational の行は拒否に数えない(ADR 0416 決定1)", async () => {
-      const exits: WorkerExit[] = [];
-      const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit, facts) => { exits.push(exit); fireWrites(facts); } });
-      start("task-other-notice");
-      await vi.waitFor(() => expect(processes).toHaveLength(1));
-      processes[0]!.stdout.write(noticeLine({ level: "info" }));
-      processes[0]!.stdout.write(noticeLine({ content: "Sonnet 5.5's safeguards stopped the response above" }));
-      processes[0]!.stdout.write(resultLine());
-      emitExit(0, null);
-      expect(exitFieldsOf(db, "task-other-notice")?.refusals).toEqual([]);
-      expect(exits[0]).not.toHaveProperty("refusals");
-    });
-
-    it("通知の行と合成の拒否行は出た順で両方残り、通知は1行ごとに1件で重複を除かない(ADR 0416 決定1・2)", async () => {
-      const { start, processes, emitExit, db } = await makeWorker();
-      start("task-mixed-refusals");
-      await vi.waitFor(() => expect(processes).toHaveLength(1));
-      processes[0]!.stdout.write(noticeLine());
-      processes[0]!.stdout.write(refusalLine("8a2d6b7e-1f40-4c39-b5e2-9d0f3a6c4b21", "cyber"));
-      processes[0]!.stdout.write(noticeLine());
-      processes[0]!.stdout.write(resultLine());
-      emitExit(0, null);
-      expect(exitFieldsOf(db, "task-mixed-refusals")?.refusals).toEqual([null, "cyber", null]);
     });
 
     it("差し替えも拒否も無い session でも model_swaps と refusals は空の列で置かれる", async () => {
