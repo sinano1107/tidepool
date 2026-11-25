@@ -51,21 +51,31 @@ export const isAncestor = (repo: { path: string }, ancestor: string, descendant:
 /** ADR 0373 決定4 / ADR 0382 決定2: `refs/stash` の今の値と reflog の各件の sha(新しい順)—— 1件ずつ `rev-parse` して object を開かない
  *  (`log -g` / `reflog show` は開けない件を黙って落とす、#3752)。reflog の件の数を越えたと git が言うまで回し、ほかの失敗は投げる。
  *  ref も reflog も無ければ空、reflog が無ければ(update-ref で作った)今の値だけ —— そのとき `@{0}` が落ちるのを読めなさと取り違えない。
- *  並べるか投げるかのどちらかで、git が件を落とした短い並びは返さない(#3826)。`bounded` は作業台の読みを `workerRepoGit` の上限で撃つ。
+ *  並べるか投げるかのどちらかで、git が件を落とした短い並びは返さない(#3826)。ADR 0357 決定1: `bounded` は worker の bytes(作業台)の
+ *  読みを `workerRepoGit` と同じ1つの上限で撃つ。
  *  shortcut: 1件ごとに git を1度起こす —— stash が数百件に積まれて遅くなれば reflog を1度で読む口に替える。 */
 export function stashEntries(cwd: string, bounded = false): string[] {
   const readGit = (...args: string[]) => gitListing(cwd, args, bounded);
   const log = resolve(cwd, readGit("rev-parse", "--git-path", "logs/refs/stash"));
-  const file = lstatSync(log, { throwIfNoEntry: false });
+  // file の読みの失敗(権限、途中の stash drop で消えた file)も、git の読みの失敗と同じく読めない並び
+  const onLog = <T>(read: () => T): T => {
+    try {
+      return read();
+    } catch (cause) {
+      throw new ListingUnreadableError(`the reflog of refs/stash at ${log} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    }
+  };
+  const logStat = onLog(() => lstatSync(log, { throwIfNoEntry: false }));
   // #3826: FIFO などは開けば読みが止まり、git は「reflog が無い」と答える —— git にも盤面にも開かせずに投げる
-  if (file && !file.isFile()) throw new ListingUnreadableError(`the reflog of refs/stash at ${log} is not a regular file`);
+  if (logStat && !logStat.isFile()) throw new ListingUnreadableError(`the reflog of refs/stash at ${log} is not a regular file`);
+  const hasLogFile = logStat !== undefined;
   let top = "";
   const hasRef = gitAnswers(() => (top = readGit("rev-parse", "--verify", "--quiet", "refs/stash")));
   const hasLog = gitAnswers(() => readGit("reflog", "exists", "refs/stash"));
   // stash の pop・drop・clear は最後の件で ref と reflog を一緒に消す —— reflog だけ残るのは壊れた ref(#3826)
-  if (!hasRef && (file || hasLog)) throw new ListingUnreadableError(`refs/stash is absent but its reflog remains at ${log}`);
+  if (!hasRef && (hasLogFile || hasLog)) throw new ListingUnreadableError(`refs/stash is absent but its reflog remains at ${log}`);
   if (!hasRef) return [];
-  if (!hasLog && file) throw new ListingUnreadableError(`git reads no reflog of refs/stash, but ${log} is there`);
+  if (!hasLog && hasLogFile) throw new ListingUnreadableError(`git reads no reflog of refs/stash, but ${log} is there`);
   if (!hasLog) return [top];
   const entries: string[] = [];
   for (let n = 0; ; n++) {
@@ -77,8 +87,10 @@ export function stashEntries(cwd: string, bounded = false): string[] {
       if (count === undefined) throw err;
       // #3826: git は壊れた行を飛ばして件の数を少なく言う(一番古い行なら警告も無い)—— 警告の文でなく file の行の数と比べる
       // reflog が在るのに file が無いのは reftable —— 行の数は取れない
-      const lines = file && readFileSync(log, "utf8").split("\n").filter(Boolean).length;
-      if (file && lines !== Number(count)) throw new ListingUnreadableError(`the reflog of refs/stash at ${log} has ${lines} lines but git reads ${count} entries`);
+      if (hasLogFile) {
+        const lineCount = onLog(() => readFileSync(log, "utf8").split("\n").filter(Boolean).length);
+        if (lineCount !== Number(count)) throw new ListingUnreadableError(`the reflog of refs/stash at ${log} has ${lineCount} lines but git reads ${count} entries`);
+      }
       // 一番古い件の old 値が 0 でなければ(`--rewrite` なしの delete や expire の後)、git は `@{件の数}` にその old 値を返す
       return [...new Set([top, ...entries.slice(0, Number(count))])];
     }
@@ -381,13 +393,24 @@ export function gitWithInput(input: string, cwd: string, ...args: string[]): str
   return run(cwd, args, undefined, input).toString().trim();
 }
 
-/** ADR 0409 決定2: git that exits 0 can still report something on stderr, so this runner returns both. A non-zero exit throws like `git`. */
-export function gitReporting(cwd: string, args: string[], input: string, env: NodeJS.ProcessEnv): { stdout: string; stderr: string } {
-  const result = spawnSync("git", args, runOptions(cwd, env, input));
-  if (result.error) rethrowNamingMissingCwd(result.error, cwd, args);
-  const [stdout, stderr] = [result.stdout.toString(), result.stderr.toString()];
+/** ADR 0409 決定2: git that exits 0 can still report something on stderr, so this runner returns both. A non-zero exit throws like `git`,
+ *  with `status` and `stderr`. `timeout` and `bound` are `run`'s; `runOnWorkerTree` passes them. */
+export function gitReporting(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+  input?: string | Buffer,
+  timeout?: number,
+  bound = timeout,
+): { stdout: string; stderr: string } {
+  const result = spawnSync("git", args, { ...runOptions(cwd, env, input), ...timeoutOptions(timeout) });
+  const stderr = result.stderr?.toString() ?? "";
+  if (result.error) {
+    if (timeout !== undefined && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") throwTimedOut(result.error, result.pid, stderr, args, bound ?? timeout);
+    rethrowNamingMissingCwd(result.error, cwd, args);
+  }
   if (result.status !== 0) throw Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr });
-  return { stdout, stderr };
+  return { stdout: result.stdout.toString(), stderr };
 }
 
 /** ADR 0356 決定5 / ADR 0339 決定1: build the local environment and keep transport restricted to file. */
@@ -418,7 +441,7 @@ export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 const subcommandOf = (args: string[]): string => args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c" && args[i - 1] !== "-C") ?? "";
 
-/** The spawn options `run` and `gitReporting` share. */
+/** The spawn options `run` and `gitReporting` share (with `timeoutOptions` and `throwTimedOut`). */
 const runOptions = (cwd: string, env: NodeJS.ProcessEnv | undefined, input: string | Buffer | undefined) => ({
   cwd,
   env: localGitEnv(env),
@@ -456,27 +479,35 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
  *  predicate's "no"), so this read looks at stderr whatever the exit and throws on that warning — the one place that matches its words.
  *  A non-zero exit throws like `git`; `bounded` bounds the call like `workerRepoGit` (ADR 0357 決定1). */
 export function gitListing(cwd: string, args: string[], bounded = false): string {
-  const timeout = bounded ? WORKER_TREE_GIT_TIMEOUT_MS : undefined;
-  const result = spawnSync("git", args, { ...runOptions(cwd, undefined, undefined), ...timeoutOptions(timeout) });
-  const stderr = result.stderr?.toString() ?? "";
-  if (result.error) {
-    if (timeout !== undefined && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") throwTimedOut(result.error, result.pid, stderr, args, timeout);
-    rethrowNamingMissingCwd(result.error, cwd, args);
+  let reported: { stdout: string; stderr: string };
+  try {
+    reported = bounded ? runOnWorkerTree(cwd, args, undefined, undefined, undefined, gitReporting) : gitReporting(cwd, args);
+  } catch (err) {
+    const said = String((err as { stderr?: unknown }).stderr ?? "").trim();
+    // 述語の「no」(exit 1)が stderr に何か言えば、それは答えでなく読めなかったもの
+    if ((err as { status?: unknown }).status === 1 && said) throw new ListingUnreadableError(`git could not read a ref (${said})`, { cause: err });
+    throw err;
   }
-  // 述語の「no」(exit 1)が stderr に何か言えば、それは答えでなく読めなかったもの
-  const skipped = /^warning: ignoring (?:broken ref|dangling symref) .*$/m.exec(stderr)?.[0] ?? (result.status === 1 ? stderr.trim() : "");
+  const skipped = /^warning: ignoring (?:broken ref|dangling symref) .*$/m.exec(reported.stderr)?.[0];
   if (skipped) throw new ListingUnreadableError(`git could not read a ref (${skipped})`);
-  if (result.status !== 0) throw Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr });
-  return result.stdout.toString().trim();
+  return reported.stdout.trim();
 }
 
 /** ADR 0357 決定1: the one runner for the git the board runs on a worker's tree or repo, bounded by one constant. ADR 0364 決定3: a call
- *  inside one bounded stage runs on what remains before the stage's `deadline`, and its expiry names the constant. */
-function runOnWorkerTree(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string | Buffer, deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS): Buffer {
+ *  inside one bounded stage runs on what remains before the stage's `deadline`, and its expiry names the constant. It spawns with `run`,
+ *  or with `gitReporting` when the caller reads stderr (`gitListing`). */
+function runOnWorkerTree<T = Buffer>(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+  input?: string | Buffer,
+  deadline = Date.now() + WORKER_TREE_GIT_TIMEOUT_MS,
+  spawn = run as (cwd: string, args: string[], env: NodeJS.ProcessEnv | undefined, input: string | Buffer | undefined, timeout: number, bound: number) => T,
+): T {
   const remaining = deadline - Date.now();
   // execFileSync の timeout 0 は無期限 —— 使い切った段では撃たない
   if (remaining <= 0) throw new WorkerTreeGitTimeoutError(subcommandOf(args), WORKER_TREE_GIT_TIMEOUT_MS, "");
-  return run(cwd, args, env, input, remaining, WORKER_TREE_GIT_TIMEOUT_MS);
+  return spawn(cwd, args, env, input, remaining, WORKER_TREE_GIT_TIMEOUT_MS);
 }
 
 /** ADR 0357 決定1 / ADR 0364 決定3: bounded Git for worker bytes, including reads and fetches from board-owned copies. */

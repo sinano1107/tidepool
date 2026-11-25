@@ -3975,7 +3975,7 @@ function knownPresence(workspace: WorkspaceConfig, sha: string): boolean {
   let line: string;
   let stderr: string;
   try {
-    ({ stdout: line, stderr } = gitReporting(workspace.path, ["cat-file", "--batch-check"], `${sha}\n`, { GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }));
+    ({ stdout: line, stderr } = gitReporting(workspace.path, ["cat-file", "--batch-check"], { GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" }, `${sha}\n`));
     line = line.trim();
     stderr = stderr.trim();
   } catch (err) {

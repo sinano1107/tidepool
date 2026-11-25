@@ -1125,7 +1125,7 @@ it("refs/stash の reflog を git が空と言う `restore the baseline` は、r
 
 // git は壊れた行を飛ばして件の数を少なく言う(#3826)—— 何が合わなかったかと reflog の file を名指し、失った sha の唯一の手がかり(1つ新しい
 // 行の old 値)を消す `reflog expire --rewrite` は勧めない
-it("refs/stash の reflog の途中の行が壊れた `restore the baseline` は、行の数と git の件の数を載せて reflog の file を名指し、何も書かずに拒む", async () => {
+it("refs/stash の reflog の途中の行が壊れた `restore the baseline` は、T3 の形で reflog の file を名指し、何も書かずに拒む", async () => {
   const { ws, db, question } = await quarantinedWorkspace("restore-stash-reflog-broken-line");
   for (const body of ["first\n", "second\n", "third\n"]) {
     writeFileSync(join(ws.path, "README.md"), body);
@@ -1139,9 +1139,10 @@ it("refs/stash の reflog の途中の行が壊れた `restore the baseline` は
 
   const reason = await refusal(answer(db, ws, "restore the baseline"));
 
-  expect(reason).toBe(
-    `could not read the reflog of refs/stash in ${ws.path} (the reflog of refs/stash at ${log} has 3 lines but git reads 2 entries). Nothing was written; fix what git reports there, then answer again.`,
-  );
+  // 何が合わなかったかの文は `stashEntries` の釘(tests/git.test.ts)—— ここは T3 への写しだけを見る(ADR 0107 決定3)
+  expect(reason.startsWith(`could not read the reflog of refs/stash in ${ws.path} (`)).toBe(true);
+  expect(reason.endsWith("). Nothing was written; fix what git reports there, then answer again.")).toBe(true);
+  expect(reason).toContain(log);
   expect(reason).not.toContain("--rewrite");
   await expectNothingWritten(db, ws, question, refsBefore, comparisonBefore);
   db.close();

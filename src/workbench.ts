@@ -87,7 +87,8 @@ export function humanWorkLeft(read: WorkbenchRead): string[] {
     if (!headOn(at, target)) left.push(`its HEAD is not on ${target} — check out ${target} there`);
   }
   // #3826: for-each-ref は壊れた packed-refs の行を、探す範囲の頭にあると何も言わずに飛ばす(2.47.0 で測った)。show-ref はどの位置でも
-  // 落ちる —— パターンは名前の末尾で照合するので付けずに全部を並べ、壊れた tag や remote の ref でも読めない作業台として拒む
+  // 落ちる —— パターンは名前の末尾で照合するので付けずに全部を並べる。壊れた tag や remote の ref、object の無い sha を指す ref でも
+  // exit 128 で落ち、読めない作業台として拒む(ADR 0382 決定2)。show-ref の exit 1 は「ref が1つも無い」(作りかけ)なので `gitAnswers` で受ける
   let refs = "";
   onWorkbench(at, () => gitAnswers(() => (refs = gitListing(at, ["show-ref"], true))));
   const strays = refs

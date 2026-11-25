@@ -1,8 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { git, localGitEnv, stashEntries } from "../src/git.js";
+import { git, ListingUnreadableError, localGitEnv, stashEntries } from "../src/git.js";
 import { loadRegistry } from "../src/registry.js";
 import { recordedSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
@@ -222,6 +222,20 @@ it("`stashEntries` は reflog の file が通常のファイルでない(FIFO)�
   execFileSync("mkfifo", [stashLog(ws.path)]);
 
   expect(() => stashEntries(ws.path)).toThrow(`the reflog of refs/stash at ${stashLog(ws.path)} is not a regular file`);
+});
+
+// file の読みの失敗も読めない並び(`ListingUnreadableError`)—— 作業台の読みの失敗として答え直しへ回る
+it("`stashEntries` は reflog の在り処が読めない(権限の無いディレクトリ)とき、読めない並びとして投げる", async ({ skip, onTestFinished }) => {
+  if (process.getuid?.() === 0) skip("root reads a directory without permission");
+  const ws = await makeWorkspace("stash-entries-unreadable-dir");
+  stashThree(ws.path);
+  const dir = join(ws.path, ".git", "logs", "refs");
+  chmodSync(dir, 0o000);
+  onTestFinished(() => chmodSync(dir, 0o755));
+
+  const err = thrown(() => stashEntries(ws.path));
+  expect(err).toBeInstanceOf(ListingUnreadableError);
+  expect(err.message).toContain(`the reflog of refs/stash at ${stashLog(ws.path)} cannot be read`);
 });
 
 it("`stashEntries` は refs/stash の ref が無く reflog だけ残るとき、空を返さずに投げる", async () => {
