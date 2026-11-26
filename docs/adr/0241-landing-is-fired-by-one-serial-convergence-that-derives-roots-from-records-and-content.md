@@ -1,5 +1,7 @@
 # 着地は入口が撃たず、記録と内容から根を導く1本の収束が撃つ
 
+**Status 追記: 決定3 の断念は、PR 番号が無く出元 repo の記録がある根(作った後・記録の前に止まった根を含む)では、そのタスクブランチの PR を探して無いと確かめたときだけ受ける。見つかるか探せなければ拒み、retry が決定4 の探索で記録する([ADR 0431](0431-a-root-that-pushed-to-its-head-repo-may-have-a-pr-and-its-promotion-is-abandoned-only-after-a-search-finds-none.md) 決定3、2026-11-27、issue #3887)。**
+
 **Status 追記: 決定6 の「重ねない」は、収束が根に書く question すべてに掛かる —— 失敗 question・外の push の merge question・`merge` の回答の途中の立て直し・PR を作った直後の merge question は、どれも書く直前に門 → workspace の Quarantine の1つの読みを通り、止まっていれば書かずにその verdict を返す。失敗 question の道も門を先に読む(決定3)。PR を作った後に止まっていれば PR の記録ごと見送り、次の収束が決定4 の道で見つけて記録する([ADR 0429](0429-convergence-reads-one-stop-right-before-it-writes-any-question-on-a-root-and-a-stopped-pr-creation-defers-its-record.md) 決定1〜4、2026-11-26、issue #3879)。**
 
 **Status 追記: 決定6 の「失敗 question を重ねない」は、無人 merge の tick・外の merge の走査・無人 merge の観測が立てる、宣言した repo の食い違いの question には掛からない —— tick は workspace の Quarantine 単独では止まらないので、その根を止めている原因は食い違いで、別の question としてまだ出ていない。収束が立てる question は今どおり決定6 に従う([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定5 の Status 追記、2026-11-25、issue #3791)。**
