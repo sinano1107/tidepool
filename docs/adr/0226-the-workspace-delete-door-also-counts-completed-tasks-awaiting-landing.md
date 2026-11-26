@@ -1,6 +1,6 @@
 # workspace の削除の扉も、着地を待つ完了タスクを数える
 
-**Status 追記: 決定1 の扉が拒むものに、後始末の済んでいない完了 task と、push していない内容を持つ PR の根が加わる。PR を開いた根・hold した根・断念した根は今どおり数えないが、扉は通すときにその着地を終える([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1・4、2026-11-26、issue #3890)。**
+**Status 追記: 決定1 の扉が拒むものに、後始末の済んでいない完了 task と、収束がまだ push する内容を持つ PR の根が加わる。PR を開いた根・hold した根・断念した根は今どおり数えないが、扉は通すときにその着地を終える([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1・4、2026-11-26、issue #3890)。**
 
 **Status: 決定2 が #1729 に置いた経路は ADR 0234 で決着** — 完了した work の下にいる未決着タスクが、その祖先の
 workspace の参照として数えられる。
