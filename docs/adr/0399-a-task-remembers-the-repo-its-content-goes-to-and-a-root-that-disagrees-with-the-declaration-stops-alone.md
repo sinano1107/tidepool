@@ -1,5 +1,7 @@
 # task は自分の中身が向かう repo を覚え、根を指す記録は根の id で持ち、食い違った根だけを止める
 
+**Status 追記: 決定2 の代わりの鍵は issue にも在った —— issue つきの task は番号を持ち、repo を今の名前の宣言から引いていた。issue の repo は宣言の repo の記録(決定1)とは別に、登録の扉が issue を読んだときに記録し、issue を読む口はその記録を今の宣言と比べる([ADR 0430](0430-an-issue-backed-task-records-the-repo-its-issue-was-read-from-at-registration-and-an-issue-is-read-only-while-that-record-matches-the-declaration.md)、2026-11-27、issue #3885)。**
+
 **Status 追記: 決定6 の記録は、PR を持つ根のための記録として残る。削除の扉が書く終わりは別の1種類で、PR の有無によらない。帰結の「同じ名前は別の repo にも登録し直せる。開いた PR を持つ根はそこで止まり、人間が着地を終える」は、「開いた PR を持つ根の着地は、削除の扉が終える」に変わる。決定5 の止まりは、削除を通らない出元 repo の差し替えのために残る([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1・2、2026-11-26、issue #3890)。**
 
 **Status 追記: 決定5 の止まりは、task に紐づく操作の入口の門が記録と今の宣言から読んで立てる —— 決定3 の比較が投げる例外は中断にだけ使い、種類を見るのは食い違いを別の記録にする所だけである。人間担当の work の扉と merge の回答は拒否で返し、task に書かない(hold は ADR 0394 決定5 のまま受ける)。決定3 の「2回目以降の pickup」に、初回の比較を足す —— ブランチを初めて切る task は、分かれる元の task の宣言の repo の記録を今の宣言と比べ、食い違えばその task が止まる。分かれる元の内容が今の宣言の保護ブランチに既に在れば止まらない([ADR 0419](0419-a-repo-disagreement-is-read-from-the-records-at-the-entrance-of-a-task-bound-operation-and-a-first-branch-cut-compares-the-record-of-its-fork-source.md) 決定1〜5、2026-11-25、issue #3849)。**

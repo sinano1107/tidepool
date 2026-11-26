@@ -1,5 +1,7 @@
 # Issue-backed task は内容を live 参照で持つ — 登録時 snapshot ではなく
 
+**Status 追記: 「workspace の焼き込み」は内容の同一性を守り切らない —— 名前は削除の扉 → 登録し直しで別の repo を指し、完了 task は削除をまたいで残る。issue の同一性は、登録の扉が issue を読んだ repo の記録が担い、issue はその記録が今の宣言と一致するときだけ読む。読まない参照は記録の repo と番号で見せ、子には読めない状態として渡す([ADR 0430](0430-an-issue-backed-task-records-the-repo-its-issue-was-read-from-at-registration-and-an-issue-is-read-only-while-that-record-matches-the-declaration.md) 決定1〜4、2026-11-27、issue #3885)。**
+
 **Status 追記: issue つきの task を子にできるのは、木の根の場所が固定されていて(根が pickup の event か `task_branch_created` を持つ)issue の workspace と一致するときだけで、それ以外は分解元つきの根になる —— 子の workspace は親から変わらないので、issue の身元の workspace と食い違わない([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定2、2026-11-19、issue #1796)。**
 
 **Status 追記: 「一時的失敗は Throttle と同じ fail-closed」は ADR 0110 以降の entry 除外の形で読む** —— その cycle の poll 全体ではなく、pickup で GitHub を読む task の集合をその poll から外して次の head へ進み、成功を挟まず10分続けば確認 question が立つ(ADR 0328、2026-10-30、issue #2704)。
