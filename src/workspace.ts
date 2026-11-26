@@ -2724,7 +2724,10 @@ function fixTaskAndUnstartedAncestors(
       throw new LostTaskBranchPresentError(member.id, ref, git(workspace.path, "rev-parse", ref));
     }
   }
-  // 列の出所だけは書く時に読む —— 上で埋めた祖先の列が下の祖先の出所になる(ADR 0372 決定1・3)
+  // 列の出所だけは書く時に読む —— 上で埋めた祖先の列が下の祖先の出所になる(ADR 0372 決定1・3)。
+  // 下の祖先の fork 元の読みは帰り先なしで投げない(#3878): 帰り先を奪う決着した祖先の下に未決着の work は残らない —— give-up は session
+  // の終わりを待ち、死んだ祖先の下を倒す(ADR 0380 決定2)。cancel は道連れにし、登録の床は拒む(決定5)。task 自身のブランチが在れば
+  // 固定の前の系譜の読みは飛ぶので、それには頼らない
   for (const ancestor of ancestors) createTaskBranch(db, workspace, { ...ancestor, workspace: workspace.name }, now, { filledFrom: filledFrom(db, ancestor) });
   createTaskBranch(db, workspace, task, now, { filledFrom: fillOwnColumn ? filledFrom(db, task) : undefined, forkSource });
 }
