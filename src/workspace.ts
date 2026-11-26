@@ -50,6 +50,7 @@ import {
   ownWorktreeStatus,
   readCheckoutRemote,
   type SparsePolicy,
+  stagedGitlinkChanges,
   stagingHostStep,
   stashEntries,
   type WorktreeChange,
@@ -922,7 +923,7 @@ function initBoardCopy(repo: string, format: string, borrowed: string[] = []): v
 /** 盤面所有の bare repo `repo` に objects を `borrowed` の順に借りさせる。 */
 const borrowObjects = (repo: string, borrowed: string[]) => writeFileSync(join(repo, "objects", "info", "alternates"), `${borrowed.join("\n")}\n`);
 
-/** ADR 0412 決定2: `boardWriteTree` の callback の中(add と write-tree の後)で、親を読む commit-tree と fetch のために検証済みの写し `verified` に
+/** ADR 0412 決定2 / ADR 0423 決定4: stage と commit の後、親を辿る fetch のために検証済みの写し `verified` に
  *  名前の場所の objects を借りさせる。objects を引けなければ素の失敗(名前の場所の側)、alternates を書けなければ host の失敗。 */
 function borrowNamedAfterStage(verified: string, named: WorkspaceConfig): void {
   const objects = namedObjects(named);
@@ -1037,8 +1038,8 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
     for (const dir of new Set(looseIds(objects, ids).map((id) => id.slice(0, 2)))) symlinkSync(join(objects, dir), join(probe, "objects", dir));
   });
   // ADR 0408 決定1: 最初の確かめと確かめ直しの1つの判定 —— 名前の場所に loose を持つ集合の id はその loose を全部、loose だけを見せる repo で
-  // 読み(git 2.53 以降の blob の stream の読み手は loose を pack より先に開く)、集合の全部を pack を先に読む repo で読む。ADR 0364 決定2:
-  // どちらも名前の場所の byte だけを読む手 —— 上限超過も中身の照合の失敗も名前の場所の側。読めなければ失敗を返す
+  // 読み(git 2.53 以降の blob の stream の読み手は loose を pack より先に開く)、集合の全部を pack を先に読む repo で読む。
+  // ADR 0423 決定5: 運んだばかりの byte の確かめで上限を越えても、損傷を見つけたことにはならず入れ直しに進まない。
   const misnamedIn = (repo: string, asked: string[]) => misnamedObjects(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, repo, join(repo, "read"), asked, blankOf(own));
   const unreadable = (): unknown => {
     try {
@@ -1048,14 +1049,13 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
       if (misnamed.length === 0) misnamed = misnamedIn(reader, ids);
       return misnamed.length === 0 ? undefined : new MisnamedObjects(misnamed);
     } catch (cause) {
-      if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(reader, cause)) throw copyHostError(from.noun, cause);
+      if (cause instanceof WorkerTreeGitTimeoutError) throw cause;
+      if (outOfSpace(reader, cause)) throw copyHostError(from.noun, cause);
       return cause;
     }
   };
   const first = unreadable();
   if (first === undefined) return;
-  // ADR 0411 決定4(#3735): 上限超過は損傷を見つけたことにならない —— 入れ直しの pack を名前の場所に足さずに拒む
-  if (first instanceof WorkerTreeGitTimeoutError) throw fail(first.about(`the named workspace ${named.name}`), first);
   verifyOwnObjects(from, own, ids);
   let reinsertFailure: unknown;
   try {
@@ -1069,8 +1069,8 @@ function ensureCarriedWhole(named: WorkspaceConfig, from: UntrustedSubject, { ow
     try {
       moveAsideDamagedLoose(objects, (asked) => misnamedIn(probe, asked), ids);
     } catch (cause) {
-      if (!(cause instanceof WorkerTreeGitTimeoutError) && outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
-      // 名前の場所の loose だけを読む手 —— 上限超過も名前の場所の側
+      if (cause instanceof WorkerTreeGitTimeoutError) throw cause;
+      if (outOfSpace(own, cause)) throw copyHostError(from.noun, cause);
       reinsertFailure = cause;
     }
   }
@@ -1153,6 +1153,7 @@ function moveAsideDamagedLoose(objects: string, readLoose: (asked: string[]) => 
     try {
       misnamed = readLoose(pending);
     } catch (cause) {
+      if (cause instanceof WorkerTreeGitTimeoutError) throw cause;
       const stderr = stderrOf(cause);
       const bad = pending.filter((id) => stderr.includes(id));
       if (bad.length === 0) throw cause;
@@ -1213,17 +1214,24 @@ function fetchFromBoardCopy(namedPlace: WorkspaceConfig, repo: string, ref: stri
   }
 }
 
-/** 盤面所有の staging repo で tree を commit にして名前の場所へ運ぶ。ADR 0388 決定1 / ADR 0367 Status 追記: 確かめは staging repo の自前の
- *  store で数える —— `from` は worktree を stage した checkout、`borrowing` は名前の場所の objects を借りる写し(既定は staging repo 自身)。 */
-function fetchStagedTree(namedPlace: WorkspaceConfig, repo: string, tree: string, parent: string, subject: string, description: string, from: UntrustedSubject, borrowing = repo): string {
-  const sha = stagingHostStep(() => {
-    const commit = workerRepoGit(repo, "commit-tree", tree, "-p", parent, "-m", subject);
+/** ADR 0423 決定3: 親は呼び手が名前の場所で確かめた値。commit-tree -p は親を開くので、staging repo では親を開かず commit を書く。 */
+function commitStagedTree(repo: string, tree: string, parent: string, subject: string): string {
+  return stagingHostStep(() => {
+    // 盤面の author と committer は localGitEnv が同じ名義にする。
+    const ident = git(repo, "var", "GIT_AUTHOR_IDENT");
+    const message = subject.endsWith("\n") ? subject : `${subject}\n`;
+    const content = `tree ${tree}\nparent ${parent}\nauthor ${ident}\ncommitter ${ident}\n\n${message}`;
+    const commit = workerRepoGitUntil(Date.now() + WORKER_TREE_GIT_TIMEOUT_MS, repo, ["hash-object", "-t", "commit", "-w", "--stdin"], content);
     workerRepoGit(repo, "update-ref", "--no-deref", "HEAD", commit);
     return commit;
   });
+}
+
+/** ADR 0388 決定1 / ADR 0367 Status 追記: staging repo の自前の store で確かめの対象を数える。
+ *  `from` は worktree を stage した checkout、`borrowing` は名前の場所の借りを外す写し(既定は staging repo 自身)。 */
+function carryStagedCommit(namedPlace: WorkspaceConfig, repo: string, sha: string, description: string, from: UntrustedSubject, borrowing = repo): void {
   fetchFromBoardCopy(namedPlace, repo, "HEAD", sha, description);
   ensureCarriedWhole(namedPlace, from, { own: repo, tip: sha, description, borrowing });
-  return sha;
 }
 
 /** ADR 0359 決定1: worker の tip が名前の場所のタスクブランチになるまで完了の門を通さない。ADR 0412 決定4: 門の `check` は記録した tip と、
@@ -2682,14 +2690,14 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
     const parent = git(room.path, "rev-parse", protectedBranchRef(room));
     const exclude = boardViewExcludes(db, place, taskId, tip, verified);
     return boardWriteTree(place.path, tip, verified, (tree, repo) => {
-      // ADR 0364 決定1: 兄弟の答案を tip の検証に借りない。写しの親は面接室にだけある
-      borrowNamedAfterStage(verified, room);
       // ADR 0365 決定2: 受験者が populate できない gitlink を足す・進める tree は、面接室へ運ぶ前に拒む。
-      const gitlinks = gitlinkChanges(diffTreeEntries(repo, `${parent}^{tree}`, tree, { workerTree: true }));
+      const gitlinks = stagedGitlinkChanges({ at: room.path, ref: parent }, { at: repo, ref: tree });
       if (gitlinks.length > 0) throw new RoomCopyGitlinkError(gitlinks);
-      // ADR 0273 決定1: 受験者の git の履歴に載るので、盤面の語を持たない件名。ADR 0388 決定1: staging repo は root の tip の写しを借りる ——
-      // 面接室を借りるのはその写しなので、写しの借りを外して両方の自前の store で数える
-      const head = fetchStagedTree(room, repo, tree, parent, "Add the project files", "the probe's environment", { checkout: place.path, noun: TASK_CHECKOUT }, verified);
+      // ADR 0273 決定1: 受験者の git の履歴に載るので、盤面の語を持たない件名。
+      const head = commitStagedTree(repo, tree, parent, "Add the project files");
+      // ADR 0388 決定1: 面接室の借りは tip の写しから外し、staging repo と写しの自前の store で数える。
+      borrowNamedAfterStage(verified, room);
+      carryStagedCommit(room, repo, head, "the probe's environment", { checkout: place.path, noun: TASK_CHECKOUT }, verified);
       const ref = `refs/keep-around/${head}`;
       boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
       return head;
@@ -4501,14 +4509,13 @@ function bringTaskCheckout(
         const ahead = evacuationBaseRef !== "" && evacuationBaseRef !== tip && isAncestor(namedPlace, tip, evacuationBaseRef);
         const base = ahead ? evacuationBaseRef : tip;
         const exclude = boardViewExcludes(db, place, task.id, base, ahead ? undefined : verified);
-        const baseTree = git(namedPlace.path, "rev-parse", `${base}^{tree}`);
+        const baseTree = git(namedPlace.path, "--no-replace-objects", "rev-parse", "--verify", `${base}^{tree}`);
         return boardWriteTree(checkout, tip, verified, (tree, repo) => {
           if (tree === baseTree) return base;
-          if (ahead) {
-            // 親の ref は名前の場所にだけある
-            borrowNamedAfterStage(verified, namedPlace);
-          }
-          return fetchStagedTree(namedPlace, repo, tree, base, wipSubject(task), "the WIP commit", { checkout, noun: TASK_CHECKOUT });
+          const head = commitStagedTree(repo, tree, base, wipSubject(task));
+          if (ahead) borrowNamedAfterStage(verified, namedPlace);
+          carryStagedCommit(namedPlace, repo, head, "the WIP commit", { checkout, noun: TASK_CHECKOUT });
+          return head;
         }, exclude, ahead ? { ref: base, at: namedPlace.path } : undefined);
       });
     }

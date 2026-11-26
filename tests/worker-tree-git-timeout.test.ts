@@ -7,7 +7,7 @@ import { listEvents } from "../src/events.js";
 import { boardViewStatus, boardWriteTree, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type TaskType } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
-import { commitRoomCopy, NamedPlaceFetchError, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
+import { commitRoomCopy, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -97,6 +97,18 @@ function thrown(run: () => unknown): unknown {
     return err;
   }
   throw new Error("expected a throw");
+}
+
+/** 運んだ後に名前の場所で object を照合する手だけを止める。 */
+async function stallCarriedVerification(repo = "carried"): Promise<void> {
+  const bin = await tempDir("tidepool-git-slow-verification-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(
+    join(bin, "git"),
+    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */${repo}/read) sleep 5; exit 0;; esac; fi\nexec "${realGit}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 }
 
 it("root の .gitignore が FIFO なら view の status と退避の add -A は上限超過の型で投げ、git を残さない(ADR 0357 決定1・3)", async () => {
@@ -261,6 +273,91 @@ it("root の .gitignore が FIFO なら出題の写しは上限超過の型で�
   await expectNoReader(fifo);
 });
 
+it("面接室にしか無い親の tree を読む手が遅くても、出題の写しを記録できる(ADR 0423 決定3)", async () => {
+  const { db, root, room, place } = await pickedRoot("worker-tree-pose-recorded-tree");
+  commitWork(room.path, "room.txt", "room only\n");
+  const parent = git(room.path, "rev-parse", "refs/heads/main");
+  writeFileSync(join(place.path, "probe.txt"), "working tree only\n");
+  const bin = await tempDir("tidepool-git-slow-recorded-tree-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+case "$*" in
+  *diff-tree*" ${parent}^{tree} "*|*ls-tree*" ${parent}") sleep 2 ;;
+esac
+if [ "$1 $2 $3" = "hash-object -t commit" ] && "${realGit}" cat-file -e ${parent} 2>/dev/null; then
+  exit 97
+fi
+exec "${realGit}" "$@"
+`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  try {
+    const head = commitRoomCopy(db, place, root.id);
+    expect(git(room.path, "rev-parse", `${head}^`)).toBe(parent);
+    expect(git(room.path, "rev-parse", `refs/keep-around/${head}`)).toBe(head);
+    expect(git(room.path, "show", `${head}:probe.txt`)).toBe("working tree only");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+async function pickedUpAheadWip() {
+  const picked = await pickedUp("worker-tree-wip-recorded-parent");
+  const { db, task, place } = picked;
+  const initial = git(place.path, "rev-parse", "HEAD");
+  commitWork(place.path, "recorded.txt", "recorded\n");
+  const parent = recordTaskCheckoutTip(db, place, task.id);
+  git(place.path, "reset", "--hard", initial);
+  writeFileSync(join(place.path, "wip.txt"), "working tree only\n");
+  return { ...picked, parent, ref: `refs/heads/task/${task.id}` };
+}
+
+it("名前の場所が先にある WIP の解放では、記録の親を読む手が遅くても親を保って退避する(ADR 0423 決定3)", async () => {
+  const { db, named, task, place, parent, ref } = await pickedUpAheadWip();
+  const bin = await tempDir("tidepool-git-slow-recorded-parent-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+case "$*" in
+  commit-tree*" -p ${parent} "*|*rev-parse*" ${parent}^{tree}") sleep 2 ;;
+esac
+if [ "$1 $2 $3" = "hash-object -t commit" ] && "${realGit}" cat-file -e ${parent} 2>/dev/null; then
+  exit 97
+fi
+exec "${realGit}" "$@"
+`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  try {
+    releaseWorkspace(db, place, task, NOW);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(git(named.path, "rev-parse", `${ref}^`)).toBe(parent);
+  expect(git(named.path, "show", `${ref}:wip.txt`)).toBe("working tree only");
+  expect(existsSync(place.path)).toBe(false);
+});
+
+it("WIP の親の tree を名前の場所で読めない解放は、親と checkout を保ち名前の場所を quarantine する(ADR 0367 決定4 / ADR 0423 決定3)", async () => {
+  const { db, named, task, place, parent, ref } = await pickedUpAheadWip();
+  const bin = await tempDir("tidepool-git-fail-recorded-parent-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+case "$*" in *rev-parse*" ${parent}^{tree}")
+  echo 'cannot read the recorded parent tree' >&2
+  exit 128;;
+esac
+exec "${realGit}" "$@"
+`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  try {
+    releaseWorkspace(db, place, task, NOW);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(quarantineQuestion(db, "workspace", named.name)?.purpose).toContain("cannot read the recorded parent tree");
+  expect(questionsOf(db, task.id)).toEqual([]);
+  expect(git(named.path, "rev-parse", ref)).toBe(parent);
+  expect(existsSync(place.path)).toBe(true);
+});
+
 it.each([
   ["hidden settings", "--no-replace-objects ls-tree"],
   ["shadow remnants", "ls-tree --name-only"],
@@ -362,34 +459,130 @@ it("FIFO の .gitignore を残した work の complete_task は拒まず session
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
 });
 
+it.each(["pose_probe", "complete_task"] as const)("%s は運んだ後の確かめが上限を越えれば session を回収し、failure question に観測した失敗を書く(ADR 0423 決定5・6)", async (verb) => {
+  const ws = await makeWorkspace("worker-tree-carried-mcp");
+  const board = await bootTidepool({ workspace: ws });
+  t = board;
+  const task = verb === "pose_probe"
+    ? (await api(board.baseUrl, "POST", "/api/tasks", { type: "interview", title: "interview", hypothesis: "h", tier: "frontier", interview_targets: [{ provider: "anthropic", model: "claude-opus-4-6", effort: "high" }] })).json
+    : await registerWork(board, "post-carry verification");
+  await board.clock.advance(HOUR);
+  const checkout = checkoutOf(board.db, task.id);
+  const session = String(sessionId(board.db, task.id));
+  commitWork(checkout, "work.txt", "work\n");
+  await stallCarriedVerification();
+  try {
+    const args = verb === "pose_probe"
+      ? { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }
+      : { handoff: FULL_HANDOFF };
+    const result = await callAsTask(board, task.id, verb, args);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("this session is over");
+    expect(board.containers.forceReclaims).toEqual([session]);
+    await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
+    const failure = (await questions(board)).find((question) => question.parent_id === task.id);
+    const context = verb === "pose_probe" ? "while copying the probe's environment" : "at the completion gate";
+    expect(failure.purpose).toContain(`\`git pack-objects\` on the worker's tree did not finish within 1 s ${context}, so the board ended this session.`);
+    expect(await servedQuarantineQuestion(board, "workspace", verb === "pose_probe" ? task.id : ws.name)).toBeUndefined();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
 // ADR 0408 決定1: 確かめは名前の場所の objects だけを借りる使い捨ての repo(pack を先に読む `carried`)と、名前の場所の loose の dir だけを
-// 見せる使い捨ての repo(`loose`)で pack-objects を撃つ —— どちらも名前の場所の byte を読む手
+// 見せる使い捨ての repo(`loose`)で pack-objects を撃つ —— どちらも確かめ終えていない byte を読む手(ADR 0423 決定5)
 it.each([
   { reader: "pack を先に読む", repo: "carried" },
   { reader: "loose だけを読む", repo: "loose" },
-])("運んだ後の確かめが名前の場所の byte を $reader 手で上限を越えれば、入れ直しに進まず、worker の repo の故障にせず名前の場所の側で拒み、名前の場所に pack を足さない(ADR 0388 決定1 / ADR 0408 決定1 / ADR 0364 決定2 / ADR 0411 決定4、#3735)", async ({ repo }) => {
+])("運んだ後の確かめが $reader 手で上限を越えれば、worker の repo の故障にし、名前の場所に入れ直しの pack も ref も書かない(ADR 0423 決定5)", async ({ repo }) => {
   const { db, named, task, place } = await pickedUp(`carried-${repo}-timeout`);
   const packs = () => readdirSync(join(named.path, ".git", "objects", "pack")).filter((file) => file.endsWith(".pack")).length;
   const before = packs();
+  const ref = `refs/heads/task/${task.id}`;
+  const head = git(named.path, "rev-parse", ref);
   // 小さい fetch は名前の場所で loose に展開される(transfer.unpackLimit) —— 集合の id が loose を持つ
   commitWork(place.path, "work.txt", "work\n");
-  const shim = await tempDir("tidepool-slow-git-");
-  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  writeFileSync(
-    join(shim, "git"),
-    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */${repo}/read) sleep 5; exit 0;; esac; fi\nexec "${realGit}" "$@"\n`,
-    { mode: 0o755 },
-  );
-  vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
+  await stallCarriedVerification(repo);
   try {
     const failure = thrown(() => recordTaskCheckoutTip(db, place, task.id));
-    expect(failure).toBeInstanceOf(NamedPlaceFetchError);
-    // 主語は上限に当たった手が読んだ名前の場所 —— worker の tree ではない
-    expect(failure).toHaveProperty("message", expect.stringContaining(`does not read whole in the named workspace: \`git pack-objects\` on the named workspace ${named.name} did not finish within 1 s`));
+    expect(failure).toBeInstanceOf(WorkerTreeGitTimeoutError);
+    expect(failure).toMatchObject({ subcommand: "pack-objects", timeoutMs: 1000 });
   } finally {
     vi.unstubAllEnvs();
   }
   expect(packs()).toBe(before);
+  expect(git(named.path, "rev-parse", ref)).toBe(head);
+});
+
+it.each([
+  { during: "壊れた loose の退避", reader: "loose", looseRemains: true },
+  { during: "入れ直しの後の確かめ", reader: "carried", looseRemains: false },
+])("$during が上限を越えれば、入れた pack を残し ref を書かずに worker の repo の故障にする(ADR 0423 決定5)", async ({ reader, looseRemains }) => {
+  const { db, named, task, place } = await pickedUp("worker-tree-reinsert-timeout");
+  commitWork(place.path, "kept.txt", "kept by the worker\n");
+  const parent = recordTaskCheckoutTip(db, place, task.id);
+  const objects = join(named.path, ".git", "objects");
+  const blob = git(place.path, "rev-parse", "HEAD:kept.txt");
+  const loose = join(objects, blob.slice(0, 2), blob.slice(2));
+  rmSync(loose);
+  writeFileSync(loose, "not zlib");
+  commitWork(place.path, "more.txt", "more\n");
+  const packs = () => readdirSync(join(objects, "pack")).filter((file) => file.endsWith(".pack")).length;
+  const before = packs();
+  const bin = await tempDir("tidepool-git-slow-reinsert-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+if [ "$1" = pack-objects ]; then
+  case "$3" in */${reader}/read)
+    # 初回の損傷検出は通し、pack を入れた後だけ止める。
+    if find "${join(objects, "pack")}" -name '*.pack' | grep -q .; then
+      echo "checking object ${blob}" >&2
+      sleep 5
+      exit 0
+    fi;;
+  esac
+fi
+exec "${realGit}" "$@"
+`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  try {
+    const failure = thrown(() => recordTaskCheckoutTip(db, place, task.id));
+    expect(failure).toBeInstanceOf(WorkerTreeGitTimeoutError);
+    expect(failure).toMatchObject({ subcommand: "pack-objects", stderrLine: `checking object ${blob}` });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(packs()).toBe(before + 1);
+  expect(existsSync(loose)).toBe(looseRemains);
+  expect(git(named.path, "rev-parse", `refs/heads/task/${task.id}`)).toBe(parent);
+});
+
+it.each([
+  { type: "work", completed: false },
+  { type: "review", completed: true },
+] as const)("運んだ後の確かめが上限を越えた $type の解放では、完了状態に応じ task の失敗か「読めない」観測を残す(ADR 0423 決定5)", async ({ type, completed }) => {
+  const { db, named, task, place } = await pickedUp("worker-tree-carried-release", type);
+  commitWork(place.path, "work.txt", "work\n");
+  if (completed) completeTask(db, task, FULL_HANDOFF, "worker", NOW, "worker");
+  await stallCarriedVerification();
+  try {
+    releaseWorkspace(db, place, getTask(db, task.id)!, NOW, false, undefined, undefined, completed);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  const reason = expect.stringContaining("`git pack-objects` on the worker's tree did not finish within 1 s");
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+  expect(existsSync(place.path)).toBe(!completed);
+  if (completed) {
+    expect(writeObservations(db, task.id)).toEqual([
+      { kind: "task_checkout_written_after_completion", path: place.path, observation: "unreadable", reason },
+    ]);
+    expect(questionsOf(db, task.id)).toEqual([]);
+  } else {
+    expect(listEvents(db, task.id).find(({ kind }) => kind === "task_checkout_release_failed")?.payload).toMatchObject({ path: place.path, reason });
+    expect(questionsOf(db, task.id)).toMatchObject([{ type: "question", question_cancel_option: "abandon" }]);
+  }
 });
 
 it("特別でない tracked な path の FIFO では git は即座に落ち、worker の repo の故障を投げる(ADR 0357 決定3 / ADR 0367 決定1)", async () => {

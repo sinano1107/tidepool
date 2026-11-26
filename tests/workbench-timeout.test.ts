@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -37,6 +37,30 @@ it("作業台の作業ツリーを読む git が上限で止まった取り込�
   } finally {
     rmSync(fifo, { force: true });
   }
+});
+
+it("運んだ後の確かめが上限を越えた取り込みは、作業台を名指して拒み、書き先の ref を保つ(ADR 0423 決定5)", async () => {
+  const c = await conflicted();
+  const workbench = c.workbench();
+  resolveInWorkbench(workbench, c.source);
+  const original = git(c.ws.path, "rev-parse", c.target);
+  const bin = await tempDir("tidepool-git-slow-workbench-verification-");
+  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+if [ "$1" = pack-objects ]; then
+  case "$3" in */carried/read) sleep 5; exit 0;; esac
+fi
+exec "${realGit}" "$@"
+`, { mode: 0o755 });
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  try {
+    await expect(answer(c)).rejects.toThrow(`\`git pack-objects\` on the workbench at ${workbench} did not finish within 1 s`);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(git(c.ws.path, "rev-parse", c.target)).toBe(original);
+  expect(existsSync(workbench)).toBe(true);
+  expect(quarantineQuestion(c.db, "workspace", c.ws.name)).toBeDefined();
 });
 
 // 開く手が既にある作業台を読む git の上限超過は「読めない作業台」ではない —— 消さず、答え直しが開き直す文(text A7d)のまま
