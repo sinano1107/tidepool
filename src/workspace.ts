@@ -1214,10 +1214,17 @@ function fetchFromBoardCopy(namedPlace: WorkspaceConfig, repo: string, ref: stri
   }
 }
 
+/** ADR 0423 決定3: 親に書く正確な object の型を名前の場所で確かめる。ls-tree や ^{tree} はタグを剥がして読む。 */
+function assertRecordedParentCommit(named: WorkspaceConfig, parent: string): void {
+  if (git(named.path, "--no-replace-objects", "cat-file", "-t", parent) !== "commit") {
+    throw new Error(`workspace ${named.name}: recorded parent ${parent} is not a commit`);
+  }
+}
+
 /** ADR 0423 決定3: 親は呼び手が名前の場所で確かめた値。commit-tree -p は親を開くので、staging repo では親を開かず commit を書く。 */
 function commitStagedTree(repo: string, tree: string, parent: string, subject: string): string {
   return stagingHostStep(() => {
-    // 盤面の author と committer は localGitEnv が同じ名義にする。
+    // ADR 0071: 盤面の author と committer は localGitEnv が同じ名義にする。
     const ident = git(repo, "var", "GIT_AUTHOR_IDENT");
     const message = subject.endsWith("\n") ? subject : `${subject}\n`;
     const content = `tree ${tree}\nparent ${parent}\nauthor ${ident}\ncommitter ${ident}\n\n${message}`;
@@ -1227,11 +1234,10 @@ function commitStagedTree(repo: string, tree: string, parent: string, subject: s
   });
 }
 
-/** ADR 0388 決定1 / ADR 0367 Status 追記: staging repo の自前の store で確かめの対象を数える。
- *  `from` は worktree を stage した checkout、`borrowing` は名前の場所の借りを外す写し(既定は staging repo 自身)。 */
-function carryStagedCommit(namedPlace: WorkspaceConfig, repo: string, sha: string, description: string, from: UntrustedSubject, borrowing = repo): void {
-  fetchFromBoardCopy(namedPlace, repo, "HEAD", sha, description);
-  ensureCarriedWhole(namedPlace, from, { own: repo, tip: sha, description, borrowing });
+/** ADR 0388 決定1 / ADR 0367 Status 追記: staging repo の自前の store で確かめの対象を数える。 */
+function carryStagedCommit(namedPlace: WorkspaceConfig, from: UntrustedSubject, copy: CarriedCopy): void {
+  fetchFromBoardCopy(namedPlace, copy.own, "HEAD", copy.tip, copy.description);
+  ensureCarriedWhole(namedPlace, from, copy);
 }
 
 /** ADR 0359 決定1: worker の tip が名前の場所のタスクブランチになるまで完了の門を通さない。ADR 0412 決定4: 門の `check` は記録した tip と、
@@ -2687,9 +2693,10 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
   assertTaskCheckout(place, taskId);
   const room = place.namedPlace;
   return withVerifiedUntrustedTip(untrustedTaskCheckout(place), taskBranch(taskId), ({ tip, verified }) => {
-    const parent = git(room.path, "rev-parse", protectedBranchRef(room));
+    const parent = git(room.path, "rev-parse", "--verify", exactProtectedBranchRef(room));
     const exclude = boardViewExcludes(db, place, taskId, tip, verified);
     return boardWriteTree(place.path, tip, verified, (tree, repo) => {
+      assertRecordedParentCommit(room, parent);
       // ADR 0365 決定2: 受験者が populate できない gitlink を足す・進める tree は、面接室へ運ぶ前に拒む。
       const gitlinks = stagedGitlinkChanges({ at: room.path, ref: parent }, { at: repo, ref: tree });
       if (gitlinks.length > 0) throw new RoomCopyGitlinkError(gitlinks);
@@ -2697,7 +2704,7 @@ export function commitRoomCopy(db: Db, place: RunPlace, taskId: string): string 
       const head = commitStagedTree(repo, tree, parent, "Add the project files");
       // ADR 0388 決定1: 面接室の借りは tip の写しから外し、staging repo と写しの自前の store で数える。
       borrowNamedAfterStage(verified, room);
-      carryStagedCommit(room, repo, head, "the probe's environment", { checkout: place.path, noun: TASK_CHECKOUT }, verified);
+      carryStagedCommit(room, { checkout: place.path, noun: TASK_CHECKOUT }, { own: repo, tip: head, description: "the probe's environment", borrowing: verified });
       const ref = `refs/keep-around/${head}`;
       boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
       return head;
@@ -4512,9 +4519,10 @@ function bringTaskCheckout(
         const baseTree = git(namedPlace.path, "--no-replace-objects", "rev-parse", "--verify", `${base}^{tree}`);
         return boardWriteTree(checkout, tip, verified, (tree, repo) => {
           if (tree === baseTree) return base;
+          if (ahead) assertRecordedParentCommit(namedPlace, base);
           const head = commitStagedTree(repo, tree, base, wipSubject(task));
           if (ahead) borrowNamedAfterStage(verified, namedPlace);
-          carryStagedCommit(namedPlace, repo, head, "the WIP commit", { checkout, noun: TASK_CHECKOUT });
+          carryStagedCommit(namedPlace, { checkout, noun: TASK_CHECKOUT }, { own: repo, tip: head, description: "the WIP commit" });
           return head;
         }, exclude, ahead ? { ref: base, at: namedPlace.path } : undefined);
       });

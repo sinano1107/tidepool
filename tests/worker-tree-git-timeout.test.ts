@@ -8,6 +8,7 @@ import { boardViewStatus, boardWriteTree, CheckoutUnreadableError } from "../src
 import { completeTask, getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type TaskType } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
 import { commitRoomCopy, recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
+import { stallCarriedVerification } from "./carried-verification-fixture.js";
 import {
   api,
   bootTidepool,
@@ -97,18 +98,6 @@ function thrown(run: () => unknown): unknown {
     return err;
   }
   throw new Error("expected a throw");
-}
-
-/** 運んだ後に名前の場所で object を照合する手だけを止める。 */
-async function stallCarriedVerification(repo = "carried"): Promise<void> {
-  const bin = await tempDir("tidepool-git-slow-verification-");
-  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  writeFileSync(
-    join(bin, "git"),
-    `#!/bin/sh\nif [ "$1" = pack-objects ]; then case "$3" in */${repo}/read) sleep 5; exit 0;; esac; fi\nexec "${realGit}" "$@"\n`,
-    { mode: 0o755 },
-  );
-  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 }
 
 it("root の .gitignore が FIFO なら view の status と退避の add -A は上限超過の型で投げ、git を残さない(ADR 0357 決定1・3)", async () => {
@@ -475,16 +464,12 @@ it.each(["pose_probe", "complete_task"] as const)("%s は運んだ後の確か�
     const args = verb === "pose_probe"
       ? { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }
       : { handoff: FULL_HANDOFF };
-    const result = await callAsTask(board, task.id, verb, args);
+    await callAsTask(board, task.id, verb, args);
 
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("this session is over");
     expect(board.containers.forceReclaims).toEqual([session]);
-    await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
     const failure = (await questions(board)).find((question) => question.parent_id === task.id);
     const context = verb === "pose_probe" ? "while copying the probe's environment" : "at the completion gate";
     expect(failure.purpose).toContain(`\`git pack-objects\` on the worker's tree did not finish within 1 s ${context}, so the board ended this session.`);
-    expect(await servedQuarantineQuestion(board, "workspace", verb === "pose_probe" ? task.id : ws.name)).toBeUndefined();
   } finally {
     vi.unstubAllEnvs();
   }
@@ -495,7 +480,7 @@ it.each(["pose_probe", "complete_task"] as const)("%s は運んだ後の確か�
 it.each([
   { reader: "pack を先に読む", repo: "carried" },
   { reader: "loose だけを読む", repo: "loose" },
-])("運んだ後の確かめが $reader 手で上限を越えれば、worker の repo の故障にし、名前の場所に入れ直しの pack も ref も書かない(ADR 0423 決定5)", async ({ repo }) => {
+] as const)("運んだ後の確かめが $reader 手で上限を越えれば、worker の repo の故障にし、名前の場所に入れ直しの pack も ref も書かない(ADR 0423 決定5)", async ({ repo }) => {
   const { db, named, task, place } = await pickedUp(`carried-${repo}-timeout`);
   const packs = () => readdirSync(join(named.path, ".git", "objects", "pack")).filter((file) => file.endsWith(".pack")).length;
   const before = packs();

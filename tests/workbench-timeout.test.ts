@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -8,6 +8,7 @@ import { loadRegistry } from "../src/registry.js";
 import { workbenchPath } from "../src/workbench.js";
 import { openHumanContentWorkbench } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
+import { stallCarriedVerification } from "./carried-verification-fixture.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, quarantineQuestion } from "./harness.js";
 import { deletionReaders } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -44,15 +45,7 @@ it("運んだ後の確かめが上限を越えた取り込みは、作業台を�
   const workbench = c.workbench();
   resolveInWorkbench(workbench, c.source);
   const original = git(c.ws.path, "rev-parse", c.target);
-  const bin = await tempDir("tidepool-git-slow-workbench-verification-");
-  const realGit = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  writeFileSync(join(bin, "git"), `#!/bin/sh
-if [ "$1" = pack-objects ]; then
-  case "$3" in */carried/read) sleep 5; exit 0;; esac
-fi
-exec "${realGit}" "$@"
-`, { mode: 0o755 });
-  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  await stallCarriedVerification();
   try {
     await expect(answer(c)).rejects.toThrow(`\`git pack-objects\` on the workbench at ${workbench} did not finish within 1 s`);
   } finally {
