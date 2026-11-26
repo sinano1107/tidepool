@@ -1,6 +1,6 @@
 # 完了の門は tip を記録に着けるまで `done` にせず、完了済みの解放は記録の tip だけを運ぶ —— 報告後の書き込みは記録され、名前の場所を止めない
 
-**Status 追記: 決定4 の「拒むだけ」は、worker が自分で直せる失敗に限る —— 名前の場所の側の失敗で直せないものは、盤面が見た失敗の文を載せた failure question を登録して session を回収する。資源の停止を verb で登録しない点は変わらない([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
+**Status 追記: 決定4 の「拒むだけ」は置き換わった —— verb の時点の名前の場所の失敗は worker に直せないので、盤面が見た失敗の文を載せた failure question を登録して session を回収する。資源の停止を verb で登録しない点は保つ([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
 
 **Status 追記: 決定1 の門は、`task/<id>` を書く前に tip の履歴も見る —— 他の task のブランチの commit を持つ tip は何も書かずに拒む。完了以外の解放の WIP の退避は、同じ tip を書かずに解放の失敗にする([ADR 0417](0417-a-worker-tip-holding-another-tasks-commits-is-refused-where-the-board-receives-it-the-gate-writes-nothing-and-a-release-fails-and-keeps-the-checkout.md)、2026-11-25、issue #3824)。**
 
