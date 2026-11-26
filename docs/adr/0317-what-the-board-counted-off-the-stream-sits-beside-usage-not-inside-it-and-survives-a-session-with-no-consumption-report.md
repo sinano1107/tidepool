@@ -38,3 +38,23 @@ ADR 0215 決定5 が「報告なき exit の failure question に差し替えの
 - ADR 0215 決定3 と ADR 0214 決定4 に Status 追記。ADR 0215 決定5 の failure question の行は `usage` を経由せず直下の欄から写す。
 - CONTEXT.md の Worker session(stream から数えた事実は消費の報告と独立に残る)。
 - 記録の形の変更は欄の移動(`usage` の中 → 直下)。リリース前なので migration は書かない。実装は1 slice、#2637 のコメントが spec。
+
+## 追記(2026-11-26 の triage、issue #3857)
+
+決定3 は3欄を同じ event から1欄ずつ渡すと決めたが、値の意味は運ばなかった。Codex は差し替えと拒否を観測しないので常に `[]` を書き(決定1)、
+`worker_exited` の無い session も入力で `[]` になる。judge にはどちらも「観測して無かった」と区別できず、拒否で止まった session が
+`capability` に寄りうる。prompt は `usage` / `actions` / `advisor.usage` の null だけを説明し、3欄の意味には触れていなかった。
+
+5. **judge の入力の `model_swaps` / `refusals` は、盤面がその session の stream を読んでいないとき null にする。** 読んでいないのは
+   Harness が codex のときと `worker_exited` が無いときで、`actions` と同じく値の有無ではなく出所で決める(ADR 0083 追記10)。
+   記録の側(決定1)は変えない —— 空を「無かった」と読み違えるのは judge だけで、学習器と failure question 文は空で害が無い。
+   `advisor` は対象外: Codex の実行設定に advisor は載らない(ADR 0098)ので、null に曖昧さが無い。
+6. **prompt は judge に渡す欄の null の意味を、欄ごとに書く。** 欄そのものの null(観測していない)と、`refusals` の要素の null
+   (分類が届かなかった拒否1回)・`model_swaps` の要素の欄の null(CLI が報告しなかった)・Claude の `advisor` の null(親 thread で
+   相談も失敗も観測されなかった)を分けて書く。
+
+退けた案: **記録の側で Codex に null を書く** —— 決定1 を覆し3つの読み手と型を変えるが、読み違えるのは judge だけ。**prompt に Codex の
+文を足すだけ** —— `actions` が入力の null で表している「観測していない」と同じ事実を、欄ごとに別の言い方で運ぶことになる。
+
+復旧が transcript の無い session を閉じたときは、Claude でも記録の `[]` が「読んでいない」を意味するが、記録に stream を読めたかが残らず
+入力では見分けられない。記録の側の問いとして #3898 に分ける。
