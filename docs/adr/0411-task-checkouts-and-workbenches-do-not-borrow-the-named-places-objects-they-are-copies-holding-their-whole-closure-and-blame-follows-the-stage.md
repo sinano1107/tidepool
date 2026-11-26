@@ -1,5 +1,7 @@
 # task の checkout と作業台は名前の場所の objects を借りない —— 閉包を全部持つ複製で作り、帰責は落ちた手でなく段で決まる
 
+**Status 追記: 決定4 の「閉包の中は守る」は、運ぶ手が読む object(tree・commit)と、運ぶ commit が名前の場所に既にある運び直しにも成り立つ —— 運ぶ手は損傷で落ちる前に入れ直しへ届く([ADR 0425](0425-carrying-reaches-the-reinsertion-before-damage-inside-the-closure-in-the-named-place-fails-it-even-when-the-carried-commit-is-already-there.md) 決定1・2、2026-11-26、issue #3862)。**
+
 **Status 追記: 決定4 の「確かめが上限を越えたときは名前の場所の側で拒む」の帰責は worker の故障に置き換わる —— 読むのは運んだばかりで確かめ終えていない閉包である。入れ直しに進まないことは保つ。決定3 の段の帰責は上限超過には当たらない([ADR 0423](0423-a-bounded-git-call-reads-bytes-not-yet-verified-into-the-record-and-what-reads-only-the-record-runs-unbounded.md) 決定1・5、2026-11-26、issue #3855)。**
 
 2026-11-24 の grilling(issue #3734、#3588・#3589・#3501 の族の根)で決定。ADR 0356 決定2 は、work / review の task の checkout を「alternates で名前の場所の objects を借りる」形で作った。理由は「今日と同じ可視性」の1句で、複製と比べていない。借りると、盤面が tip を検証する写しに checkout の byte と名前の場所の object が混ざり、検証の git が落ちたとき、盤面はどの手が落ちたかからどちらの故障かを推すことになる。この推しは両方の向きに外れた —— worker が借りている tree の id に偽の loose を1つ書くと名前の場所の Quarantine が立ち、名前の場所で壊れた借りている blob は checkout の故障になる。ADR 0364 の追記(#3495)の確かめ直しも同じ形で騙された。借りない役(Interview の2役)にはこの族の問題が1つも無い。実測と費用の表は #3734 に置く。
