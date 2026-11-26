@@ -1,5 +1,7 @@
 # 失われたと数えるのは「無い」と分かった ref だけ —— 在るか無いか分からなければ回答を拒み、origin の「無い」は fetch への相手の答えで知る
 
+**Status 追記: 決定1・2 の線は、戻す先の object の判定に限らず ref を読む git の答え全般に広がる —— git が何かを報告して件を落とした答えや道具の失敗は「無い」ではなく「分からない」で、読めない ref が1つでもある間は `restore the baseline` も give-up も拒む([ADR 0427](0427-git-that-could-not-read-a-ref-is-unknown-not-absent-it-stops-once-on-the-resource-of-the-place-and-no-caller-chooses-the-reader.md) 決定1・4、2026-11-26、issue #3910)。**
+
 2026-11-24 の triage と grilling(issue #3607。#3562 の仕様レビューの派生)で決定。
 
 ADR 0373 決定5 の give-up は、戻す先の object が無い ref を失われたと数える。ADR 0380 決定4 は、remote-backed なら数える前に origin から取りに行き、origin に届かなければ拒むと決めた。spec #3273 はこれを「2回の `ls-remote` probe の間で落ちた fetch は、origin に無い」と近似し、その窓での誤読は受け入れていた。

@@ -1,5 +1,7 @@
 # 収束は push の前に GitHub の head を読み、外の commit を盤面は自分では merge しない —— remote-backed の人間しか書けない path は origin 経由のまま
 
+**Status 追記: 決定2 の「値が読めない」は、写しが「読めて、無い」とき(初回・未記録)に限る —— 写しが壊れて読めなければ push せず昇格の失敗にする。壊れた写しを無いと読むと、人間が出元 repo で巻き戻したブランチを push で上書きする([ADR 0427](0427-git-that-could-not-read-a-ref-is-unknown-not-absent-it-stops-once-on-the-resource-of-the-place-and-no-caller-chooses-the-reader.md) 決定5、2026-11-26、issue #3910)。**
+
 **Status 追記: 決定3 の PR が無いか未記録の根の「写しから読む」最後に push した値は、宣言中の fork の記録である —— fork ごとに repo id で持ち、出元 repo の差し替え・削除で消さない。下の 2026-11-22 の追記(issue #3562)の「出元 repo の差し替え・削除で前の repo の写しを消す」は外れる。消すと、前に使った fork へ戻った後の決定6 の巻き戻しを「値が読めない」として決定2 が push で上書きする([ADR 0422](0422-what-the-board-last-pushed-to-a-head-repo-is-kept-per-fork-by-repository-id-and-a-head-repo-change-does-not-forget-it.md)、2026-11-26、issue #3851)。**
 **Status 追記: 決定1 の「読んだ後に head が動いて push が落ちれば」は、祖先への巻き戻しでは成り立たない —— 盤面の push は force 無しで、git が拒むのは non-fast-forward だけなので、読んだ後に祖先へ戻された head への push は fast-forward として通り、巻き戻しを黙って上書きする。収束の push は、決定2 の判断に使った head を lease(`--force-with-lease=<ref>:<head>`、「無い」と読んだなら空)として載せる。読んだ後に head が動けば push が落ち、今どおり昇格の失敗になって `retry` が読み直す(拒否文は解析しないまま)。lease は値が一致すれば non-fast-forward も通すので、push の直前に head が push する sha の祖先であることを手元で確かめ、そうでなければ撃たない。merge が `--match-head-commit` で head を固定するのと同じ線で、push の側でも盤面は自分が判断した値の上にしか書かない(2026-11-24、issue #3605 / #3606。実測は #3605 のコメント)。**
 
