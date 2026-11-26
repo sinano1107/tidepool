@@ -57,7 +57,7 @@ import {
   sameRepository,
 } from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
-import { settleQuestionAsObserved } from "./tasks.js";
+import { doneTaskIdsInWorkspace, settleQuestionAsObserved } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import { BOARD_BRANCHES } from "./workbench.js";
 import {
@@ -622,6 +622,10 @@ export interface WorkspaceDeletionReferences {
   countUnsettledTasks(name: string): number;
   /** この workspace で着地を待つ完了タスクの id(ADR 0226)。 */
   listAwaitingLandingTaskIds(name: string): string[];
+  /** 収束がまだ push する内容を持つ PR の根の id(ADR 0421 決定4)。 */
+  listUnpushedPrRootIds(name: string): string[];
+  /** 着地の執行中の task の id(ADR 0421 決定4 追記)。 */
+  listLandingInProgressTaskIds(name: string): string[];
   /** 盤面の既定 workspace 名。一致すれば消せない —— 既定はポインタである。 */
   defaultWorkspaceName?: string;
 }
@@ -633,6 +637,9 @@ export async function deleteWorkspace(
   // HTTP の層から読み口を移しても、registry の refresh を待つ前に読む点は同じ(#3892)。
   const unsettled = deps.countUnsettledTasks(input.name);
   const awaiting = deps.listAwaitingLandingTaskIds(input.name);
+  const tearingDown = doneTaskIdsInWorkspace(deps.db, input.name, { teardownUnfinished: true });
+  const unpushed = deps.listUnpushedPrRootIds(input.name);
+  const beingLanded = deps.listLandingInProgressTaskIds(input.name);
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const entry = ownEntry(registry.workspaces, input.name);
@@ -643,6 +650,10 @@ export async function deleteWorkspace(
     reasons.push({ code: "unsettled_tasks", count: unsettled, ...(intake !== undefined && { intake_question: intake }) });
   }
   if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
+  // ADR 0421 決定4: 盤面がその名前でまだ運ぶもの —— 後始末の merge back、PR への push、執行中の着地
+  if (tearingDown.length > 0) reasons.push({ code: "teardown_unfinished", task_ids: tearingDown });
+  if (unpushed.length > 0) reasons.push({ code: "unpushed_pr_content", task_ids: unpushed });
+  if (beingLanded.length > 0) reasons.push({ code: "landing_in_progress", task_ids: beingLanded });
   if (deps.defaultWorkspaceName === input.name) reasons.push({ code: "board_default" });
   // ADR 0373 決定14: 見つかっている違反を 削除 → 再登録 → `repaired by hand` で比べずに通さない —— 基準の行を持つ間だけ拒む
   const [openQuarantine] = openQuarantinesNaming(deps.db, input.name);

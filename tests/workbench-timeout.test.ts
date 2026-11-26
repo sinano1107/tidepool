@@ -4,13 +4,12 @@ import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
-import { taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadRegistry } from "../src/registry.js";
-import { countUnsettledTasksReferencing } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
 import { openHumanContentWorkbench } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, quarantineQuestion } from "./harness.js";
+import { deletionReaders } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 import { answer, boardWithParent, completedChild, conflicted, resolveInWorkbench } from "./workbench-fixture.js";
@@ -84,8 +83,7 @@ it("削除の扉が作業台を読む git が上限で止まれば、参照の�
       registry: { dir: registryDir, mode: "purely-local" },
       workspacesBaseDir: base,
       db,
-      countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
-      listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, () => ws, name),
+      ...deletionReaders(db, () => ws),
     }).catch((err: Error) => err);
 
     expect(failed).toBeInstanceOf(Error);

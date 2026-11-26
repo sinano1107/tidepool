@@ -46,7 +46,7 @@ import {
   takeInWorkThroughHumanDoor,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { blockingRootOf, type Landing, landingState, taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "./landing.js";
+import { blockingRootOf, type Landing, landingState, prRootIdsWithUnpushedContentInWorkspace, taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace, taskIdsBeingLandedInWorkspace } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -1215,15 +1215,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
+      const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
       const checkout = await workspaceAdmin.delete(
         { name: req.params.name, ...parsed.data },
         {
           countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
-          listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(
-            db,
-            buildWorkspaceResolver(resolveWorkspace, workspace),
-            name,
-          ),
+          listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
+          listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name),
+          listLandingInProgressTaskIds: (name) => taskIdsBeingLandedInWorkspace(db, landing, name),
           defaultWorkspaceName: workspace?.name,
         },
       );

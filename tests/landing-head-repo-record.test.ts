@@ -4,17 +4,17 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { DomainError } from "../src/domain-error.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { blockingRootOf, createLanding, landingState, rootPrOutcome, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { blockingRootOf, createLanding, landingState, rootPrOutcome } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import type { MergeDial } from "../src/registry.js";
 import { loadRegistry } from "../src/registry.js";
-import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, recordPrOpened } from "../src/tasks.js";
+import { getTask, listBoard, nextSlotTask, recordPrOpened } from "../src/tasks.js";
 import { resolveExecutionWorkspace, withDeclaredRepoCheck } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace, HeadRepoTaskBranchesNotSentError, publishWorkspace, updateWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace, makeWorkspace, shimGit } from "./harness.js";
-import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, convergeOn, finish, landingWork, openBoard, profile, promotionFailures } from "./landing-fixture.js";
+import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, convergeOn, deletionReaders, finish, landingWork, openBoard, profile, promotionFailures } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -312,11 +312,7 @@ async function lagoonWithPurelyLocalDoneRoot() {
   // `external` の根は削除の扉を止めない(ADR 0370 決定1)
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github, githubAuth, resolveAuthority: () => profile("external") });
   const registerAgain = async (path: string) => {
-    await deleteWorkspace({ name: "lagoon", confirm: true }, {
-      ...doors,
-      countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
-      listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
-    });
+    await deleteWorkspace({ name: "lagoon", confirm: true }, { ...doors, ...deletionReaders(db, resolve) });
     await createWorkspace({ name: "lagoon", mode: "register", path, confirm: true }, doors);
   };
   return { addFork, db, doors, github, landing, registerAgain, resolve, root };

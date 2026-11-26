@@ -6,6 +6,7 @@ import { registerPrPromotionFailureQuestion } from "../src/landing.js";
 import { UnknownAgentError } from "../src/registry.js";
 import {
   DeletionBlockedError,
+  type DeletionBlockedReason,
   DeletionConfirmationRequiredError,
 } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
@@ -214,6 +215,27 @@ it("DELETE /api/workspaces/:name は開いた Quarantine と基準の拒否を�
   expect(res.status).toBe(409);
   expect(res.json.blocked).toBe(true);
   expect(res.json.reasons).toEqual([{ code: "open_quarantine", question_id: "q1" }]);
+});
+
+it("DELETE /api/workspaces/:name は盤面がまだ運ぶものの拒否の理由を、対象の task と一緒に他の理由と同じ 409 で返す(ADR 0421 決定4)", async () => {
+  const reasons: DeletionBlockedReason[] = [
+    { code: "teardown_unfinished", task_ids: ["t1"] },
+    { code: "unpushed_pr_content", task_ids: ["t2"] },
+    { code: "landing_in_progress", task_ids: ["t3"] },
+  ];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      delete: async () => {
+        throw new DeletionBlockedError("workspace", "lagoon", reasons);
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
+
+  expect(res.status).toBe(409);
+  expect(res.json.blocked).toBe(true);
+  expect(res.json.reasons).toEqual(reasons);
 });
 
 it("DELETE /api/profiles/:name は名前と confirm を verb へ渡し、200 を返す", async () => {
