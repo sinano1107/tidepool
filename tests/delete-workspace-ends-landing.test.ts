@@ -3,7 +3,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { createLanding, type Landing, landingState, registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { createLanding, type Landing, landingState, registerPrPromotionFailureQuestion, settledByObservation } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { startScheduler } from "../src/scheduler.js";
@@ -196,7 +196,8 @@ it("盤面の外で閉じた PR の根は終える集合に入り、行は閉じ
   await c.landing.converge();
   expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("close_observed");
 
-  await expect(c.door(false)).rejects.toMatchObject({ landingEnds: [{ id: c.root.id, pr_head_lacks_unpushed_content: false }, { id: c.child.id }, { id: second.id }] });
+  // 閉じた PR を GitHub で開き直して merge すると、盤面が push しなかった修理を欠く
+  await expect(c.door(false)).rejects.toMatchObject({ landingEnds: [{ id: c.root.id, pr_head_lacks_unpushed_content: true }, { id: c.child.id }, { id: second.id }] });
   await c.door();
 
   expect([c.root, c.child, second].map((task) => landingState(c.db, getTask(c.db, task.id)!))).toEqual(["close_observed", "workspace_deleted", "workspace_deleted"]);
@@ -276,6 +277,7 @@ it("registry の refresh を待つ間に完了した task も、その間に立�
   expect(c.registered()).toBe(false);
   expect([c.root, queued].map((task) => landingState(c.db, getTask(c.db, task.id)!))).toEqual(["workspace_deleted", "workspace_deleted"]);
   expect(getTask(c.db, question)!.status).toBe("done");
+  expect(settledByObservation(c.db, getTask(c.db, question)!)).toBe("workspace_deleted_observed");
 });
 
 it("registry の refresh を待つ間に着地の執行が始まれば、扉は何も書かずに投げ、執行が終われば削除し直して通る", async () => {
@@ -313,6 +315,7 @@ it("purely-local の名前で registry の refresh を待つ間に完了して l
 
   expect(landingState(db, getTask(db, root.id)!)).toBe("workspace_deleted");
   expect(getTask(db, question!.id)!.status).toBe("done");
+  expect(settledByObservation(db, getTask(db, question!.id)!)).toBe("workspace_deleted_observed");
 });
 
 /** scheduler の poll(収束を撃つ)と2つの tick を1回ずつ回し、開いた question と `reef` の workspace の Quarantine が無いこと。 */
@@ -335,15 +338,17 @@ async function expectPollRaisesNothing(c: Awaited<ReturnType<typeof reefWithPrRo
     taskExecutionCandidates: implicitTaskExecutionCandidates(c.db),
   });
   onTestFinished(() => scheduler.stop());
+  // 素の git エラー(`git rev-list --count …`)をログにも出さない —— poll も収束も何も失敗しない
+  const errors = vi.spyOn(console, "error");
   await scheduler.rerunPoll();
   await expectLandingDoesNothing(c, [c.root, c.child]);
   expect(openQuarantineQuestion(c.db, "workspace", "reef")).toBeUndefined();
   expect([c.root, c.child].map((task) => landingState(c.db, getTask(c.db, task.id)!))).toEqual(["workspace_deleted", "workspace_deleted"]);
+  expect(errors).not.toHaveBeenCalled();
 }
 
 it("削除の後・登録し直す前の poll は、着地が終わった task に question も Quarantine も立てない", async () => {
   const c = await reefWithPrRootAndChild();
-  vi.spyOn(console, "error").mockImplementation(() => {});
 
   await c.door();
 
@@ -357,7 +362,6 @@ it.each([
   ["別の repo の fresh clone", "other-new-path"],
 ] as const)("%s で登録し直した名前で、前の登録の根とその子は question も Quarantine も立てない", async (_shape, shape) => {
   const c = await reefWithPrRootAndChild();
-  vi.spyOn(console, "error").mockImplementation(() => {});
   const old = c.workspace;
   const other = shape === "same" ? undefined : (await makeRemoteBackedWorkspace("reef-other")).workspace;
   const path = shape === "other-same-path" ? old.path : await tempDir("tidepool-reef-fresh-");
@@ -376,7 +380,6 @@ it.each([
 
 it("別の repo で誤って登録し直した名前は、もう一度削除して元の repo で登録し直せる(#3888)", async () => {
   const c = await reefWithPrRootAndChild();
-  vi.spyOn(console, "error").mockImplementation(() => {});
   const old = c.workspace;
   const { workspace: other } = await makeRemoteBackedWorkspace("reef-other");
   await reRegister(c.db, c.reef, { ...old, repo: other.repo, head_repo: undefined }, () => {

@@ -627,7 +627,7 @@ export interface WorkspaceDeletionReferences {
   /** 着地の執行中の task の id(ADR 0421 決定4 追記)。 */
   listLandingInProgressTaskIds(name: string): string[];
   /** GitHub に残る PR の head が、盤面が push していない内容を欠く PR の根の id —— 断念した根も数える(ADR 0421 帰結)。確認の一覧が読む。 */
-  listPrRootIdsLackingPushedContent(name: string): string[];
+  listPrRootIdsLackingUnpushedContent(name: string): string[];
   /** 盤面の既定 workspace 名。一致すれば消せない —— 既定はポインタである。 */
   defaultWorkspaceName?: string;
 }
@@ -672,7 +672,7 @@ export async function deleteWorkspace(
   if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
   if (input.confirm !== true) {
     // ADR 0421 決定1: 確認は着地が終わる task を名指す。通すときの集合は transaction の中で読み直す(この一覧と違ってよい)
-    const lacking = deps.listPrRootIdsLackingPushedContent(input.name);
+    const lacking = deps.listPrRootIdsLackingUnpushedContent(input.name);
     throw new DeletionConfirmationRequiredError(
       "workspace",
       input.name,

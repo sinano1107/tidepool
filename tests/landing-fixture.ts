@@ -810,7 +810,7 @@ export function deletionReaders(db: Db, resolve: WorkspaceResolver | undefined, 
     listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
     listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name),
     listLandingInProgressTaskIds: (name) => (landing ? taskIdsBeingLandedInWorkspace(db, landing, name) : []),
-    listPrRootIdsLackingPushedContent: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name, { declined: true }),
+    listPrRootIdsLackingUnpushedContent: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name, { declined: true }),
   };
 }
 
@@ -825,16 +825,22 @@ export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceC
   if (moved.head_repo !== undefined) giveHeadRepo(db, reef, moved.head_repo);
 }
 
-/** 削除の扉を通らずに `reef` を `moved` の checkout に登録し直す —— registry の entry の削除の commit と workspace の状態の行を扉の外で消し、
- *  登録の扉で登録する。扉なら名前に残る完了 task の着地を終える(ADR 0421 決定1)ので、根が生き延びて今の宣言と食い違う床の題材になる
- *  (ADR 0399 決定5)。`between` は `reRegister` と同じ。 */
-export async function reDeclareOutsideDoor(db: Db, reef: RegisteredReef, moved: WorkspaceConfig, between = () => {}): Promise<void> {
-  commitWorkspaceDeletion(reef.registryDir, "reef");
-  dropWorkspaceState(db, "reef");
+/** 削除の扉を通らずに `name`(既定 `reef`)を `moved` の checkout に登録し直す —— registry の entry の削除の commit と workspace の状態の行を
+ *  扉の外で消し、登録の扉で登録する。production は届かない形で、base repo の食い違いの止まり(ADR 0399 決定5)の床だけを言う題材である:
+ *  削除の扉は名前に残る完了 task の着地を終え(ADR 0421 決定1)、`repo:` の手編集は名前の門が workspace の Quarantine で止める。`between` は
+ *  `reRegister` と同じ。`doors` は登録の扉に足す読み口。`moved` が出元 repo を持てば `giveHeadRepo` で足す(`reef` だけ)。 */
+export async function reDeclareOutsideDoor(
+  db: Db,
+  reef: Pick<RegisteredReef, "registryDir" | "admin" | "resolve">,
+  moved: Pick<WorkspaceConfig, "path" | "repo" | "head_repo">,
+  { name = "reef", between = () => {}, doors = {} }: { name?: string; between?: () => void; doors?: Partial<Parameters<typeof createWorkspace>[1]> } = {},
+): Promise<void> {
+  commitWorkspaceDeletion(reef.registryDir, name);
+  dropWorkspaceState(db, name);
   between();
-  await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
-  expect(reef.resolve("reef").repo).toBe(moved.repo);
-  if (moved.head_repo !== undefined) giveHeadRepo(db, reef, moved.head_repo);
+  await createWorkspace({ name, mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db, ...doors });
+  if ("repo" in moved) expect(reef.resolve(name).repo).toBe(moved.repo);
+  if (moved.head_repo !== undefined) giveHeadRepo(db, reef as RegisteredReef, moved.head_repo);
 }
 
 /** `reef` に出元 repo を足す。設定の扉(updateWorkspace)は GitHub の owner/name しか受けず fixture の local path を通せないので、扉が書く

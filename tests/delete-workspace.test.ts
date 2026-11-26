@@ -82,7 +82,7 @@ function deletionDeps(db: Db, dir: string, workspacesBaseDir = "/workspaces") {
     listAwaitingLandingTaskIds: (name: string) => taskIdsAwaitingLandingInWorkspace(db, resolveIn(name), name),
     listUnpushedPrRootIds: (name: string) => prRootIdsWithUnpushedContentInWorkspace(db, resolveIn(name), name),
     listLandingInProgressTaskIds: () => [],
-    listPrRootIdsLackingPushedContent: (name: string) => prRootIdsWithUnpushedContentInWorkspace(db, resolveIn(name), name, { declined: true }),
+    listPrRootIdsLackingUnpushedContent: (name: string) => prRootIdsWithUnpushedContentInWorkspace(db, resolveIn(name), name, { declined: true }),
   };
 }
 

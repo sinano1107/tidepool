@@ -321,6 +321,8 @@ export type EventPayload =
   // ADR 0407 決定2: 失われた ref を諦める受理が、ブランチを失った task を指すこの着地の question(local 着地・昇格失敗・merge)を回答なしで閉じた ——
   // ブランチが無ければ答えようが無い。task_id は閉じた question で、閉じた理由を question 自身に刻む(#3490)
   | { kind: "task_branch_lost_observed" }
+  // ADR 0421 決定1 / ADR 0407 決定2: 削除の扉が着地を終えた task を指す着地の question を回答なしで閉じた —— 閉じた理由を question 自身に刻む
+  | { kind: "workspace_deleted_observed"; workspace: string }
   // ADR 0394 決定5: 断る回答(`pr_merge` と local_merge の hold、abandon promotion)が断った question と、その question が問うた
   // 内容の写し —— 盤面の部分(tip、書き換えの question では欠けたブランチも)と、`pr_merge` では外の部分。判断は question の decision log に、
   // 断った内容はこの事実として根に残る(ADR 0073 決定2)。何を止め、いつ効かなくなるかは question の種類で読む(決定6)。tip が null は「変わった」

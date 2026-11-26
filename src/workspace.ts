@@ -3973,7 +3973,7 @@ export function restoreBaseline(
         return [task.id];
       });
       // ADR 0407 決定2: ブランチの無い task の着地の question には答えようが無い —— 根かどうかによらず閉じ、閉じた理由を question 自身に刻む
-      for (const id of lostTasks) retireLandingDecisions(db, id, now, { stampBranchLost: true });
+      for (const id of lostTasks) retireLandingDecisions(db, id, now, { stamp: { kind: "task_branch_lost_observed" } });
       // 透明か死んだかは同じ回答の兄弟の event も読むので、倒すのは全部を刻んだ後(ADR 0375 決定4・9)
       fellLostBranchAttachments(db, lostTasks, giveUpAnswer.question, now);
     })();

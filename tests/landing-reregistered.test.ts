@@ -50,7 +50,7 @@ async function reRegisteredWithSameNumber() {
 const openMergeQuestions = (db: Db) => listBoard(db).filter((q) => q.question_pending_merge_pr === 1 && q.status === "todo");
 const mergeQuestionOf = (db: Db, root: Task) => openMergeQuestions(db).find((q) => q.question_pending_merge_task_id === root.id)!.id;
 
-it("登録し直した名前で新しい根が旧い根と同じ番号の PR を開いても、merge question は旧い根の question に吸われず、自分の根を持って立つ", async () => {
+it("削除で着地が終わった旧い根の merge question への hold は、登録し直した名前で同じ番号の PR を開いた新しい根の merge question を止めず、旧い question は答えたまま残る", async () => {
   const { db, oldQuestion, newRoot } = await reRegisteredWithSameNumber();
 
   expect(openMergeQuestions(db).map((q) => q.question_pending_merge_task_id)).toEqual([newRoot.id]);

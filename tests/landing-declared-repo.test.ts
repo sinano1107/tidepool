@@ -231,7 +231,7 @@ async function reRegisteredPurelyLocal(moved: (old: WorkspaceConfig, root: Task)
   const done = finish(db, clock, root);
   recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "external" } });
   const local = await moved(old, done);
-  await reDeclareOutsideDoor(db, reef, local.workspace, local.between);
+  await reDeclareOutsideDoor(db, reef, local.workspace, { between: local.between });
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github: new FakeGitHubClient() });
   return { db, landing, old, root: done };
 }

@@ -19,6 +19,7 @@ const SETTLED_BY_OBSERVATION_COPY = {
   pr_close_observed: 'observed · PR closed',
   pr_promotion_observed: 'observed · PR promoted',
   task_branch_lost_observed: 'observed · task branch lost',
+  workspace_deleted_observed: 'observed · workspace registration deleted',
   quarantine_released: 'observed · quarantine lifted',
   routing_proposal_stale: 'observed · routing proposal stale',
   memory_proposal_stale: 'observed · memory proposal stale',
@@ -33,8 +34,8 @@ const LANDING_STATE_COPY = {
   withdrawn: 'landing · withdrawn from auto-merge',
   landed: 'landing · landed',
   branch_lost: 'landing · ended — the task branch was lost',
-  // ADR 0421 決定1: 行は PR の有無を運ばないので、PR を持つ task にも持たない task にも真の1文
-  workspace_deleted: 'landing · ended — the workspace registration was deleted; any PR stays on GitHub as it is',
+  // ADR 0421 決定2: PR を持つ task は、行の写しが PR が残ることを足す
+  workspace_deleted: 'landing · ended — the workspace registration was deleted',
   pr_left: 'landing · ended by a human — the PR was left as it is',
 } satisfies Record<import('../src/wire-contract').LandingState, string>;
 /** 塞ぐ根に塞がれた行の理由(ADR 0413 決定3・4)—— 文言は画面が持つ(ADR 0102 決定5)。種類を足して文言を足さないと typecheck が落ちる。 */
@@ -385,7 +386,9 @@ function mapData(
       // editTask on the server is the real gate
       githubIssueNumber: t.github_issue_number,
       settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : undefined,
-      landingState: t.landing_state ? LANDING_STATE_COPY[t.landing_state] : undefined,
+      landingState: t.landing_state
+        ? `${LANDING_STATE_COPY[t.landing_state]}${t.landing_state === 'workspace_deleted' && t.pr_number !== null ? ` — PR #${t.pr_number} stays on GitHub as it is` : ''}`
+        : undefined,
       // ADR 0273 決定8: 受験者の workspace 列は実環境の名前で、走る場所は出題の head を fetch した自分の checkout(ADR 0276 決定1)—— 列の値をそのまま見せない
       interviewPlace: t.type === 'interview' ? `real environment: ${t.workspace ?? 'default workspace'}`
         : t.interview_root_id ? 'own checkout of the posed head' : undefined,

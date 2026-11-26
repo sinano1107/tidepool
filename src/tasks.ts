@@ -1261,22 +1261,23 @@ export function doneTaskIdsInWorkspace(db: Db, name: string, { teardownUnfinishe
     .all(name) as string[];
 }
 
-/** ADR 0421 決定1: 削除の扉が着地を終える task —— その名前(導出した workspace)の done の work のうち、着地が終わったと読まれないもの。
- *  根かどうかは問わない —— 根だけ終えると、子孫が次の登録で根として読まれる。収束の候補の述語と同じく、盤面のタスクブランチを持たない
- *  人間担当の work と Interview の受験者は着地しないので入れず、local 着地を執行した根も入れない。候補の述語と違い、local 着地の question が
- *  開いた根は入れる(終える側がその question を閉じる)。PR の merge を記録したが収束がまだ着地を終えていない根も入れる —— 外すと、名前を
- *  解決できない候補として次の収束に残る。登録順。 */
+/** 着地がまだ終わっていない完了 task の唯一の SQL 述語 —— 収束の候補(`landingCandidateIds`)と削除の扉が終える集合が共有する。done の work の
+ *  うち、盤面のタスクブランチを持たない人間担当の work(人間の完了は祖先の着地の契機、ADR 0374 決定12)と Interview の受験者(着地しない、
+ *  ADR 0199)を除き、着地が終わった task(`landingEndedSql`)と local 着地を執行した根(ADR 0289 決定1)を除く。`rowRef` は tasks の行の別名。 */
+export function landingUnendedSql(rowRef: string): string {
+  return `(${rowRef}.type = 'work' AND ${rowRef}.status = 'done'
+          AND (${rowRef}.assignee IS NOT '${HUMAN_ACTOR_ID}' OR ${hasTaskBranchSql(`${rowRef}.id`)})
+          AND ${rowRef}.interview_target_id IS NULL
+          AND NOT ${landingEndedSql(`${rowRef}.id`)}
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = ${rowRef}.id AND e.kind = 'local_merge_executed'))`;
+}
+
+/** ADR 0421 決定1: 削除の扉が着地を終える task —— その名前(導出した workspace)で着地がまだ終わっていない完了 task(`landingUnendedSql`)。
+ *  根かどうかは問わない —— 根だけ終えると、子孫が次の登録で根として読まれる。収束の候補と違い、local 着地の question が開いた根も入れる
+ *  (終える側がその question を閉じる)。登録順。 */
 export function tasksLandingEndsOnDeletion(db: Db, name: string): Array<Pick<Task, "id" | "title" | "pr_number">> {
   return db
-    .prepare(
-      `SELECT t.id, t.title, t.pr_number FROM tasks t
-        WHERE t.type = 'work' AND t.status = 'done' AND ${derivedWorkspaceSql("t")} = ?
-          AND (t.assignee IS NOT '${HUMAN_ACTOR_ID}' OR ${hasTaskBranchSql("t.id")})
-          AND t.interview_target_id IS NULL
-          AND NOT ${landingEndedSql("t.id")}
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'local_merge_executed')
-        ORDER BY t.rowid`,
-    )
+    .prepare(`SELECT t.id, t.title, t.pr_number FROM tasks t WHERE ${landingUnendedSql("t")} AND ${derivedWorkspaceSql("t")} = ? ORDER BY t.rowid`)
     .all(name) as Array<Pick<Task, "id" | "title" | "pr_number">>;
 }
 
@@ -1285,7 +1286,7 @@ export function tasksLandingEndsOnDeletion(db: Db, name: string): Array<Pick<Tas
  *  行を消すのと同じ transaction で呼ぶ(ADR 0405)。 */
 export function endLandingOnWorkspaceDeletion(db: Db, name: string, now: Date): void {
   for (const { id } of tasksLandingEndsOnDeletion(db, name)) {
-    retireLandingDecisions(db, id, now, {});
+    retireLandingDecisions(db, id, now, { stamp: { kind: "workspace_deleted_observed", workspace: name } });
     appendEvent(db, { taskId: id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_ended_workspace_deleted", workspace: name }, at: now });
   }
 }
@@ -3399,7 +3400,8 @@ export function mergeQuestionWasReplaced(db: Db, question: Pick<Task, "id" | "qu
  *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。観測 event は
  *  既定で question に、PR の決着なら `recordOn`(PR を開いた根)に刻み(ADR 0265 決定1)、根が既に
  *  決着を持っていれば null で刻まない —— question だけを閉じる。`payload` が null でも question だけを閉じる(「end landing」の回答が閉じる
- *  根の着地の question —— 理由は根の `landing_ended_pr_left` が持つ、ADR 0399 決定6。失われた ref の give-up は理由を question に刻む、ADR 0407 決定2)。
+ *  根の着地の question —— 理由は根の `landing_ended_pr_left` が持つ、ADR 0399 決定6。失われた ref の give-up と削除の扉は理由を question に刻む、
+ *  ADR 0407 決定2 / ADR 0421 決定1)。
  *  観測 event を刻んだら true。 */
 export function settleQuestionAsObserved(
   db: Db,
@@ -3440,10 +3442,10 @@ export function clearPendingAutoMerge(db: Db, taskId: string): void {
 }
 
 /** task `taskId` の着地の決裁を引退させる: 無人 merge キューから外し、その task を指す開いた着地の question(merge・昇格失敗・local 着地)を
- *  回答なしで閉じる。「end landing」の回答(ADR 0399 決定6 —— 答えている `answering` は除き、何も刻まない)と、失われた ref を諦める受理
- *  (ADR 0407 決定2 —— 根でない失われた task にも当て、`stampBranchLost` で閉じた理由を閉じた question 自身に刻む)が共有する。呼び手の
- *  transaction の中で呼ぶ。閉じた question の id を返す。 */
-export function retireLandingDecisions(db: Db, taskId: string, now: Date, { answering, stampBranchLost = false }: { answering?: string; stampBranchLost?: boolean }): string[] {
+ *  回答なしで閉じる。「end landing」の回答(ADR 0399 決定6 —— 答えている `answering` は除き、何も刻まない)、失われた ref を諦める受理
+ *  (ADR 0407 決定2 —— 根でない失われた task にも当てる)、削除の扉(ADR 0421 決定1)が共有する。後の2つは `stamp` で閉じた理由を閉じた
+ *  question 自身に刻む。呼び手の transaction の中で呼ぶ。閉じた question の id を返す。 */
+export function retireLandingDecisions(db: Db, taskId: string, now: Date, { answering, stamp = null }: { answering?: string; stamp?: TaskScopedPayload | null }): string[] {
   clearPendingAutoMerge(db, taskId);
   const open = db
     .prepare(
@@ -3453,7 +3455,7 @@ export function retireLandingDecisions(db: Db, taskId: string, now: Date, { answ
     )
     .pluck()
     .all({ task: taskId, answering: answering ?? null }) as string[];
-  for (const id of open) settleQuestionAsObserved(db, id, stampBranchLost ? { kind: "task_branch_lost_observed" } : null, now);
+  for (const id of open) settleQuestionAsObserved(db, id, stamp, now);
   return open;
 }
 

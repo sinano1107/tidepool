@@ -72,6 +72,7 @@ export type SettledByObservation =
   | RootSettledByObservation
   | "pr_promotion_observed"
   | "task_branch_lost_observed"
+  | "workspace_deleted_observed"
   | "quarantine_released"
   | "routing_proposal_stale"
   | "memory_proposal_stale";
@@ -105,6 +106,8 @@ export interface BoardTask extends QueueTask {
   interview_root_id: string | null;
   /** 出題済みの Interview の root が blocked で待つもの(ADR 0273 決定3): 監査か受験者か。他の行には欄が無い。 */
   interview_waiting?: "audit" | "examinees";
+  /** 盤面が開いた PR の番号(根だけ)。 */
+  pr_number: number | null;
   /** 解決前の workspace の名前。Interview の root と受験者では実環境の名前で、受験者の走る場所は面接室(ADR 0273 決定8)。 */
   workspace: string | null;
   review_flag: number;

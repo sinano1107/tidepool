@@ -9,13 +9,13 @@ import { openQuarantineQuestion } from "../src/quarantine.js";
 import type { MergeDial } from "../src/registry.js";
 import { loadRegistry } from "../src/registry.js";
 import { getTask, listBoard, nextSlotTask, recordPrOpened } from "../src/tasks.js";
-import { dropWorkspaceState, resolveExecutionWorkspace, withDeclaredRepoCheck } from "../src/workspace.js";
+import { resolveExecutionWorkspace, withDeclaredRepoCheck } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace, HeadRepoTaskBranchesNotSentError, publishWorkspace, updateWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace, makeWorkspace, shimGit } from "./harness.js";
-import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, convergeOn, deletionReaders, finish, landingWork, openBoard, profile, promotionFailures } from "./landing-fixture.js";
-import { commitWorkspaceDeletion, makeRegistry } from "./registry-fixture.js";
+import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, convergeOn, deletionReaders, finish, landingWork, openBoard, profile, promotionFailures, reDeclareOutsideDoor } from "./landing-fixture.js";
+import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -314,17 +314,14 @@ async function lagoonWithPurelyLocalDoneRoot() {
     await deleteWorkspace({ name: "lagoon", confirm: true }, { ...doors, ...deletionReaders(db, resolve) });
     await createWorkspace({ name: "lagoon", mode: "register", path, confirm: true }, doors);
   };
-  // 削除の扉は根の着地を終える(ADR 0421 決定1)ので、食い違いの止まりは扉の外で registry の entry と workspace の状態を消した床で言う
-  const reDeclareAgain = async (path: string) => {
-    commitWorkspaceDeletion(registryDir, "lagoon");
-    dropWorkspaceState(db, "lagoon");
-    await createWorkspace({ name: "lagoon", mode: "register", path, confirm: true }, doors);
-  };
+  // 削除の扉は根の着地を終え(ADR 0421 決定1)、repo の手編集は名前の門が workspace の Quarantine で止めるので、base repo の食い違いの止まりは
+  // 扉の外で registry の entry と workspace の状態を消した床で言う
+  const reDeclareAgain = (path: string) => reDeclareOutsideDoor(db, { registryDir, admin, resolve }, { path }, { name: "lagoon", doors });
   return { addFork, db, doors, github, landing, registerAgain, reDeclareAgain, resolve, root };
 }
 
 it("purely-local で拾われた根は publish では宣言の repo を記録せず、着地の最初の push の直前に記録して PR を開く", async () => {
-  const { addFork, db, doors, github, landing, reDeclareAgain, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
+  const { addFork, db, doors, github, landing, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
   const purelyLocal = resolve();
   await publishWorkspace({ name: "lagoon", repo: REPO }, doors);
   expect(resolve().repo).toBe(REPO);
@@ -345,11 +342,8 @@ it("purely-local で拾われた根は publish では宣言の repo を記録せ
   await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
   expect(startedPush).toBe(true);
 
-  // ADR 0399 決定3: 宣言の repo が同じでも、出元 repo を無くした名前では根だけが止まる。
-  const replacement = await tempDir("tidepool-lagoon-replacement-");
-  git(replacement, "clone", "--quiet", resolve().path, ".");
-  git(replacement, "remote", "set-url", "origin", REPO);
-  await reDeclareAgain(replacement);
+  // ADR 0399 決定3: 宣言の repo が同じでも、設定の扉で出元 repo を外した名前では根だけが止まる。
+  await updateWorkspace({ name: "lagoon", head_repo: "", confirm: true }, doors);
   expect(resolve()).toMatchObject({ repo: REPO });
   expect(resolve().head_repo).toBeUndefined();
 
