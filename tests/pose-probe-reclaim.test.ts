@@ -156,4 +156,5 @@ it.each([
   expect((await api(board.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.type === "review")).toEqual([]);
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
   board.containers.fireEmpty(session);
+  await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
 });

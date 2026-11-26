@@ -486,7 +486,7 @@ it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の�
   expect(board.containers.forceReclaims).toEqual([session]);
   const failure = (await questions(board)).find((question) => question.parent_id === root.id);
   expect(failure).toMatchObject({ title: expect.stringContaining("pose_probe"), question_cancel_option: "abandon" });
-  expect(failure.purpose).toContain(side === "host" ? "missing-temp-directory" : "failed to write object");
+  expect(failure.purpose).toContain(side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace");
   expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
   board.containers.fireEmpty(session);

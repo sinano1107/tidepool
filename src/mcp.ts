@@ -541,7 +541,7 @@ function auditedProbeEnvelope(deps: McpDeps, task: Task) {
   return { interview_audit: { head, interview_room: sessionReadCheckoutOf(deps.db, task.id, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
 }
 
-/** 出題の root が自分では直せない拒否の結び —— 人間に渡す出口を指す。 */
+/** 自分では直せない拒否の結び —— 人間に渡す出口を指す(complete_task の registry から消えた workspace。#3907 が回収に替える)。 */
 const ESCALATE_UNFIXABLE = " — this task cannot fix that: escalate so a human decides";
 
 /** 応答予算で読む読み口の続き(ADR 0195)。 */
