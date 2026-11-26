@@ -1261,10 +1261,11 @@ export function doneTaskIdsInWorkspace(db: Db, name: string, { teardownUnfinishe
     .all(name) as string[];
 }
 
-/** ADR 0421 決定1: 削除の扉が着地を終える task —— その名前(導出した workspace)の done の work のうち、着地が終わった記録も、内容が保護
- *  ブランチに届いた記録も持たないもの。根かどうかは問わない —— 根だけ終えると、子孫が次の登録で根として読まれる。収束の候補の述語と同じく、
- *  盤面のタスクブランチを持たない人間担当の work と Interview の受験者は着地しないので入れない。local 着地の question が開いた根は入れる
- *  (終える側がその question を閉じる)。登録順。 */
+/** ADR 0421 決定1: 削除の扉が着地を終える task —— その名前(導出した workspace)の done の work のうち、着地が終わったと読まれないもの。
+ *  根かどうかは問わない —— 根だけ終えると、子孫が次の登録で根として読まれる。収束の候補の述語と同じく、盤面のタスクブランチを持たない
+ *  人間担当の work と Interview の受験者は着地しないので入れず、local 着地を執行した根も入れない。候補の述語と違い、local 着地の question が
+ *  開いた根は入れる(終える側がその question を閉じる)。PR の merge を記録したが収束がまだ着地を終えていない根も入れる —— 外すと、名前を
+ *  解決できない候補として次の収束に残る。登録順。 */
 export function tasksLandingEndsOnDeletion(db: Db, name: string): Array<Pick<Task, "id" | "title" | "pr_number">> {
   return db
     .prepare(
@@ -1273,7 +1274,7 @@ export function tasksLandingEndsOnDeletion(db: Db, name: string): Array<Pick<Tas
           AND (t.assignee IS NOT '${HUMAN_ACTOR_ID}' OR ${hasTaskBranchSql("t.id")})
           AND t.interview_target_id IS NULL
           AND NOT ${landingEndedSql("t.id")}
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN (${REACHED_PROTECTED_BRANCH_KINDS.map((kind) => `'${kind}'`).join(", ")}))
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'local_merge_executed')
         ORDER BY t.rowid`,
     )
     .all(name) as Array<Pick<Task, "id" | "title" | "pr_number">>;

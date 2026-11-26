@@ -158,7 +158,7 @@ it("確認なしの要求は何も終えず、着地が終わる task を id・�
   expect([c.root, c.child, second].map((task) => landingState(c.db, getTask(c.db, task.id)!))).not.toContain("workspace_deleted");
 });
 
-// 終える集合の端(PR の表): 収束の候補の述語と突き合わせる —— 着地が終わった記録か、内容が保護ブランチに届いた記録を持つ task は終えない
+// 終える集合の端(PR の表): 収束の候補の述語と突き合わせる —— 着地が終わったと読まれる task は終えない
 it("収束が着地を終えた根とその子は終える集合に入らず、削除の後も行が変わらない", async () => {
   const c = await reefWithPrRootAndChild();
   await mergeOnGitHub(c.workspace, c.root.id);
@@ -174,17 +174,18 @@ it("収束が着地を終えた根とその子は終える集合に入らず、�
   expect([c.root, c.child].map((task) => landingState(c.db, getTask(c.db, task.id)!))).toEqual(before);
 });
 
-it("盤面の外の merge を観測した根は、収束が着地を終える前でも終える集合に入らず行が変わらない —— 記録だけでは子の内容が届いたか分からないので、子は入る", async () => {
+it("盤面の外の merge を観測して収束がまだ着地を終えていない根も、その子も終える集合に入り、根の行は merge の観測のまま", async () => {
   const c = await reefWithPrRootAndChild("escalate");
   await mergeOnGitHub(c.workspace, c.root.id);
   c.github.scriptMergedOutside(1);
   await c.landing.tick("outside_merge");
   expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("merge_observed");
 
-  await expect(c.door(false)).rejects.toMatchObject({ landingEnds: [{ id: c.child.id }] });
+  await expect(c.door(false)).rejects.toMatchObject({ landingEnds: [{ id: c.root.id, pr_number: 1 }, { id: c.child.id }] });
   await c.door();
 
   expect([c.root, c.child].map((task) => landingState(c.db, getTask(c.db, task.id)!))).toEqual(["merge_observed", "workspace_deleted"]);
+  await expectLandingDoesNothing(c, [c.root, c.child]);
 });
 
 it("盤面の外で閉じた PR の根は終える集合に入り、行は閉じた観測のまま", async () => {
@@ -293,6 +294,25 @@ it("registry の refresh を待つ間に着地の執行が始まれば、扉は�
 
   expect(c.registered()).toBe(false);
   expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("workspace_deleted");
+});
+
+// 終える集合が収束の候補と違う唯一の端: local 着地の question が開いた根は、入口では未決着で拒まれ、窓の中で立てば終える側が閉じる
+it("purely-local の名前で registry の refresh を待つ間に完了して local merge question が立った根も、扉がその question ごと着地を終える", async () => {
+  const { db, clock } = await openBoard();
+  const reef = await registeredReef(await makeWorkspace("reef-local-window"), { remoteBacked: true });
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github: null });
+  const { window, githubAuth } = fetchHeldAtToken();
+  const deleting = deleteWorkspace({ name: "reef", confirm: true }, { ...reef.admin, db, githubAuth, ...deletionReaders(db, reef.resolve, landing) });
+  await window.entered;
+  const root = await completeThroughTaskCheckout(db, clock, reef.resolve("reef"), landingWork(db, clock, "reef"), "feature.txt", "ready\n");
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "local_merge_question" });
+  const [question] = openLocalMergeQuestions(db, root.id);
+  window.open();
+
+  await deleting;
+
+  expect(landingState(db, getTask(db, root.id)!)).toBe("workspace_deleted");
+  expect(getTask(db, question!.id)!.status).toBe("done");
 });
 
 /** scheduler の poll(収束を撃つ)と2つの tick を1回ずつ回し、開いた question と `reef` の workspace の Quarantine が無いこと。 */
