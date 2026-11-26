@@ -44,7 +44,7 @@ async function reefWithPr(merge: "auto_if_ci_green" | "escalate", declaredRepo?:
   const github = new FakeGitHubClient();
 
   const move = async () => {
-    // 開いた merge question や無人 merge キューが削除を拒むので、扉の外で宣言と workspace の状態を入れ替えた盤面を作る。
+    // ADR 0087 決定2 / ADR 0226 決定1: 開いた merge question や無人 merge キューが削除を拒むので、扉の外で宣言と workspace の状態を入れ替えた盤面を作る。
     commitWorkspaceDeletion(reef.registryDir, "reef");
     dropWorkspaceState(db, "reef");
     await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });

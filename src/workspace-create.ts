@@ -630,17 +630,18 @@ export async function deleteWorkspace(
   input: DeleteWorkspaceInput,
   deps: WorkspaceAdminDeps & WorkspaceDeletionReferences,
 ): Promise<string> {
+  // HTTP の層から読み口を移しても、registry の refresh を待つ前に読む点は同じ(#3892)。
+  const unsettled = deps.countUnsettledTasks(input.name);
+  const awaiting = deps.listAwaitingLandingTaskIds(input.name);
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
   const reasons: DeletionBlockedReason[] = [];
-  const unsettled = deps.countUnsettledTasks(input.name);
   if (unsettled > 0) {
     const intake = openIntakeQuestionId(deps.db, input.name);
     reasons.push({ code: "unsettled_tasks", count: unsettled, ...(intake !== undefined && { intake_question: intake }) });
   }
-  const awaiting = deps.listAwaitingLandingTaskIds(input.name);
   if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
   if (deps.defaultWorkspaceName === input.name) reasons.push({ code: "board_default" });
   // ADR 0373 決定14: 見つかっている違反を 削除 → 再登録 → `repaired by hand` で比べずに通さない —— 基準の行を持つ間だけ拒む
