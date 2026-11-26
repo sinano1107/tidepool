@@ -29,6 +29,7 @@ import {
   questions,
   registerWork,
   servedQuarantineQuestion,
+  sessionId,
   type Tidepool,
   writeObservations,
 } from "./harness.js";
@@ -467,20 +468,28 @@ it("complete_task は人間が動かした task/<id> を retry では直らな�
   expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
 });
 
-it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の写しを面接室に記録できなければ拒むだけで、資源を止めない(ADR 0367 決定1 / ADR 0359 決定4)", async (side) => {
+it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の写しを面接室に記録できなければ拒まず、失敗の文を載せた failure question を登録して回収し、verb で資源を止めない(ADR 0424 決定2・3)", async (side) => {
   const ws = await makeWorkspace("tip-copy-pose");
   const board = (t = await bootTidepool({ workspace: ws }));
   const root = (await api(board.baseUrl, "POST", "/api/tasks", { type: "interview", title: "interview", hypothesis: "h", tier: "frontier", interview_targets: [{ provider: "anthropic", model: "claude-opus-4-6", effort: "high" }] })).json;
   await board.clock.advance(HOUR);
   writeFileSync(join(checkoutOf(board.db, root.id), "env.txt"), "the probe's environment\n");
 
+  const session = String(sessionId(board.db, root.id));
+  // 後始末は回収済み観測の後ろ —— 直した面接室を後始末が通ることまで見る
+  board.containers.hold(root.id);
   const restore = recordFailures[side](interviewRoomPath(board.db, root.id)!);
   const res = await callAsTask(board, root.id, "pose_probe", { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }).finally(restore);
 
   expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain("Retry pose_probe or escalate");
-  expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("in_progress");
-  expect(board.containers.forceReclaims).toEqual([]);
+  expect(res.content[0].text).toContain("this session is over");
+  expect(board.containers.forceReclaims).toEqual([session]);
+  const failure = (await questions(board)).find((question) => question.parent_id === root.id);
+  expect(failure).toMatchObject({ title: expect.stringContaining("pose_probe"), question_cancel_option: "abandon" });
+  expect(failure.purpose).toContain(side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace");
   expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
+  expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
+  board.containers.fireEmpty(session);
+  await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
 });
