@@ -1,5 +1,7 @@
 # task は自分の中身が向かう repo を覚え、根を指す記録は根の id で持ち、食い違った根だけを止める
 
+**Status 追記: 決定6 の記録は、PR を持つ根のための記録として残る。削除の扉が書く終わりは別の1種類で、PR の有無によらない。帰結の「同じ名前は別の repo にも登録し直せる。開いた PR を持つ根はそこで止まり、人間が着地を終える」は、「開いた PR を持つ根の着地は、削除の扉が終える」に変わる。決定5 の止まりは、削除を通らない出元 repo の差し替えのために残る([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1・2、2026-11-26、issue #3890)。**
+
 **Status 追記: 決定5 の止まりは、task に紐づく操作の入口の門が記録と今の宣言から読んで立てる —— 決定3 の比較が投げる例外は中断にだけ使い、種類を見るのは食い違いを別の記録にする所だけである。人間担当の work の扉と merge の回答は拒否で返し、task に書かない(hold は ADR 0394 決定5 のまま受ける)。決定3 の「2回目以降の pickup」に、初回の比較を足す —— ブランチを初めて切る task は、分かれる元の task の宣言の repo の記録を今の宣言と比べ、食い違えばその task が止まる。分かれる元の内容が今の宣言の保護ブランチに既に在れば止まらない([ADR 0419](0419-a-repo-disagreement-is-read-from-the-records-at-the-entrance-of-a-task-bound-operation-and-a-first-branch-cut-compares-the-record-of-its-fork-source.md) 決定1〜5、2026-11-25、issue #3849)。**
 
 **Status 追記: 決定5 の食い違いの question を無人 merge の tick・外の merge の走査・無人 merge の観測が立てるとき、根の workspace の Quarantine や registry の止まりが開いていても立てる —— ADR 0241 決定6 の「失敗 question を重ねない」の対象ではない。tick は workspace の Quarantine 単独では止まらない(ADR 0370 決定1 / ADR 0289 決定2)ので、その根を止めているのは食い違いで、信号はこの question しか持たない。伏せると、tick がその根だけを理由を言わずに読まなくなり、Quarantine に答えても食い違いは残る。出口の「この根の着地を終える」は Quarantine が開いたままでも受理され、Quarantine の受理は question の有無で変わらない。収束は今のまま —— 収束では Quarantine が根を実際に止める(ADR 0241 決定3)ので、Quarantine の verdict を返し、受理の後の収束が問う。別の昇格失敗 question が開いた根は収束が撃たないので、その根の食い違いを問うのは tick だけである(2026-11-25、issue #3791)。**

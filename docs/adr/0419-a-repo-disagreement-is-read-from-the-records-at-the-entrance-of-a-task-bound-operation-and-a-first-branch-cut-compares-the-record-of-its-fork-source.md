@@ -1,6 +1,6 @@
 # repo の食い違いは task に紐づく操作の入口で記録から読み、ブランチを初めて切る task は分かれる元の記録と比べる
 
-**Status 追記: 決定5 の「名前の場所に分かれる元のブランチが無い場合の読み方」と、帰結の「#3886 を先に決める」の段は決まった。生き残った根のブランチは、最初の撮りより後には在るか、失われた event を持つ。失われた祖先は系譜に透明で、子は保護ブランチから分かれて決定5 では止まらない。それ以外の無いブランチは系譜の読みが飛ばし、比べる相手が無い。別の repo へ fresh clone で登録し直した名前では、根のブランチが無いことの止まりが食い違いの止まりより先に立つ([ADR 0420](0420-before-the-first-capture-the-task-branch-of-every-root-whose-landing-has-not-ended-must-be-in-the-named-place-and-the-give-up-counts-the-absent-ones-as-lost.md) 決定1・5 と帰結、2026-11-26、issue #3886)。**
+**Status 追記: 決定5 の「名前の場所に分かれる元のブランチが無い場合の読み方」と、帰結の「#3886 を先に決める」の段は決まった。着地が終わっていない task は削除の扉が終え、その下には子を足さないので、生き残った根から分かれる子は無い。着地済みの祖先のブランチが無ければ系譜の読みが飛ばす。決定5 が残るのは、ブランチが在る場合である —— 同じ checkout を別の repo で登録し直すと、着地済みの祖先のブランチは在り、新しい repo がその内容を持たなければ子はそこから分かれる([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1・3・5 と帰結、2026-11-26、issue #3890)。**
 
 2026-11-25 の grilling(issue #3849、族に #3699 / #3700 / #3804)で決定。ADR 0399 の比較は、行き先を読む所が投げる例外として実装され、
 比較を付けるのは操作を組む各呼び手、止まりの種類を決めるのは例外が通り抜ける各 catch だった。同じ形の写し漏れが3件続いた(#3699・

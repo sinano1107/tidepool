@@ -1,6 +1,6 @@
 # 着地は運ぶ前と記録を書く前に名前の場所の全 ref を基準と比べる —— 受理が見せていない移動を受け入れる穴は、人間の内容の扉の設計に渡す
 
-**Status 追記: 決定1 の末尾「基準の行が無い workspace では、着地が pickup と同じ手続きで最初の撮りをする。再登録した checkout をそのまま信じる」は、その名前の着地が終わっていない根のタスクブランチが名前の場所に在る場合に限る。欠ければ撮らず、workspace の Quarantine で止まる([ADR 0420](0420-before-the-first-capture-the-task-branch-of-every-root-whose-landing-has-not-ended-must-be-in-the-named-place-and-the-give-up-counts-the-absent-ones-as-lost.md) 決定1・2、2026-11-26、issue #3886)。**
+**Status 追記: 決定1 の末尾「基準の行が無い workspace(削除して再登録した後に、PR の根・hold した根・断念した根が残る)」は対象が無くなる —— 削除の扉が、通すときにその名前の着地が終わっていない完了 task の着地を終える([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1、2026-11-26、issue #3890)。**
 
 **Status 追記: 決定1 の例外「取り残された子の告知は比べずに書く」は対象が無くなる —— 告知は ref を読まなくなった([ADR 0413](0413-the-notice-of-a-blocked-root-does-not-count-its-children-and-the-row-and-the-task-say-why-a-child-does-not-run.md) 決定1、2026-11-24、issue #3703)。**
 

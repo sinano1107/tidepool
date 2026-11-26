@@ -1,6 +1,6 @@
 # Quarantine の受理は全 ref が基準と同じであることだけを確かめる —— 動いた ref は盤面が「基準へ戻す」で戻し、失われた ref だけが名指しの選択肢で基準に入る
 
-**Status 追記: 決定5 の「失われた」は、基準の行が無い名前では別の数え方をする —— 着地が終わっていない根のうちタスクブランチが名前の場所に無いものと、その分解ツリーの中でブランチの記録を持ち ref が無い子孫を、失われたと数える。基準に行が無いので、戻す先の object の有無では数えられない。受理のほかの部分は変わらない([ADR 0420](0420-before-the-first-capture-the-task-branch-of-every-root-whose-landing-has-not-ended-must-be-in-the-named-place-and-the-give-up-counts-the-absent-ones-as-lost.md) 決定3、2026-11-26、issue #3886)。**
+**Status 追記: 決定14 の削除の扉は、通すときに、その名前の着地が終わっていない完了 task すべての着地を終える。削除から再登録までの間に盤面の持ち物でなくなるのは基準だけでなく、その名前で作られた task の着地もである([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1、2026-11-26、issue #3890)。**
 
 **Status 追記: 決定5 の「戻す先の object が無い」は、「無い」と積極的に分かったことを指す。手元では、git が `missing` と答え、ほかに何も報告しないとき。remote-backed では、それに加えて取りに行った先も無いと答えたとき —— タスクブランチの sha は、出元 repo と origin の両方。在るか無いか分からなければ、どちらの選択肢も何も書かずに拒む。header の読めない loose へ戻す決定3 の書き戻しも、拒む側に変わる([ADR 0409](0409-a-ref-counts-as-lost-only-when-its-object-is-known-absent-and-an-answer-that-cannot-tell-is-refused.md) 決定1・2・4、2026-11-24、issue #3607)。**
 

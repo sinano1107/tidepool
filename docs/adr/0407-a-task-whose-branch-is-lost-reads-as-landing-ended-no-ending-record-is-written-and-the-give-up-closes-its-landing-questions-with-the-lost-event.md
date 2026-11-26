@@ -1,5 +1,7 @@
 # タスクブランチを失った task は着地が終わったと読む —— 終わりの記録は書かず、「諦める」が失われた event と一緒に着地の question を閉じる
 
+**Status 追記: 決定1 の述語が読む着地の終わりに、削除の扉が書く記録が1種類加わる。根かどうかを問わず、その名前の着地が終わっていない完了 task すべてに書く([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1・2、2026-11-26、issue #3890)。**
+
 2026-11-23 の grilling(issue #3582)で決定。ADR 0375 決定7 は「失われた根の着地はそこで終わる」と決め、終わりを別の記録に刻むか失われた
 event から読むかを spec に委ねた。spec は刻む側を選び、ADR 0397 は刻む書き手を受理と収束の2人にした。失われた event(事実)と着地の
 終わり(後から述語で書く記録)が別になり、その間に条件と時間の隙間ができた。終わりを書くには「根か」と種類の判定が要り、「根か」を

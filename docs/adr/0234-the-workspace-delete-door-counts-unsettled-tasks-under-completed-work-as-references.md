@@ -1,5 +1,7 @@
 # workspace の削除の扉は、完了した work の下にいる未決着タスクも参照に数える
 
+**Status 追記: 決定1 の「着地し直す完了した work の祖先」は、削除の扉が通すときに着地を終えるので、削除の後には残らない([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1、2026-11-26、issue #3890)。**
+
 2026-10-10 の grilling(issue #1729)で決定。ADR 0226 決定2 が数えの外として #1729 に置いた経路の決着。付帯子の決着は
 完了した work の祖先をすべて着地し直し(ADR 0092 決定3)、そのたびに祖先の workspace を解決する。子は親と違う workspace
 にいられるので(分解の子の明示、review の分解子としての registry-edit — ADR 0031、人間の門の明示)、扉が数える
