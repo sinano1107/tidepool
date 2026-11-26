@@ -814,6 +814,27 @@ export function deletionReaders(db: Db, resolve: WorkspaceResolver | undefined, 
   };
 }
 
+/** `reef` に登録した checkout で PR #1 を開いた根と、その下で merge back まで済んで収束が push した done の子。`door` は本物の読み口で削除の扉を叩く。 */
+export async function reefWithPrRootAndChild(merge: "external" | "escalate" = "external") {
+  const { db, clock } = await openBoard();
+  const { workspace: old } = await makeLandingWorkspace("reef-old");
+  const reef = await registeredReef(old);
+  giveHeadRepo(db, reef, old.head_repo!);
+  const github = new FakeGitHubClient();
+  const workspace = reef.resolve("reef");
+  const work = landingWork(db, clock, "reef");
+  await commitThroughTaskCheckout(db, clock, workspace, work, "feature.txt", "ready\n");
+  const root = finish(db, clock, work);
+  const head = pushPrHead(github, workspace, root.id, 1);
+  recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge }, head, workspace });
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github });
+  const child = await settleRepairNotMergedBack(db, clock, workspace, root.id);
+  tearDownRepair(db, clock, workspace, child);
+  await landing.converge();
+  const door = (confirm = true) => deleteWorkspace({ name: "reef", confirm }, { ...reef.admin, db, ...deletionReaders(db, reef.resolve, landing) });
+  return { db, clock, reef, workspace, github, landing, root, child: getTask(db, child.id)!, door };
+}
+
 /** 削除の扉 → 登録の扉(register)で `reef` を `moved` の checkout に登録し直す —— 扉は checkout の origin から `repo:` を書く。`between` は
  *  削除の後・登録の前の人間の手(checkout の origin を向け替えるなど)。`moved` が出元 repo を持てば `giveHeadRepo` で足す。`landing` は
  *  扉が執行中の着地を読む盤面の収束。 */

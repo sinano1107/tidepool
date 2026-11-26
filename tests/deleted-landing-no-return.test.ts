@@ -1,8 +1,9 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
+import { appendEvent } from "../src/events.js";
 import { startWorkThroughHumanDoor } from "../src/human-verbs.js";
 import { createLanding, type Landing, landingState } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
@@ -11,12 +12,12 @@ import { startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { getTask, hasTaskBranch, listBoard, listChildren, logDecision, registerTask, type Task } from "../src/tasks.js";
-import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
+import { commitTriage, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { refreshProtectedBranch, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeLandingWorkspace, makeRemoteBackedWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace } from "./harness.js";
 import {
   attachUnsettledChild,
   boardEvents,
@@ -24,15 +25,14 @@ import {
   deletionReaders,
   fetchHeldAtToken,
   finish,
-  giveHeadRepo,
   landingWork,
   mergeOnGitHub,
   openBoard,
-  pushPrHead,
+  type RegisteredReef,
   recordPrOpenedOutsideConvergence,
+  reefWithPrRootAndChild,
   registeredReef,
-  settleRepairNotMergedBack,
-  tearDownRepair,
+  reRegister,
 } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -41,56 +41,51 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 // ADR 0421 決定3・5 と Status 追記(#3895): 削除の扉が着地を終えた task は、終わりの記録より前に自身が保護ブランチへの到達の記録を持たなければ
 // 帰り先の無い系譜の3つ目に数える。系譜の読みは、着地済みの祖先のブランチが名前の場所に無ければ飛ばす。domain 層の釘(ADR 0107)。
 
-/** `reef` に登録した checkout で PR #1 を開いた根の盤面。`window` なら registry は remote-backed で、`door` は registry の refresh の token の
- *  await(扉の唯一の await)で `during` を撃ってから削除を通す —— 出元 repo の宣言は registry の commit を要るので、その盤面の根の PR は
- *  head を持たない。`window` でなければ出元 repo を持ち、根の PR の head は push してある。 */
-async function reefBoard(merge: "external" | "escalate", { window: held = false } = {}) {
+/** remote-backed の registry に登録した `reef` で PR #1 を開いた `external` の根(head は持たない —— 出元 repo の宣言は registry の commit を
+ *  要る)。`door` は registry の refresh の token の await(扉の唯一の await)で `during` を撃ってから削除を通す。`register` は削除の後に
+ *  `reef` を登録し直す: `fresh` は同じ repo の fresh clone(根のブランチが無い)、`other` は別の repo に向けた同じ checkout(在る)。 */
+async function reefAwaitingRegistry() {
   const { db, clock } = await openBoard();
-  const { workspace: old } = held ? await makeRemoteBackedWorkspace("reef-old") : await makeLandingWorkspace("reef-old");
-  const reef = await registeredReef(old, { remoteBacked: held });
-  if (!held) giveHeadRepo(db, reef, old.head_repo!);
+  const { workspace: old } = await makeRemoteBackedWorkspace("reef-old");
+  const reef = await registeredReef(old, { remoteBacked: true });
   const github = new FakeGitHubClient();
-  const workspace = reef.resolve("reef");
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github });
   const work = landingWork(db, clock, "reef");
-  await commitThroughTaskCheckout(db, clock, workspace, work, "feature.txt", "ready\n");
+  await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), work, "feature.txt", "ready\n");
   const root = finish(db, clock, work);
-  const head = held ? undefined : pushPrHead(github, workspace, root.id, 1);
-  recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge }, head, workspace });
+  recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge: "external" }, workspace: old });
   const { window, githubAuth } = fetchHeldAtToken();
-  const door = async (during = () => {}) => {
+  const door = async (during: () => void) => {
     const deleting = deleteWorkspace({ name: "reef", confirm: true }, { ...reef.admin, db, githubAuth, ...deletionReaders(db, reef.resolve, landing) });
-    if (held) {
-      await window.entered;
-      during();
-      window.open();
-    }
+    await window.entered;
+    during();
+    window.open();
     await deleting;
   };
-  /** 削除の後に `reef` を登録し直す: `fresh` は同じ repo の fresh clone(根のブランチが無い)、`other` は別の repo に向けた同じ checkout(在る)。 */
-  const reRegister = async (shape: "fresh" | "other") => {
-    let moved: WorkspaceConfig;
+  const register = async (shape: "fresh" | "other") => {
+    let path = old.path;
     if (shape === "fresh") {
-      const path = await tempDir("tidepool-reef-fresh-");
+      path = await tempDir("tidepool-reef-fresh-");
       git(path, "clone", "--quiet", old.repo!, ".");
-      if (old.head_repo !== undefined) git(path, "remote", "add", "head-repo", old.head_repo);
       rmSync(old.path, { recursive: true, force: true });
-      moved = { ...old, path };
-    } else {
-      const { workspace: other } = await makeRemoteBackedWorkspace("reef-other");
-      git(old.path, "remote", "set-url", "origin", other.repo!);
-      if (old.head_repo !== undefined) git(old.path, "remote", "remove", "head-repo");
-      moved = { ...old, repo: other.repo, head_repo: undefined };
-    }
-    await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db, githubAuth });
-    if (moved.head_repo !== undefined) giveHeadRepo(db, reef, moved.head_repo);
-    return reef.resolve("reef");
+    } else git(old.path, "remote", "set-url", "origin", (await makeRemoteBackedWorkspace("reef-other")).workspace.repo!);
+    await createWorkspace({ name: "reef", mode: "register", path, confirm: true }, { ...reef.admin, db, githubAuth });
   };
-  return { db, clock, reef, workspace, github, landing, root, door, reRegister };
+  return { db, clock, reef, github, landing, root, door, register };
 }
 
-/** scheduler の poll(収束を撃つ)を1回回す。 */
-async function poll(c: { db: Db; clock: Awaited<ReturnType<typeof openBoard>>["clock"]; reef: Awaited<ReturnType<typeof reefBoard>>["reef"]; landing: Landing; github: FakeGitHubClient }) {
+/** `reefWithPrRootAndChild` の checkout の fresh clone に、削除の扉 → 登録の扉で `reef` を登録し直す。 */
+async function reRegisterOnFreshClone(c: Awaited<ReturnType<typeof reefWithPrRootAndChild>>) {
+  const old = c.workspace;
+  const path = await tempDir("tidepool-reef-fresh-");
+  git(path, "clone", "--quiet", old.repo!, ".");
+  git(path, "remote", "add", "head-repo", old.head_repo!);
+  await reRegister(c.db, c.reef, { ...old, path }, () => rmSync(old.path, { recursive: true, force: true }), c.landing);
+  return c.reef.resolve("reef");
+}
+
+/** scheduler の poll(収束を撃つ)を `times` 回回し、worker と console.error の spy を返す。 */
+async function poll(c: { db: Db; clock: Awaited<ReturnType<typeof openBoard>>["clock"]; reef: Pick<RegisteredReef, "resolve" | "admin">; landing: Landing; github: FakeGitHubClient }, times = 1) {
   const containers = fakeContainers();
   const slot = new Slot();
   const worker = new ScriptedWorker(c.clock);
@@ -110,29 +105,43 @@ async function poll(c: { db: Db; clock: Awaited<ReturnType<typeof openBoard>>["c
     taskExecutionCandidates: implicitTaskExecutionCandidates(c.db),
   });
   onTestFinished(() => scheduler.stop());
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  await scheduler.rerunPoll();
-  return worker;
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  for (let i = 0; i < times; i++) await scheduler.rerunPoll();
+  return { worker, errors };
 }
 
 const workChild = (db: Db, clock: { now(): Date }, parentId: string, assignee?: string) =>
   registerTask(db, { type: "work", title: "repair", purpose: "p", completion_criteria: "c", parent_id: parentId, assignee }, clock.now(), ...HUMAN_WEBUI);
-const deletedReason = (task: Task) => `the landing of "${task.title}" (${task.id}) ended when its workspace's registration was deleted, before its content reached the protected branch, so no repair can land`;
+const deletedReason = (task: Task) => `${deletedCause(task)}, so no repair can land`;
 const openQuestionsOf = (db: Db, task: Task) => listChildren(db, task.id).filter(({ type, status }) => type === "question" && status === "todo");
+
+/** `task` の pickup が、workspace の Quarantine でなく、出口が cancel だけのその task の失敗で止まり、理由が `cause` を言うこと。 */
+function expectCancelOnlyFailure(db: Db, task: Task, cause: string) {
+  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
+  expect(hasTaskBranch(db, task.id)).toBe(false);
+  const [failure] = openQuestionsOf(db, task);
+  expect(questionKindOf(failure!)).toMatchObject({ kind: "failure", cancel_option: "abandon" });
+  expect(failure!.question_items?.[0]?.options).toEqual(["abandon"]);
+  expect(failure!.purpose).toContain(`task ${task.id} has no branch to return to: ${cause}. Cancel task ${task.id}.`);
+}
+
+const deletedCause = (task: Task) => `the landing of "${task.title}" (${task.id}) ended when its workspace's registration was deleted, before its content reached the protected branch`;
 
 it.each([
   ["同じ repo の fresh clone(根のブランチが無い)", "fresh"],
   ["別の repo に向けた同じ checkout(根のブランチが在る)", "other"],
-] as const)("%s で登録し直しても、削除で着地が終わった根の下には work の子も異議の work の修理子も立たず、人間担当の work は書き始められず、registry の commit を待つ間に立った子の pickup の出口は cancel で、RCA と記憶の修理子は立つ", async (_shape, shape) => {
-  const c = await reefBoard("external", { window: true });
+] as const)("%s で登録し直しても、削除で着地が終わった根の下には work の子も異議の work の修理子も立たず、人間担当の work は書き始められず、registry の commit を待つ間に立った work の子と人間の review 子の pickup の出口は cancel で、RCA と記憶の修理子は立つ", async (_shape, shape) => {
+  const c = await reefAwaitingRegistry();
   let child!: Task;
+  let review!: Task;
   let human!: Task;
   await c.door(() => {
     child = attachUnsettledChild(c.db, c.clock, c.root.id);
+    review = registerTask(c.db, { type: "review", title: "second opinion", purpose: "p", completion_criteria: "c", parent_id: c.root.id }, c.clock.now(), ...HUMAN_WEBUI);
     human = workChild(c.db, c.clock, c.root.id, HUMAN_ACTOR_ID);
   });
   expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("workspace_deleted");
-  await c.reRegister(shape);
+  await c.register(shape);
 
   expect(() => workChild(c.db, c.clock, c.root.id)).toThrow(`no work task grows here: ${deletedReason(c.root)}`);
   const started = await startWorkThroughHumanDoor({ db: c.db, pollNow: () => {}, resolveWorkspace: c.reef.resolve, workspacesDir: join(c.reef.admin.workspacesBaseDir, "workbenches") }, human.id, () => c.clock.now(), "webui");
@@ -144,6 +153,7 @@ it.each([
   raiseObjection(c.db, entry, "redo it", c.clock.now());
   const before = listChildren(c.db, c.root.id).map(({ id }) => id);
   commitTriage(c.db, c.clock.now());
+  expect(listLog(c.db).find(({ id }) => id === entry)?.no_work_repair).toBe(true);
   const grown = listChildren(c.db, c.root.id).filter(({ id }) => !before.includes(id));
   expect(grown.map(({ type, title }) => [type, title.split(":")[0]])).toEqual([
     ["review", "rca (self)"],
@@ -152,27 +162,31 @@ it.each([
   const memoryRepair = registerTask(c.db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: c.root.id }, c.clock.now(), ...HUMAN_WEBUI);
   expect(getTask(c.db, memoryRepair.id)!.status).toBe("todo");
 
-  const worker = await poll(c);
+  const { worker } = await poll(c, 2);
 
-  // 既に在る子は素の git エラーも workspace の Quarantine も立てず、その task の失敗で止まり、出口は cancel だけ
+  // 既に在る work の子と人間の review 子は、素の git エラーも workspace の Quarantine も立てず、その task の失敗で止まり、出口は cancel だけ
   expect(worker.started.map(({ id }) => id)).not.toContain(child.id);
-  expect(openQuarantineQuestion(c.db, "workspace", "reef")).toBeUndefined();
-  expect(hasTaskBranch(c.db, child.id)).toBe(false);
-  const [failure] = openQuestionsOf(c.db, child);
-  expect(questionKindOf(failure!)).toMatchObject({ kind: "failure", cancel_option: "abandon" });
-  expect(failure!.question_items?.[0]?.options).toEqual(["abandon"]);
-  expect(failure!.purpose).toContain(`task ${child.id} has no branch to return to: the landing of "${c.root.title}" (${c.root.id}) ended when its workspace's registration was deleted`);
-  expect(failure!.purpose).not.toContain("lost refs");
+  expect(worker.started.map(({ id }) => id)).not.toContain(review.id);
+  expectCancelOnlyFailure(c.db, child, deletedCause(c.root));
+  expectCancelOnlyFailure(c.db, review, deletedCause(c.root));
 });
 
-/** PR #1 の根と、その下で merge back まで済んで収束が push した done の子。根の PR は GitHub で merge された。`observed` では盤面が外の merge を
- *  観測したが収束はまだ着地を終えていない —— 削除の扉は根も子も終え、根だけが到達の記録(`pr_merge_observed`)を持つ。`landed` では収束が
- *  内容で根の着地を終えた(`landing_finished`)。 */
+it("ブランチを失って死んだ祖先の下に既に在る work の子も、pickup は workspace の Quarantine でなくその task の失敗で止まり、出口は cancel だけ", async () => {
+  const c = await reefWithPrRootAndChild();
+  const child = attachUnsettledChild(c.db, c.clock, c.root.id);
+  // give-up はこの子を倒すので、失われた event だけを盤面の書く形で置く —— 失われた sha が作成時と違い、到達の記録も無いので根は死んでいる
+  const sha = git(c.workspace.path, "rev-parse", `task/${c.root.id}`);
+  appendEvent(c.db, { taskId: c.root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha }, at: c.clock.now() });
+
+  await poll(c);
+
+  expectCancelOnlyFailure(c.db, child, `the work of "${c.root.title}" (${c.root.id}) was lost with its task branch when the lost refs were given up`);
+});
+
+/** `reefWithPrRootAndChild` の根の PR は GitHub で merge された。`observed` では盤面が外の merge を観測したが収束はまだ着地を終えていない ——
+ *  削除の扉は根も子も終え、根だけが到達の記録(`pr_merge_observed`)を持つ。`landed` では収束が内容で根の着地を終えた(`landing_finished`)。 */
 async function mergedRootAndChild(kind: "observed" | "landed" = "observed") {
-  const c = await reefBoard(kind === "observed" ? "escalate" : "external");
-  const child = await settleRepairNotMergedBack(c.db, c.clock, c.workspace, c.root.id);
-  tearDownRepair(c.db, c.clock, c.workspace, child);
-  await c.landing.converge();
+  const c = await reefWithPrRootAndChild(kind === "observed" ? "escalate" : "external");
   await mergeOnGitHub(c.workspace, c.root.id);
   c.github.scriptMergedOutside(1);
   if (kind === "observed") await c.landing.tick("outside_merge");
@@ -181,7 +195,7 @@ async function mergedRootAndChild(kind: "observed" | "landed" = "observed") {
     await c.landing.converge();
   }
   expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe(kind === "observed" ? "merge_observed" : "landed");
-  return { ...c, child: getTask(c.db, child.id)! };
+  return c;
 }
 
 it("削除の前に自身の到達の記録を持つ根は帰り先の無い系譜に数えず修理が立ち、その記録を継がない done の子は数える", async () => {
@@ -199,12 +213,12 @@ it.each([
   ["削除の前に merge の観測を持つ根", "observed"],
 ] as const)("fresh clone で登録し直した名前で、%s の下に足した子は拾われて保護ブランチから分かれ、失われた event は書かれない", async (_root, kind) => {
   const c = await mergedRootAndChild(kind);
-  await c.door();
-  const fresh = await c.reRegister("fresh");
+  const fresh = await reRegisterOnFreshClone(c);
   const added = workChild(c.db, c.clock, c.root.id);
 
-  const worker = await poll(c);
+  const { worker, errors } = await poll(c);
 
+  expect(errors).not.toHaveBeenCalled();
   expect(worker.started.map(({ id }) => id)).toEqual([added.id]);
   expect(openQuarantineQuestion(c.db, "workspace", "reef")).toBeUndefined();
   expect(git(fresh.path, "rev-parse", `task/${added.id}`)).toBe(git(fresh.path, "rev-parse", "refs/remotes/origin/main"));
@@ -218,20 +232,49 @@ it("着地が終わっていない着地済みの祖先のブランチが名前�
   const rootTip = git(c.workspace.path, "rev-parse", `task/${c.root.id}`);
   git(c.workspace.path, "branch", "-D", `task/${c.root.id}`);
 
-  const worker = await poll(c);
+  const { worker } = await poll(c);
 
   expect(worker.started).toEqual([]);
   expect(hasTaskBranch(c.db, added.id)).toBe(false);
   expect(getTask(c.db, openQuarantineQuestion(c.db, "workspace", "reef")!.id)!.purpose).toContain(`was: ${rootTip} refs/heads/task/${c.root.id}`);
 });
 
-it("着地済みの祖先のブランチが名前の場所で読めなければ、系譜の読みは「無い」と読んで飛ばさずに投げる(ADR 0427 決定1)", async () => {
-  const c = await mergedRootAndChild("landed");
-  await c.door();
-  const fresh = await c.reRegister("fresh");
-  const added = workChild(c.db, c.clock, c.root.id);
-  mkdirSync(join(fresh.path, ".git", "refs", "heads", "task"), { recursive: true });
-  writeFileSync(join(fresh.path, ".git", "refs", "heads", "task", c.root.id), "not a sha\n");
+/** `place` の packed-refs に `ref` の壊れた行を並びの位置に置く —— for-each-ref の名指しの読みは、探す範囲の頭のこの行を黙って飛ばす。 */
+function breakPackedRef(place: WorkspaceConfig, ref: string): void {
+  const packed = join(place.path, ".git", "packed-refs");
+  const [header, ...lines] = readFileSync(packed, "utf8").split("\n").filter(Boolean);
+  const sorted = [...lines, `zzzz ${ref}`].sort((a, b) => (a.split(" ")[1]! < b.split(" ")[1]! ? -1 : 1));
+  writeFileSync(packed, `${[header, ...sorted].join("\n")}\n`);
+}
 
-  expect(() => resolveTaskBranchLineage(c.db, fresh, added, "refs/remotes/origin/main")).toThrow(`git could not read a ref (warning: ignoring broken ref refs/heads/task/${c.root.id})`);
+it.each([
+  ["壊れた loose ref", "loose"],
+  ["packed-refs の壊れた行", "packed"],
+] as const)("着地済みの祖先のブランチが名前の場所で%sで読めなければ、系譜の読みは「無い」と読んで飛ばさずに投げる(ADR 0427 決定1)", async (_form, form) => {
+  const c = await mergedRootAndChild("landed");
+  const fresh = await reRegisterOnFreshClone(c);
+  const added = workChild(c.db, c.clock, c.root.id);
+  const ref = `refs/heads/task/${c.root.id}`;
+  if (form === "loose") {
+    mkdirSync(join(fresh.path, ".git", "refs", "heads", "task"), { recursive: true });
+    writeFileSync(join(fresh.path, ".git", ref), "not a sha\n");
+  } else breakPackedRef(fresh, ref);
+
+  expect(() => resolveTaskBranchLineage(c.db, fresh, added, "refs/remotes/origin/main")).toThrow(
+    form === "loose" ? `fatal: git show-ref: bad ref ${ref}` : `fatal: unexpected line in .git/packed-refs: zzzz ${ref}`,
+  );
+});
+
+it("着地済みの祖先のブランチが名前の場所に在るかを読む前に、系譜の読みは基準と比べる(ADR 0370 決定1)", async () => {
+  const c = await mergedRootAndChild("landed");
+  const fresh = await reRegisterOnFreshClone(c);
+  const added = workChild(c.db, c.clock, c.root.id);
+
+  expect(() =>
+    resolveTaskBranchLineage(c.db, fresh, added, "refs/remotes/origin/main", {
+      beforeRefRead: () => {
+        throw new Error("compared before reading the ancestor's branch");
+      },
+    }),
+  ).toThrow("compared before reading the ancestor's branch");
 });
