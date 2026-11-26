@@ -1152,26 +1152,29 @@ export function countedAncestors(db: Db, workspace: string, task: Pick<Task, "pa
   return ancestorsFromTop(db, task).filter((a) => a.type === "work" && a.workspace === workspace && hasTaskBranch(db, a.id, asOf));
 }
 
-/** ADR 0380 決定1・3: 数える祖先のうち、効いている失われた event を持ち透明でないもの(帰り先を奪う祖先)を上から —— `dead` は done の
- *  (死んだ)祖先、それ以外は作り直されるまで帰り先を奪う未決着の祖先(spec #3273 group H)。記録だけで読み、git を当てない。`asOf` では done も `task_completed` で
+/** ADR 0380 決定1・3: 数える祖先のうち、帰り先を奪うものを上から —— 効いている失われた event を持ち透明でないもの(`dead` は done の
+ *  (死んだ)祖先、それ以外は作り直されるまで帰り先を奪う未決着の祖先、spec #3273 group H)と、ADR 0421 決定3 の削除の扉が着地を終えた
+ *  到達の記録の無い祖先(`deleted`、いつも done)。記録だけで読み、git を当てない。`asOf` では done も `task_completed` で
  *  その event より前に読む —— 未決着のまま失われ、後で作り直して完了した祖先を、当時死んでいたと読まない。 */
-export function lostAncestorsNotTransparent(db: Db, workspace: string, task: Pick<Task, "parent_id">, asOf?: number): Array<{ ancestor: Task; dead: boolean }> {
+export function ancestorsTakingReturn(db: Db, workspace: string, task: Pick<Task, "parent_id">, asOf?: number): Array<{ ancestor: Task; dead: boolean; deleted: boolean }> {
   const counted: string[] = [];
-  const opaque: Array<{ ancestor: Task; dead: boolean }> = [];
+  const opaque: Array<{ ancestor: Task; dead: boolean; deleted: boolean }> = [];
   for (const ancestor of countedAncestors(db, workspace, task, asOf)) {
     const lost = taskBranchLostInForce(db, ancestor.id, asOf);
     const done = asOf === undefined ? ancestor.status === "done" : latestEventOfTask(db, ancestor.id, "task_completed", asOf) !== undefined;
-    if (lost && !(done && lostTaskIsTransparent(db, ancestor.id, lost, counted, asOf))) opaque.push({ ancestor, dead: done });
+    if (lost && !(done && lostTaskIsTransparent(db, ancestor.id, lost, counted, asOf))) opaque.push({ ancestor, dead: done, deleted: false });
+    else if (!lost && landingEndedByDeletionUnreached(db, ancestor.id, asOf)) opaque.push({ ancestor, dead: true, deleted: true });
     else counted.push(ancestor.id);
   }
   return opaque;
 }
 
-/** ADR 0380 決定2: task 自身の系譜(列か導出の workspace、ADR 0372 決定1)が数える死んだ祖先、無ければ undefined。 */
-function deadAncestorCountedBy(db: Db, task: Pick<Task, "workspace" | "parent_id">, asOf?: number): Task | undefined {
+/** ADR 0380 決定2: task 自身の系譜(列か導出の workspace、ADR 0372 決定1)が数える死んだ祖先、無ければ undefined。`lostOnly` は削除の扉が
+ *  着地を終えた祖先(ADR 0421 決定3)を数えない —— 失われた ref の give-up が倒す範囲の読み。 */
+function deadAncestorCountedBy(db: Db, task: Pick<Task, "workspace" | "parent_id">, asOf?: number, lostOnly = false): Task | undefined {
   const name = derivedWorkspace(db, task);
   // 導出が既定を指す(null)なら、列を持つ祖先は無く、数える祖先も無い
-  return name === null ? undefined : lostAncestorsNotTransparent(db, name, task, asOf).find(({ dead }) => dead)?.ancestor;
+  return name === null ? undefined : ancestorsTakingReturn(db, name, task, asOf).find(({ dead, deleted }) => dead && !(lostOnly && deleted))?.ancestor;
 }
 
 /** ADR 0380 決定5: `parentId` の下に立つ子の系譜が数える死んだ task —— 親の workspace で問い(親自身が死んでいれば親)、子が別の
@@ -1192,6 +1195,31 @@ export function hasTaskBranchInForce(db: Db, taskId: string): boolean {
 
 /** spec #3273 group H: 内容が保護ブランチに届いた着地の記録。ADR 0380 決定1: 失われたので終えた記録・`nothing_to_land`・閉じた PR は数えない。 */
 const REACHED_PROTECTED_BRANCH_KINDS = ["local_merge_executed", "pr_merged", "pr_merge_observed", "landing_finished"];
+
+/** task `taskId` 自身が、id が `before` より前の `kinds` の event を持つか。 */
+function hasRecordBefore(db: Db, taskId: string, kinds: string[], before = Number.MAX_SAFE_INTEGER): boolean {
+  return db.prepare(`SELECT 1 FROM events WHERE task_id = ? AND kind IN (${kinds.map(() => "?").join(", ")}) AND id < ?`).get(taskId, ...kinds, before) !== undefined;
+}
+
+/** ADR 0421 決定3 と Status 追記(#3895): 削除の扉が着地を終えた task(`landing_ended_workspace_deleted`)のうち、終わりの記録より前に自身が
+ *  内容の保護ブランチへの到達の記録を持たないもの —— 帰り先の無い系譜の3つ目。子は根の記録を継がない(merge の後に merge back した修理は
+ *  届いていないことがある)。記録だけで読み、`asOf` を渡せばその event より前の記録で読む。 */
+export function landingEndedByDeletionUnreached(db: Db, taskId: string, asOf?: number): boolean {
+  const ended = latestEventOfTask(db, taskId, "landing_ended_workspace_deleted", asOf);
+  return ended !== undefined && !hasRecordBefore(db, taskId, REACHED_PROTECTED_BRANCH_KINDS, ended.id);
+}
+
+/** ADR 0421 決定5 と Status 追記: 着地済み —— 自身が内容の保護ブランチへの到達の記録か、運ぶ内容が無かった記録(`nothing_to_land`)を持つ。 */
+export function hasLanded(db: Db, taskId: string): boolean {
+  return hasRecordBefore(db, taskId, [...REACHED_PROTECTED_BRANCH_KINDS, "nothing_to_land"]);
+}
+
+/** 帰り先を奪う死んだ祖先 `ancestor` が成果を持たない理由 —— 削除の扉が着地を終えた祖先には、失われた ref の文を流用しない(ADR 0421 決定3)。 */
+export function noReturnCause(db: Db, ancestor: Pick<Task, "id" | "title">, asOf?: number): string {
+  return landingEndedByDeletionUnreached(db, ancestor.id, asOf)
+    ? `the landing of "${ancestor.title}" (${ancestor.id}) ended when its workspace's registration was deleted, before its content reached the protected branch`
+    : `the work of "${ancestor.title}" (${ancestor.id}) was lost with its task branch when the lost refs were given up`;
+}
 
 /** ADR 0380 決定1 / ADR 0375 決定2: handoff だけ —— 失われた sha が、失われた event の直前の `task_branch_created` の作成時の sha と同じ。
  *  作成時の sha を持たない `task_branch_created` は編集があった側。 */
@@ -2242,7 +2270,7 @@ export function fellLostBranchAttachments(db: Db, lostIds: string[], questionId:
   const felled = rows.filter(
     (row) =>
       dependsOnBranch({ type: row.type, rca: row.rca === 1, audit: row.audit === 1, approval: row.question_pending_child !== null }) &&
-      deadAncestorCountedBy(db, row) !== undefined,
+      deadAncestorCountedBy(db, row, undefined, true) !== undefined,
   );
   cancelUnsettledSubtree(db, felled.map(({ id }) => id), BOARD_ACTOR_ID, now, { kind: "task_cancelled", origin_question_id: questionId }, "board");
 }
@@ -4260,11 +4288,12 @@ function discardingAncestor(db: Db, taskId: string, asOf?: number): Task | undef
 /** これから立つ子に帰り先が無い理由(ADR 0301 決定1)、帰り先があれば undefined。親と祖先を `parent_id` だけでたどって読む ——
  *  (a) 系譜のルートが保護ブランチを対象にする仕事(受験者でない work か、主題の無い review = 独立監査)か question でない(新しいルートの種類も
  *  既定でこちら)、(b) cancelled の work が祖先にある(root に最も近いものを名指す、ADR 0271 決定1)か、親自身が cancelled(型を
- *  問わない、ADR 0268 決定3)、(c) 子の系譜が死んだ task を数える(ADR 0380 決定2・5 —— 親の workspace で、子が別の workspace
+ *  問わない、ADR 0268 決定3)、(c) 子の系譜が死んだ task(ブランチを失った task か、削除の扉が着地を終えた到達の記録の無い task —— ADR 0421
+ *  決定3)を数える(ADR 0380 決定2・5 —— 親の workspace で、子が別の workspace
  *  `childWorkspace` を明示すればその系譜でも問う)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
  *  知りたい読み手もその task を親として問う。`asOfEventId` を渡せば (b) はその event より前に記録された cancel だけを数える
- *  (当時版の Authority —— ADR 0301 決定5。(a) のルートの種類は変わらない)。(c) も失われた event・`task_branch_created` をその event より前で
- *  読む(ADR 0380 帰結)。 */
+ *  (当時版の Authority —— ADR 0301 決定5。(a) のルートの種類は変わらない)。(c) も失われた event・`task_branch_created`・削除の扉の終わりの
+ *  記録をその event より前で読む(ADR 0380 帰結)。 */
 export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: number, childWorkspace?: string): string | undefined {
   const parent = getTask(db, parentId);
   if (!parent) return undefined;
@@ -4284,7 +4313,7 @@ export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: n
   if (db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${cancelledSql("t", asOfEventId)}`).get(parentId)) return `its parent "${parent.title}" (${parent.id}) is cancelled, so no repair can land`;
   // ADR 0380 決定2・6: 失われた側は木でなく子の系譜で読む —— cancel の項は上の `parent_id` のまま
   const dead = deadAncestorOfChild(db, parentId, childWorkspace, asOfEventId);
-  if (dead) return `the work of "${dead.title}" (${dead.id}) was lost with its task branch when the lost refs were given up, so no repair can land`;
+  if (dead) return `${noReturnCause(db, dead, asOfEventId)}, so no repair can land`;
   return undefined;
 }
 

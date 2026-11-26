@@ -100,6 +100,7 @@ import {
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
   LostTaskBranchPresentError,
+  NoReturnLineageError,
   openInterviewRoom,
   PickupGateError,
   pickupGate,
@@ -669,6 +670,8 @@ export function startScheduler(deps: {
           if (err instanceof FirstCaptureRegistryReadError) throw err;
           // ADR 0392 決定2: 失われた event が効いたまま在る `task/<id>` はその task の失敗(出口は cancel)—— 名前の場所を quarantine しない
           if (err instanceof LostTaskBranchPresentError) throw err;
+          // ADR 0421 決定3: 帰り先の無い系譜の task の fork 元もその task の失敗(出口は cancel)
+          if (err instanceof NoReturnLineageError) throw err;
           // ADR 0399 決定5: a task's recorded repo disagreement goes to its normal failure question.
           if (err instanceof DeclaredRepoMismatchError) throw err;
           const failedPlace = err instanceof PickupGateError ? err.place : place;
@@ -705,7 +708,7 @@ export function startScheduler(deps: {
           onSpawnFailed(
             picked.id,
             sessionId,
-            err instanceof UnhideableTaskSettingsError ? { ...failure, kind: "unhideable-task-settings" } : err instanceof LostTaskBranchPresentError ? { ...failure, kind: "lost-task-branch-present" } : failure,
+            err instanceof UnhideableTaskSettingsError ? { ...failure, kind: "unhideable-task-settings" } : err instanceof LostTaskBranchPresentError ? { ...failure, kind: "lost-task-branch-present" } : err instanceof NoReturnLineageError ? { ...failure, kind: "no-return-lineage" } : failure,
           ),
       );
     }

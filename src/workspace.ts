@@ -41,6 +41,7 @@ import {
   displayWorktreePath,
   git,
   gitAnswers,
+  gitListing,
   gitlinkChanges,
   gitReporting,
   gitWithInput,
@@ -129,12 +130,14 @@ import { isSettled } from "./task-status.js";
 import {
   ancestorsFromTop,
   ancestorsSql,
+  ancestorsTakingReturn,
   carriesReadOnly,
   countedAncestors,
   derivedWorkspaceSql,
   fellLostBranchAttachments,
   fillEmptyWorkspace,
   getTask,
+  hasLanded,
   hasStartedWork,
   hasTaskBranch,
   hasTaskBranchInForce,
@@ -144,8 +147,9 @@ import {
   interviewRootIdOf,
   issueRefPlaceholder,
   keepsCheckoutAsRecord,
-  lostAncestorsNotTransparent,
+  landingEndedByDeletionUnreached,
   nearestFilledAncestor,
+  noReturnCause,
   openLocalMergeQuestionIds,
   readableInterviewRooms,
   registerFailureQuestion,
@@ -2253,6 +2257,7 @@ function returnOwnerRefusal(db: Db, named: WorkspaceConfig, lineage: string | un
 function returnBranchOf(db: Db, named: WorkspaceConfig, task: Task, verb: "take in" | "complete", now: Date): { lineage: string | undefined; ref: string; name: string; sha: string } {
   // ADR 0380 決定3: 帰り先なしを保護ブランチと読まない
   const lost = noReturnAncestor(db, named, task);
+  if (lost && landingEndedByDeletionUnreached(db, lost.id)) throw new DomainError(`cannot ${verb}: ${noReturnCause(db, lost)}, so this task has no branch to return into.`);
   if (lost) throw new DomainError(lostBranchRefusal(verb, `${taskBranch(lost.id)}, the branch this task returns into,`, !isSettled(lost.status)));
   const lineage = lineageTaskBranch(db, named, task, () => now);
   const ref = lineage ? `refs/heads/${lineage}` : exactProtectedBranchRef(named);
@@ -2743,11 +2748,12 @@ function filledFrom(db: Db, task: Pick<Task, "workspace" | "parent_id">): string
 }
 
 /** ADR 0380 決定3: 帰り先なし —— 数える祖先に、効いている失われた event を持ち透明でない祖先がいる(死んだ祖先。間に無事な祖先を挟んでも)。
- *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。帰り先を奪う最初の祖先を返し、無ければ undefined。記録だけで読み、git を当てない。
+ *  spec #3273 group H: 未決着の失われた祖先も、作り直されるまで帰り先なし。ADR 0421 決定3: 削除の扉が着地を終えた到達の記録の無い祖先も。
+ *  帰り先を奪う最初の祖先を返し、無ければ undefined。記録だけで読み、git を当てない。
  *  ADR 0414 決定2: 固定の前の読み(`beforeFixing`)では、同じ瞬間の固定が作り直す未決着の祖先は帰り先を奪わない。 */
 export function noReturnAncestor(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "type" | "parent_id">, { beforeFixing = false } = {}): Task | undefined {
   if (transparentToLineage(task.type)) return undefined;
-  return lostAncestorsNotTransparent(db, workspace.name, task).find(({ ancestor }) => !beforeFixing || isSettled(ancestor.status))?.ancestor;
+  return ancestorsTakingReturn(db, workspace.name, task).find(({ ancestor }) => !beforeFixing || isSettled(ancestor.status))?.ancestor;
 }
 
 /** spec #3273 group H(pin C21): 失われたタスクブランチ `branch` で人間の扉が拒む文。`recreate` は `start_work` の固定が作り直せる
@@ -2810,11 +2816,20 @@ export function resolveTaskBranchLineage(
     }
     const base = candidate ?? readProtectedRef();
     readingRefs();
+    // ADR 0421 決定5: 着地済みの祖先のブランチが名前の場所に無ければ読まずに飛ばす —— 内容は保護ブランチに在り、失われた event も書かない。
+    // 在るかは比べた後に読み(ADR 0370 決定1)、読めない ref は「無い」と読まない(ADR 0427 決定1)
+    if (hasLanded(db, ancestor.id) && !taskBranchPresent(workspace, ancestor.id)) continue;
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
     else if (!effect.historyConverged) outlivedForkSource = true;
   }
   return { branch: candidate, outlivedForkSource };
+}
+
+/** `task/<id>` が名前の場所に在るか —— git が件を落とした並びは投げ、「無い」と読まない(ADR 0427 決定1、`gitListing`)。 */
+function taskBranchPresent(workspace: WorkspaceConfig, taskId: string): boolean {
+  const ref = `refs/heads/${taskBranch(taskId)}`;
+  return gitListing(workspace.path, ["for-each-ref", "--format=%(refname)", ref]).split("\n").includes(ref);
 }
 
 /** ADR 0372 決定4: 系譜に数える祖先(`countedAncestors`)。固定の前の読み(ADR 0414 決定2)では、同じ瞬間の固定が採る祖先 —— 固定する祖先で、
@@ -2904,6 +2919,16 @@ export class LostTaskBranchPresentError extends Error {
   }
 }
 
+/** 帰り先の無い系譜の task の fork 元を問われた —— その task の失敗で、出口は cancel(ADR 0421 決定3。ADR 0392 決定2 と同じく、名前の場所を
+ *  quarantine しない)。登録の床と人間の扉が先に拒むので、届くのは削除の扉が着地を終える前に登録された task だけである。 */
+export class NoReturnLineageError extends Error {
+  constructor(db: Db, workspace: WorkspaceConfig, task: Task, beforeFixing: boolean) {
+    const ancestor = noReturnAncestor(db, workspace, task, { beforeFixing })!;
+    const cause = landingEndedByDeletionUnreached(db, ancestor.id) ? noReturnCause(db, ancestor) : "a task branch in its lineage was lost";
+    super(`task ${task.id} has no branch to return to: ${cause}. Cancel task ${task.id}.`);
+  }
+}
+
 /** タスクブランチを切る sha(ADR 0053)。面接室で走る受験者と root は、面接室が提供する切る元から切る(ADR 0386 決定1 / ADR 0276 決定1)。
  *  ADR 0362 決定2: 作成と完了の門が同じ出所を読む。 */
 export function taskForkSource(db: Db, workspace: WorkspaceConfig, task: Task, now: () => Date): string {
@@ -2918,7 +2943,7 @@ function lineageForkSource(db: Db, workspace: WorkspaceConfig, task: Task, now: 
   const base = exactProtectedBranchRef(checked);
   const lineage = resolveTaskBranchLineage(db, workspace, task, base, { beforeFixing });
   // ADR 0380 決定3: 帰り先なしの task の fork 元は問われない(spec #3273 group H)—— 保護ブランチから切らない
-  if (lineage.noReturn) throw new Error(`task ${task.id} has no branch to return to: a task branch in its lineage was lost`);
+  if (lineage.noReturn) throw new NoReturnLineageError(db, workspace, task, beforeFixing !== undefined);
   return { branch: lineage.branch ?? protectedBranch(checked), sha: git(workspace.path, "rev-parse", `${lineage.branch ?? base}^{commit}`) };
 }
 
