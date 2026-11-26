@@ -106,8 +106,9 @@ it("別の repo で登録し直した名前の、PR を開いた根は、運ぶ�
 });
 
 /** 旧い repo で拾われ PR #1 を開いた根に修理が載った盤面で、`hold` が止める await の間に `during` を撃つ。`hold` は収束に足す材料を返せる。
- *  既定の `during` は registry の `path:` を同じ repo の clone へ手で書き換え、古い checkout を消す —— 削除の扉は着地の執行中を拒むので
- *  (ADR 0421 決定4 追記)、await の間に宣言が変わる形は手編集だけである。`door` は `during` が投げたもの。 */
+ *  既定の `during` は registry の `path:` を同じ repo の clone へ手で書き換え、古い checkout を消す —— 削除の扉は着地の執行中を拒む
+ *  (ADR 0421 決定4 追記)。`repo:` の手編集と出元 repo の差し替えは、await の間では名前の門が workspace の Quarantine で止める。
+ *  `door` は `during` が投げたもの。 */
 async function changedDuringAwait(
   hold: (github: FakeGitHubClient) => { entered: Promise<void>; open: () => void; deps?: Partial<LandingDeps> },
   during: (fixture: { db: Db; reef: RegisteredReef; old: WorkspaceConfig; landing: Landing }) => Promise<void> = movedToClone,
@@ -207,7 +208,8 @@ it("PR の head を取る token の await の間の削除の扉は、push する
   expect(promotionFailures(db, root.id).map(({ purpose }) => purpose).join("\n")).not.toContain("now declares");
 });
 
-// 釘(#3699): 保護ブランチの写しの読み直し(`refreshProtectedBranch`)の token の await。窓に入らなければ `changedDuringAwait` は進まない
+// 保護ブランチの写しの読み直し(`refreshProtectedBranch`)の token の await の後も、根を読む前に今の宣言を読み直す。窓に入らなければ
+// `changedDuringAwait` は進まない
 it("merge 済みの根が保護ブランチの写しを読み直す token の await の間に registry の path: を同じ repo の clone へ手で書き換えると、根だけが path の変更で止まる", async () => {
   const { db, root } = await changedDuringAwait((github) => {
     github.scriptMergedOutside(1);
