@@ -414,15 +414,32 @@ const refusalNamingPaths = (fix: string, paths: string[], { verb = "complete_tas
  *  後始末を繋ぐ(ADR 0331 決定6 の畳み方)。資源の停止は登録しない。worker への tool error は付随で、session はもう終わっている。
  *  出題の写しが root の worktree を読む手も同じ扱い(#3031 の決定)。ADR 0423 決定6: 文は止まった手を示し、原因は断定しない。 */
 function forceReclaimOnWorkerTreeTimeout(deps: McpDeps, task: Task, workspace: RunPlace, err: WorkerTreeGitTimeoutError, at = "at the completion gate"): never {
-  registerFailureAndMarkTeardown(
-    deps.db,
+  reclaimSession(
+    deps,
     task,
     `${err.message}: ${task.title}`,
     `${err.message} ${at}, so the board ended this session.` +
       ` If the release cannot read the task checkout at ${workspace.path} either, the board keeps it; ${KEPT_TASK_CHECKOUT.beyondBranch}`,
-    deps.clock.now(),
-    KEPT_TASK_CHECKOUT.retry,
+    workspace,
   );
+}
+
+/** ADR 0424 決定2・3: agent に直せない失敗は拒まず、盤面が見た失敗の文を載せた failure question を登録して session を回収する。
+ *  資源の停止は登録しない —— 観測者は後始末。`workspace` が無ければ後始末が自分で解く。 */
+function reclaimUnfixable(deps: McpDeps, task: Task, verb: string, err: unknown, workspace?: RunPlace): never {
+  reclaimSession(
+    deps,
+    task,
+    `${verb} failed: ${task.title}`,
+    `${verb} hit a failure this task cannot fix, so the board ended this session. The failure: ${err instanceof Error ? err.message : String(err)}`,
+    workspace,
+  );
+}
+
+/** 回収の経路1本: failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に後始末を繋ぐ(ADR 0331 決定6 の畳み方)。
+ *  agent への tool error は付随で、session はもう終わっている。 */
+function reclaimSession(deps: McpDeps, task: Task, title: string, reason: string, workspace: RunPlace | undefined): never {
+  registerFailureAndMarkTeardown(deps.db, task, title, reason, deps.clock.now(), KEPT_TASK_CHECKOUT.retry);
   reclaimIntoTeardown(teardownDeps(deps), deps.containers, task.id, deps.slot.currentSessionId!, workspace);
   throw new DomainError(SESSION_OVER_TOOL_ERROR);
 }
@@ -459,6 +476,7 @@ function runReleasingVerb(
   attributedTaskId: string | null,
   verb: (task: Task) => (actorId: string, now: Date) => object,
   gate?: (task: Task) => TaskCheckoutPlace | undefined,
+  reclaimAs?: string,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
     const workspace = gate?.(task);
@@ -467,16 +485,23 @@ function runReleasingVerb(
     // 後始末に入った(GLOSSARY.md「後始末」)。枠を握っているのは task ではなく
     // session であり、この事実は再起動をまたぐので行にも持つ(ADR 0109 決定5)。
     // 記録と印は同じ transaction(issue #2025)—— 間で落ちると印の無い決着済み session が残る。
-    const result = deps.db.transaction(() => {
-      const now = deps.clock.now();
-      const recorded = record(attributedActorId(deps, task), now);
-      // ADR 0363 決定3: 完了の門が掛かる task を門なしに `done` へ決着させた verb は、tip を記録へ置かずに完了させるので記録ごと巻き戻す
-      if (!gate && completionTreeGateApplies(task) && getTask(deps.db, task.id)?.status === "done") {
-        throw new Error(`task ${task.id}: a verb settled it done without the completion gate`);
-      }
-      markTeardown(deps.db, task.id, now);
-      return recorded;
-    })();
+    let result: object;
+    try {
+      result = deps.db.transaction(() => {
+        const now = deps.clock.now();
+        const recorded = record(attributedActorId(deps, task), now);
+        // ADR 0363 決定3: 完了の門が掛かる task を門なしに `done` へ決着させた verb は、tip を記録へ置かずに完了させるので記録ごと巻き戻す
+        if (!gate && completionTreeGateApplies(task) && getTask(deps.db, task.id)?.status === "done") {
+          throw new Error(`task ${task.id}: a verb settled it done without the completion gate`);
+        }
+        markTeardown(deps.db, task.id, now);
+        return recorded;
+      })();
+    } catch (err) {
+      // ADR 0424 決定2: `reclaimAs` の verb では記録の transaction の型の無い失敗(CONSTRAINT・BUSY)も agent に直せない —— 巻き戻った後に回収する
+      if (reclaimAs === undefined || err instanceof DomainError) throw err;
+      reclaimUnfixable(deps, task, reclaimAs, err, workspace);
+    }
     deps.slot.enterTeardown();
     const reclaimed = deps.containers?.reclaimed(String(deps.slot.currentSessionId)) ?? Promise.resolve();
     void reclaimed.then(() => runTeardown(teardownDeps(deps), task.id, { ...teardownStep(deps.db, task.id), workspace }));
@@ -833,8 +858,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "get_current_task's interview_targets with the same title, the probe as its purpose and the same completion criteria, and " +
           "this task stays blocked until every answer settles; once they settle you resume and finish with complete_interview. If the " +
           "audit rejects it, you resume with its findings in your history and pose again. Once answer tasks are registered the probe " +
-          "is not posed again. The answer tasks never read the rubric. A target the default agent cannot run is refused by name; you " +
-          "cannot fix that, so escalate. " +
+          "is not posed again. The answer tasks never read the rubric. If a target cannot run as the default agent, the board ends this session " +
+          "and asks a human. " +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
           title: requiredTextSchema,
@@ -856,11 +881,21 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           },
           (task) => {
             // ADR 0363 決定1〜3 の Status 追記: root の名前の場所は記録にある面接室 —— 実環境を解かないので resolver を渡さない。root では
-            // undefined にならない(開いていなければ PlaceNotOpenError)
-            const place = taskRunPlaceForBoard(deps.db, task, undefined)!;
+            // undefined にならない(開いていなければ PlaceNotOpenError —— 盤面の記録の食い違いなので回収し、解放する場所は後始末が解く)
+            let place: TaskCheckoutPlace;
+            try {
+              place = taskRunPlaceForBoard(deps.db, task, undefined)!;
+            } catch (err) {
+              reclaimUnfixable(deps, task, "pose_probe", err);
+            }
             assertPosable(deps.db, task);
             if (deps.taskExecutionCandidates) {
-              assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, ESCALATE_UNFIXABLE);
+              // ADR 0424 決定2: 走れない対象は registry を直す人間にしか直せない —— 拒否は人間の扉にだけ残し、ここは回収する
+              try {
+                assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName);
+              } catch (err) {
+                reclaimUnfixable(deps, task, "pose_probe", err, place);
+              }
             }
             try {
               head = commitRoomCopy(deps.db, place, task.id);
@@ -879,11 +914,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
                   { verb: "pose_probe" },
                 );
               }
-              // ADR 0367 決定1 / ADR 0359 決定4: 写しの host と面接室の側の失敗は資源を止めずに拒むだけ。
-              throw new DomainError("The board could not record your probe's environment in the interview room. Retry pose_probe or escalate.");
+              // ADR 0424 決定2: 写しの host・面接室の側・盤面の不変条件の失敗は root に直せない
+              reclaimUnfixable(deps, task, "pose_probe", err, place);
             }
             return place;
           },
+          "pose_probe",
         );
       },
     );

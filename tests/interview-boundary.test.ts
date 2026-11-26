@@ -142,7 +142,7 @@ it("worker の MCP からは interview を登録できない —— 分解の子
   expect(board.map((task: any) => task.type)).not.toContain("interview");
 });
 
-it("既定 agent が走らせられない対象(entry に無い Provider・導出できない advisor)は、登録の扉(Register API・管理MCP)と出題が名指して拒み、出題の拒否は escalate を指す(ADR 0253 決定3)", async () => {
+it("既定 agent が走らせられない対象(entry に無い Provider・導出できない advisor)は、登録の扉(Register API・管理MCP)が名指して拒み、同じ対象の出題は session を回収して failure question に名指す(ADR 0253 決定3 / ADR 0424 決定2)", async () => {
   t = await boot();
   const ghost = { provider: "anthropic", model: "claude-ghost-1-0", effort: "high" };
   for (const target of [sol, ghost]) {
@@ -158,14 +158,21 @@ it("既定 agent が走らせられない対象(entry に無い Provider・導�
   expect(viaMcp.content[0].text).toContain("cannot run as fake-worker");
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json).toEqual([]);
 
-  // 登録の後に既定 agent の entry から Provider が外れた盤面: 出題が拒み、何も登録されない
+  // 登録の後に既定 agent の entry から Provider が外れた盤面: 同じ対象を人間の扉は今の文で拒み、root の出題は回収して出題も監査も登録しない
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   definition.provider = [{ name: "openai", advisor: false }];
+  const again = await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] });
+  expect(again.status).toBe(400);
+  expect(again.json.error).toContain(`${JSON.stringify(opus46)} cannot run as fake-worker`);
   const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
   expect(posed.isError).toBe(true);
-  expect(posed.content[0].text).toContain(`${JSON.stringify(opus46)} cannot run as fake-worker`);
-  expect(posed.content[0].text).toContain("escalate");
-  expect((await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === root.id)).toEqual([]);
+  expect(posed.content[0].text).toContain("this session is over");
+  expect(t.containers.forceReclaims).toEqual([String(sessionId(t.db, root.id))]);
+  const [failure, ...others] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === root.id);
+  expect(others).toEqual([]);
+  expect(failure).toMatchObject({ type: "question", title: expect.stringContaining("pose_probe"), question_cancel_option: "abandon" });
+  expect(failure.purpose).toContain(`${JSON.stringify(opus46)} cannot run as fake-worker`);
+  expect(await servedQuarantineQuestion(t, "workspace", root.id)).toBeUndefined();
 });
 
 /** その task の worker MCP の tools/list の名前。 */
@@ -1057,6 +1064,7 @@ it("root の checkout が gitlink を足していれば、出題は path を名�
   expect(posed.isError).toBe(true);
   expect(posed.content[0].text).toContain("call pose_probe again");
   expect(posed.content[0].text.split("\n")).toContain("- mod");
+  expect(t.containers.forceReclaims).toEqual([]);
   expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
 });
 
