@@ -1222,10 +1222,12 @@ export function landingEndedByDeletionUnreached(db: Db, taskId: string, asOf?: n
   return ended !== undefined && !hasRecordBetween(db, [taskId], REACHED_PROTECTED_BRANCH_KINDS, 0, ended.id);
 }
 
-/** ADR 0421 決定5 と Status 追記: 系譜の読みが「着地済み」と数える祖先の記録 —— 着地が終わり(`landingEnded`)、自身が内容の保護ブランチへの
- *  到達の記録か、運ぶ内容が無かった記録(`nothing_to_land`)を持つ。行の着地の状態 `landed`(`landing_finished` だけ)より広い。 */
+/** ADR 0421 決定5 と Status 追記: 系譜の読みが「着地済み」と数える祖先の記録 —— 着地がまだ終わっていない完了 task(`landingUnendedSql`、
+ *  収束の候補と同じ読み —— local 着地を執行した根も外れる、ADR 0289 決定1)でなく、自身が内容の保護ブランチへの到達の記録か、運ぶ内容が
+ *  無かった記録(`nothing_to_land`)を持つ。行の着地の状態 `landed`(`landing_finished` だけ)より広い。 */
 export function landedForLineage(db: Db, taskId: string): boolean {
-  return landingEnded(db, taskId) && hasRecordBetween(db, [taskId], [...REACHED_PROTECTED_BRANCH_KINDS, "nothing_to_land"]);
+  const unended = db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${landingUnendedSql("t")}`).get(taskId) !== undefined;
+  return !unended && hasRecordBetween(db, [taskId], [...REACHED_PROTECTED_BRANCH_KINDS, "nothing_to_land"]);
 }
 
 /** 帰り先を奪う祖先が成果を持たない理由 —— 種類ごとの文で、削除の扉が着地を終えた祖先に失われた ref の文を流用しない(ADR 0421 決定3)。 */

@@ -4,7 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
-import { startWorkThroughHumanDoor } from "../src/human-verbs.js";
+import { startWorkThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
 import { createLanding, type Landing, landingState } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { questionKindOf } from "../src/question-kind.js";
@@ -17,17 +17,20 @@ import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { refreshProtectedBranch, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
 import {
   attachUnsettledChild,
   boardEvents,
   commitThroughTaskCheckout,
+  completeThroughTaskCheckout,
+  convergeOn,
   deletionReaders,
   fetchHeldAtToken,
   finish,
   landingWork,
   mergeOnGitHub,
   openBoard,
+  openLocalMergeQuestions,
   type RegisteredReef,
   recordPrOpenedOutsideConvergence,
   reefWithPrRootAndChild,
@@ -277,4 +280,26 @@ it("着地済みの祖先のブランチが名前の場所に在るかを読む�
       },
     }),
   ).toThrow("compared before reading the ancestor's branch");
+});
+
+it("purely-local の名前で local 着地を執行した根の下に、根のブランチが無い checkout で登録し直した後に足した子は、拾われて保護ブランチから分かれる", async () => {
+  const { db, clock } = await openBoard();
+  const old = await makeWorkspace("reef-local");
+  const reef = await registeredReef(old);
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github: null });
+  const root = await completeThroughTaskCheckout(db, clock, reef.resolve("reef"), landingWork(db, clock, "reef"), "feature.txt", "ready\n");
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "local_merge_question" });
+  const question = getTask(db, openLocalMergeQuestions(db, root.id)[0]!.id)!;
+  await submitAnswer({ db, pollNow: () => {}, landing, resolveWorkspace: reef.resolve, workspacesDir: await tempDir("tidepool-task-checkouts-") }, question, ["merge"], undefined, () => clock.now(), "webui");
+  // 削除で基準の行が消えた後に、根のブランチを持たない checkout として登録し直す
+  await reRegister(db, reef, old, () => git(old.path, "branch", "-D", `task/${root.id}`), landing);
+  const added = workChild(db, clock, root.id);
+
+  const { worker, errors } = await poll({ db, clock, reef, landing, github });
+
+  expect(errors).not.toHaveBeenCalled();
+  expect(worker.started.map(({ id }) => id)).toEqual([added.id]);
+  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
+  expect(git(old.path, "rev-parse", `task/${added.id}`)).toBe(git(old.path, "rev-parse", "main"));
 });
