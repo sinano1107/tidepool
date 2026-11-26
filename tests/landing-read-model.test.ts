@@ -1,10 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
+import { appendEvent } from "../src/events.js";
+import { recordPrNumber } from "../src/tasks.js";
 import {
   api,
   attachChild,
   bootTidepool,
   checkoutOf,
   commitWork,
+  completedWork,
   completeIntegrationReviews,
   completeViaMcp,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -78,4 +82,17 @@ it("done の work の行は、一覧と単体ビューで着地の状態を運�
 
   expect(rows.find((row: any) => row.id === queued.id).landing_state).toBe("auto_merge_queue");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${queued.id}`)).json.landing_state).toBe("auto_merge_queue");
+});
+
+it("削除の扉が着地を終えた done の work の行は、着地の状態 workspace_deleted と PR の番号を運ぶ(ADR 0421 決定2)", async () => {
+  t = await bootTidepool();
+  const at = t.clock.now();
+  const ended = completedWork(t.db, at, "tako", undefined, "lagoon");
+  recordPrNumber(t.db, ended.id, 3);
+  appendEvent(t.db, { taskId: ended.id, at, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_ended_workspace_deleted", workspace: "lagoon" } });
+
+  const rows = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+
+  expect(rows.find((row: any) => row.id === ended.id)).toMatchObject({ landing_state: "workspace_deleted", pr_number: 3 });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${ended.id}`)).json.landing_state).toBe("workspace_deleted");
 });

@@ -10,12 +10,11 @@ import { submitAnswer } from "../src/human-verbs.js";
 import { blockingRootOf, createLanding, type Landing, landingState, registerPrPromotionFailureQuestion, rootPrOutcome, settledByObservation } from "../src/landing.js";
 import { openQuarantineQuestion, registerQuarantine } from "../src/quarantine.js";
 import { getTask, listBoard, nextSlotTask, registerMergeQuestion } from "../src/tasks.js";
-import { dropWorkspaceState, quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
-import { createWorkspace } from "../src/workspace-create.js";
+import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeGitHubClient, heldInPrepareMerge, holdAfterMerge } from "./fakes.js";
 import { checkoutTaskBranch, commitWork, failEventInsert, GIT_FIXTURE_TEST_TIMEOUT, git, MATCHING_GH, makeLandingWorkspace } from "./harness.js";
-import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, type RegisteredReef, recordPrOpenedOutsideConvergence, registeredReef, reRegister } from "./landing-fixture.js";
-import { commitWorkspaceDeletion, setWorkspaceEntry } from "./registry-fixture.js";
+import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, fetchHeldAtToken, finish, giveHeadRepo, landingWork, openBoard, profile, promotionFailures, pushOutsideBoard, pushPrHead, type RegisteredReef, recordPrOpenedOutsideConvergence, reDeclareOutsideDoor, registeredReef, reRegister } from "./landing-fixture.js";
+import { setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -43,14 +42,9 @@ async function reefWithPr(merge: "auto_if_ci_green" | "escalate", declaredRepo?:
   giveHeadRepo(db, reef, old.head_repo!);
   const github = new FakeGitHubClient();
 
-  const move = async () => {
-    // ADR 0087 決定2 / ADR 0226 決定1: 開いた merge question や無人 merge キューが削除を拒むので、扉の外で宣言と workspace の状態を入れ替えた盤面を作る。
-    commitWorkspaceDeletion(reef.registryDir, "reef");
-    dropWorkspaceState(db, "reef");
-    await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
-    expect(reef.resolve("reef").repo).toBe(moved.repo);
-    giveHeadRepo(db, reef, moved.head_repo!);
-  };
+  // ADR 0087 決定2 / ADR 0226 決定1: 開いた merge question や無人 merge キューが削除を拒み、扉は根の着地を終える(ADR 0421 決定1)ので、
+  // 扉の外で宣言と workspace の状態を入れ替えた盤面を作る。
+  const move = () => reDeclareOutsideDoor(db, reef, moved);
   const workspace = reef.resolve("reef");
   const work = landingWork(db, clock, "reef");
   checkoutTaskBranch(db, workspace, work.id);

@@ -1,6 +1,6 @@
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
-import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
+import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { BoardStatePath } from "./board-state.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -31,11 +31,11 @@ import {
   doneTaskIdsInWorkspace,
   END_LANDING_OPTION,
   getTask,
-  hasTaskBranchSql,
   isHumanAssigned,
   landingEnded,
   landingEndedSql,
   landingSurface,
+  landingUnendedSql,
   localLandingOpenOrExecutedSql,
   logDecision,
   lostWorkIsDead,
@@ -189,20 +189,25 @@ export function taskIdsAwaitingLandingInWorkspace(db: Db, resolve: WorkspaceReso
     .map(({ id }) => id);
 }
 
-/** ADR 0421 決定4: 収束がまだ push する内容を名前の場所に持つ PR の根。断念が効いている根と、盤面の外で書き換えられた head の hold が効いている
- *  根(ADR 0394 決定6・7)は、収束が push しないので数えない —— 数えると待っても通らない。内容を読めない根(名前を解決できない、根のブランチが
- *  無い、比べられない)も数えない(issue #3893 の (b)、spec #3891)—— 数えるとブランチの無い checkout で扉が止まる。積み残しの fail-closed
- *  (ADR 0242 決定3)とは逆の向きである。 */
-export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: WorkspaceResolver | undefined, workspaceName: string): string[] {
+/** 名前の場所のタスクブランチが、盤面が PR へ push していない内容を持つ PR の根(着地が終わった根は除く)。内容を読めない根(名前を解決
+ *  できない、根のブランチが無い、比べられない)は数えない(issue #3893 の (b)、spec #3891)—— 数えるとブランチの無い checkout で扉が止まる。
+ *  積み残しの fail-closed(ADR 0242 決定3)とは逆の向きである。2つの読み手がある:
+ *  - 既定は削除の扉の拒否 (b)(ADR 0421 決定4): 収束がまだ push する根だけ。merge か close の決着した根、断念が効いている根、盤面の外で書き換え
+ *    られた head の hold が効いている根(ADR 0394 決定6・7)は、収束が push しないので数えない —— 数えると待っても通らない。素の hold の後は
+ *    収束がまだ push するので数える。
+ *  - `declined` は削除の確認の一覧(ADR 0421 帰結): GitHub に残る PR の head が内容を欠く根。断念・hold の根も、閉じた PR の根(開き直して
+ *    merge すると内容を欠く)も数え、merge された根だけを除く。 */
+export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: WorkspaceResolver | undefined, workspaceName: string, { declined = false } = {}): string[] {
   let workspace: WorkspaceConfig | undefined;
   try {
     workspace = resolve?.(workspaceName);
   } catch {}
   if (!workspace) return [];
   return doneTaskIdsInWorkspace(db, workspaceName).filter((id) => {
-    if (getTask(db, id)!.pr_number === null || landingEnded(db, id) || rootPrOutcome(db, id) !== null || declineInForce(db, id, "pr_promotion_retry")) return false;
-    // 素の hold の後は収束がまだ push する —— 書き換えの head を断った hold だけを外す
-    if (declineInForce(db, id, "pr_merge")?.payload.outside != null) return false;
+    if (getTask(db, id)!.pr_number === null || landingEnded(db, id)) return false;
+    const outcome = rootPrOutcome(db, id);
+    if (declined ? outcome?.state === "MERGED" : outcome !== null) return false;
+    if (!declined && (declineInForce(db, id, "pr_promotion_retry") || declineInForce(db, id, "pr_merge")?.payload.outside != null)) return false;
     try {
       return taskBranchExists(workspace, id) && contentLeftBehindLocally(db, workspace, id, lastPushedHead(db, id)).length > 0;
     } catch {
@@ -707,6 +712,7 @@ export function blockingRootOf(db: Db, resolve: WorkspaceResolver | undefined): 
 const QUESTION_RECORDED_SQL = Object.keys({
   pr_promotion_observed: true,
   task_branch_lost_observed: true,
+  workspace_deleted_observed: true,
   quarantine_released: true,
   routing_proposal_stale: true,
   memory_proposal_stale: true,
@@ -733,7 +739,8 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "questi
 }
 
 /** done の work の着地の状態(ADR 0265 決定7): 根の PR の決着 → 無人 merge キュー → 開いた merge question → 内容で
- *  終わった(`landing_finished`)→ ブランチを失って死んだ(効いている失われた event、ADR 0407 帰結)→ 人間が着地を終えた(`landing_ended_pr_left`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
+ *  終わった(`landing_finished`)→ ブランチを失って死んだ(効いている失われた event、ADR 0407 帰結)→ 削除の扉が着地を終えた
+ *  (`landing_ended_workspace_deleted`、ADR 0421 決定2)→ 人間が着地を終えた(`landing_ended_pr_left`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
  *  生きているキューの行と merge question を先に言う。done の work でない行と、どれも無い行(PR を開く前で止まっている根・
  *  根でない行)は null。キューに残る理由は名指さない(#1866)。 */
 export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace" | "parent_id" | "interview_target_id"> & { status: string }): LandingState | null {
@@ -745,6 +752,8 @@ export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace
   if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
   // ADR 0407 帰結: ブランチを失って終わった死んだ work —— 根かどうかを問わない。handoff だけと透明は成果を失っていない(ADR 0265 Status 追記)
   if (lostWorkIsDead(db, task)) return "branch_lost";
+  // ADR 0421 決定2: 削除の扉が着地を終えた task —— PR を持てば PR は GitHub に残る
+  if (latestEventOfTask(db, task.id, "landing_ended_workspace_deleted")) return "workspace_deleted";
   // ADR 0399 決定6: 人間が着地を終えた PR の根 —— PR は記録の repo に残る
   if (latestEventOfTask(db, task.id, "landing_ended_pr_left")) return "pr_left";
   return latestEventOfTask(db, task.id, "auto_merge_withdrawn") ? "withdrawn" : null;
@@ -752,22 +761,15 @@ export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace
 
 /** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
  *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
- *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(`landingEndedSql` —— merge の記録か内容で終わった PR の根の `landing_finished`
- *  (ADR 0265 決定3) / `nothing_to_land` / 人間が着地を終えた根の `landing_ended_pr_left`(ADR 0399 決定6) / 効いている失われた event
- *  (ADR 0407 決定1))と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
- *  候補に残り、撃つ側が hold の head と比べる(`landRoot`)。人間が担当した work は盤面の
- *  タスクブランチを持たなければ根にしない(人間の完了は祖先の着地の契機である)—— 持てば根になる(ADR 0374 決定12)。Interview の子(pin を持つ
- *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。 */
+ *  盤面の歴史の長さには比例しない。候補は着地がまだ終わっていない完了 task(`landingUnendedSql` —— 削除の扉が終える集合と同じ述語)のうち、
+ *  ローカル着地が人間の手にある根(未決着の local merge question、ADR 0289 決定1)を除いたもの。着地が終わった根(`landingEndedSql` —— merge の
+ *  記録か内容で終わった PR の根の `landing_finished`(ADR 0265 決定3) / `nothing_to_land` / 人間が着地を終えた根の `landing_ended_pr_left`
+ *  (ADR 0399 決定6) / 削除の扉が着地を終えた task の `landing_ended_workspace_deleted`(ADR 0421 決定2) / 効いている失われた event(ADR 0407
+ *  決定1))は入らない。hold した根は候補に残り、撃つ側が hold の head と比べる(`landRoot`)。 */
 function landingCandidateIds(db: Db): string[] {
   return db
     .prepare(
-      `SELECT t.id FROM tasks t
-        WHERE t.type = 'work' AND t.status = 'done'
-          AND (t.assignee IS NOT '${HUMAN_ACTOR_ID}' OR ${hasTaskBranchSql("t.id")})
-          AND t.interview_target_id IS NULL
-          AND NOT ${landingEndedSql("t.id")}
-          AND NOT ${localLandingOpenOrExecutedSql("t.id")}
-        ORDER BY t.rowid`,
+      `SELECT t.id FROM tasks t WHERE ${landingUnendedSql("t")} AND NOT ${localLandingOpenOrExecutedSql("t.id")} ORDER BY t.rowid`,
     )
     .pluck()
     .all() as string[];

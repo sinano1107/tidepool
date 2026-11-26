@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { git, gitStatus } from "./git.js";
 import { authedPush, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth } from "./github-auth.js";
 import { REGISTRY_BRANCH, type RegistrySource, refreshRegistry, registryRef } from "./registry.js";
+import type { LandingEndingTask } from "./wire-contract.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
  *  push もできず、push 成功が「効いた」の定義である以上、その編集は最初から
@@ -46,7 +47,8 @@ export async function refreshRegistryForWrite(
 type DeletionResource = "agent" | "workspace" | "profile";
 
 export class DeletionConfirmationRequiredError extends Error {
-  constructor(resource: DeletionResource, resourceName: string) {
+  /** workspace の削除だけ: 通すと着地が終わる task(ADR 0421 決定1)。 */
+  constructor(resource: DeletionResource, resourceName: string, readonly landingEnds?: LandingEndingTask[]) {
     super(`deleting ${resource} "${resourceName}" requires human confirmation`);
     this.name = "DeletionConfirmationRequiredError";
   }

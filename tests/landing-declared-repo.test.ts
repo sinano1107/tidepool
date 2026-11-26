@@ -33,6 +33,7 @@ import {
   pushPrHead,
   type RegisteredReef,
   recordPrOpenedOutsideConvergence,
+  reDeclareOutsideDoor,
   registeredReef,
   reRegister,
 } from "./landing-fixture.js";
@@ -44,8 +45,8 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 // ADR 0399 決定1・3・5: task は pickup が宣言の repo に届いたときにその repo を記録し、根を運ぶ・PR を読む前に今の宣言と比べ、食い違えば
 // その根だけを、記録と今の宣言を名指す PR 昇格失敗の question で止める(spec #3595 の振る舞い 1)。
 
-/** 旧い repo で拾われ PR #1 を開いた done の根を残して、`reef` を削除の扉 → 登録の扉で別の repo の checkout に登録し直し、`repair` なら
- *  着地の最初の撮りより前に新しい checkout の根に修理を置く。`external` の根は削除の扉を止めない(ADR 0370 決定1)。 */
+/** 旧い repo で拾われ PR #1 を開いた done の根を残して、`reef` を扉の外で別の repo の checkout に登録し直し、`repair` なら着地の最初の
+ *  撮りより前に新しい checkout の根に修理を置く。削除の扉はこの根の着地を終える(ADR 0421 決定1)—— 食い違いの止まりは扉の外の床で言う。 */
 async function reRegisteredWithRepairedRoot({ repair = true } = {}) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeRemoteBackedWorkspace("reef-old");
@@ -58,7 +59,7 @@ async function reRegisteredWithRepairedRoot({ repair = true } = {}) {
   const done = finish(db, clock, root);
   recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "external" } });
 
-  await reRegister(db, reef, moved);
+  await reDeclareOutsideDoor(db, reef, moved);
   if (repair) {
     const branch = taskBranch(done.id);
     git(moved.path, "fetch", "--quiet", old.path, branch);
@@ -84,7 +85,7 @@ it.each([
   ["closed", (github: FakeGitHubClient, repo: string) => github.scriptClosedOutside(1, repo)],
   ["open", (github: FakeGitHubClient, repo: string) => github.scriptPullRequestOnBranch("task/other", 1, undefined, undefined, repo)],
   ["absent", () => {}],
-] as const)("別の repo で登録し直した名前の、PR を開いた根は、新しい repo の #1 が %s でも読まずに、記録と今の宣言を名指して止まる", async (_, script) => {
+] as const)("扉の外で別の repo に登録し直した名前の、PR を開いた根は、新しい repo の #1 が %s でも読まずに、記録と今の宣言を名指して止まる", async (_, script) => {
   const { db, github, landing, old, moved, root } = await reRegisteredWithRepairedRoot();
   script(github, moved.repo!);
 
@@ -96,7 +97,7 @@ it.each([
 });
 
 // 運ぶ内容の無い根も、新しい repo の保護ブランチと比べて内容で終わらず、人間に知らせて止まる —— 根の最初の行き先の読みが比べる
-it("別の repo で登録し直した名前の、PR を開いた根は、運ぶ修理が無くても記録と今の宣言を名指して止まる", async () => {
+it("扉の外で別の repo に登録し直した名前の、PR を開いた根は、運ぶ修理が無くても記録と今の宣言を名指して止まる", async () => {
   const { db, github, landing, old, moved, root } = await reRegisteredWithRepairedRoot({ repair: false });
 
   await landing.converge();
@@ -220,7 +221,7 @@ it("merge 済みの根が保護ブランチの写しを読み直す token の aw
   stoppedOnPathChange(db, root);
 });
 
-/** 旧い repo で拾われ PR #1 を開いた done の根を残し、`reef` を扉で purely-local の checkout(`moved`)に登録し直した盤面。 */
+/** 旧い repo で拾われ PR #1 を開いた done の根を残し、`reef` を扉の外で purely-local の checkout(`moved`)に登録し直した盤面。 */
 async function reRegisteredPurelyLocal(moved: (old: WorkspaceConfig, root: Task) => Promise<{ workspace: WorkspaceConfig; between?: () => void }>) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeRemoteBackedWorkspace("reef-old");
@@ -230,12 +231,12 @@ async function reRegisteredPurelyLocal(moved: (old: WorkspaceConfig, root: Task)
   const done = finish(db, clock, root);
   recordPrOpenedOutsideConvergence(db, done, 1, clock.now(), { authority: { merge: "external" } });
   const local = await moved(old, done);
-  await reRegister(db, reef, local.workspace, local.between);
+  await reDeclareOutsideDoor(db, reef, local.workspace, { between: local.between });
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github: new FakeGitHubClient() });
   return { db, landing, old, root: done };
 }
 
-it("repo を記録した根の名前を、扉で根のブランチを持たない別の purely-local の checkout に登録し直すと、根は git を読まずに記録と今の宣言を名指して止まる", async () => {
+it("repo を記録した根の名前を、扉の外で根のブランチを持たない別の purely-local の checkout に登録し直すと、根は git を読まずに記録と今の宣言を名指して止まる", async () => {
   const { db, landing, old, root } = await reRegisteredPurelyLocal(async () => ({ workspace: await makeWorkspace("reef-local") }));
 
   await landing.converge();
@@ -243,7 +244,7 @@ it("repo を記録した根の名前を、扉で根のブランチを持たな�
   stoppedNamingBoth(db, root, old.repo!, "no repo (purely-local)");
 });
 
-it("repo を記録した根のブランチを同じ checkout で保護ブランチに merge し、origin を外して扉で purely-local に登録し直しても、根は内容で終わらずに記録と今の宣言を名指して止まる", async () => {
+it("repo を記録した根のブランチを同じ checkout で保護ブランチに merge し、origin を外して扉の外で purely-local に登録し直しても、根は内容で終わらずに記録と今の宣言を名指して止まる", async () => {
   const { db, landing, old, root } = await reRegisteredPurelyLocal(async (old, root) => ({
     workspace: { ...old, repo: undefined },
     between: () => {

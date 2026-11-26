@@ -2027,7 +2027,7 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }) {
     // ダイアログの本文がそのまま資源ごとの説明である
     dialogLead: section.deleteLead,
     confirmLabel: "Delete",
-    confirmOf: (err) => apiErrorDetail(err, `DELETE /api/${sectionKey}/:name 409`)?.confirm_required ? { reasons: [] } : null
+    confirmOf: (err) => apiErrorDetail(err, `DELETE /api/${sectionKey}/:name 409`)?.confirm_required ? { reasons: [], note: section.deleteConfirmNote?.(err) } : null
   });
   const remove = section.remove ?? (async (confirm) => {
     await api(`/api/${sectionKey}/${encodeURIComponent(name)}`, confirm, "DELETE");
@@ -3897,6 +3897,11 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
       remove: async (confirm, name) => {
         const { checkout } = await api("DELETE /api/workspaces/:name", { params: { name }, body: confirm });
         return `checkout remains at ${checkout}`;
+      },
+      // ADR 0421 決定1: 削除は名前に残る完了 task の着地を終える —— 何を手放すかを、PR が GitHub に残ることと一緒に名指す
+      deleteConfirmNote: (err) => {
+        const ends = apiErrorDetail(err, "DELETE /api/workspaces/:name 409")?.landing_ends ?? [];
+        return ends.length === 0 ? null : /* @__PURE__ */ React.createElement("div", { style: { margin: "8px 0 0", fontSize: "var(--text-sm)" } }, /* @__PURE__ */ React.createElement("p", { style: { margin: "0 0 4px" } }, "Deleting ends the landing of these completed tasks \u2014 the board will not push to, merge or close their PRs:"), /* @__PURE__ */ React.createElement("ul", { style: { margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 4 } }, ends.map((task) => /* @__PURE__ */ React.createElement("li", { key: task.id }, task.title, " ", /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)" } }, task.id.slice(0, 8)), task.pr_number !== null && ` \u2014 PR #${task.pr_number} stays on GitHub as it is`, task.pr_head_lacks_unpushed_content && "; its head lacks work the board had not pushed yet"))));
       }
     },
     agents: {
@@ -4160,6 +4165,7 @@ const SETTLED_BY_OBSERVATION_COPY = {
   pr_close_observed: "observed \xB7 PR closed",
   pr_promotion_observed: "observed \xB7 PR promoted",
   task_branch_lost_observed: "observed \xB7 task branch lost",
+  workspace_deleted_observed: "observed \xB7 workspace registration deleted",
   quarantine_released: "observed \xB7 quarantine lifted",
   routing_proposal_stale: "observed \xB7 routing proposal stale",
   memory_proposal_stale: "observed \xB7 memory proposal stale"
@@ -4173,6 +4179,8 @@ const LANDING_STATE_COPY = {
   withdrawn: "landing \xB7 withdrawn from auto-merge",
   landed: "landing \xB7 landed",
   branch_lost: "landing \xB7 ended \u2014 the task branch was lost",
+  // ADR 0421 決定2: PR を持つ task は、行の写しが PR が残ることを足す
+  workspace_deleted: "landing \xB7 ended \u2014 the workspace registration was deleted",
   pr_left: "landing \xB7 ended by a human \u2014 the PR was left as it is"
 };
 const BLOCKING_ROOT_REASON_COPY = {
@@ -4412,7 +4420,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       // editTask on the server is the real gate
       githubIssueNumber: t.github_issue_number,
       settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : void 0,
-      landingState: t.landing_state ? LANDING_STATE_COPY[t.landing_state] : void 0,
+      landingState: t.landing_state ? `${LANDING_STATE_COPY[t.landing_state]}${t.landing_state === "workspace_deleted" && t.pr_number !== null ? ` \u2014 PR #${t.pr_number} stays on GitHub as it is` : ""}` : void 0,
       // ADR 0273 決定8: 受験者の workspace 列は実環境の名前で、走る場所は出題の head を fetch した自分の checkout(ADR 0276 決定1)—— 列の値をそのまま見せない
       interviewPlace: t.type === "interview" ? `real environment: ${t.workspace ?? "default workspace"}` : t.interview_root_id ? "own checkout of the posed head" : void 0,
       interviewWaiting: t.interview_waiting && INTERVIEW_WAITING_COPY[t.interview_waiting]

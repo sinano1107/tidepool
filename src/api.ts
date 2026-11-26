@@ -713,7 +713,8 @@ function respondToDeletionFailure(res: Response, err: unknown): void {
     // 削除は「権限を広げる値」ではないので、その列挙に紛れ込ませない
     // WebUI は3つの削除の扉を同じ確認で読む —— 本文は1つ、照らす行は3つ。欄の綴りは
     // 字面の satisfies(excess property 検査が効く)が1本目で捕まえる
-    const body = { error: err.message, confirm_required: true } satisfies WireContract["DELETE /api/workspaces/:name 409"];
+    // ADR 0421 決定1: workspace の削除だけが、着地が終わる task の一覧を運ぶ(他の資源では undefined で、JSON に出ない)
+    const body = { error: err.message, confirm_required: true, landing_ends: err.landingEnds } satisfies WireContract["DELETE /api/workspaces/:name 409"];
     body satisfies WireContract["DELETE /api/agents/:name 409"];
     body satisfies WireContract["DELETE /api/profiles/:name 409"];
     sendJson(res.status(409), body);
@@ -1223,6 +1224,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
           listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name),
           listLandingInProgressTaskIds: (name) => taskIdsBeingLandedInWorkspace(db, landing, name),
+          listPrRootIdsLackingUnpushedContent: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name, { declined: true }),
           defaultWorkspaceName: workspace?.name,
         },
       );

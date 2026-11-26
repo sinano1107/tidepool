@@ -201,6 +201,25 @@ it("DELETE refuses a workspace referenced only through an unsettled task's ances
   expect(res.json).toMatchObject({ blocked: true, reasons: [{ code: "unsettled_tasks", count: 1 }] });
 });
 
+it("DELETE /api/workspaces/:name は確認なしの拒否を、着地が終わる task の一覧と一緒に 409 confirm_required に写す(ADR 0421 決定1)", async () => {
+  const landingEnds = [
+    { id: "t1", title: "ship", pr_number: 1, pr_head_lacks_unpushed_content: true },
+    { id: "t2", title: "repair", pr_number: null, pr_head_lacks_unpushed_content: false },
+  ];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      delete: async () => {
+        throw new DeletionConfirmationRequiredError("workspace", "lagoon", landingEnds);
+      },
+    },
+  });
+
+  const res = await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", {});
+
+  expect(res.status).toBe(409);
+  expect(res.json).toMatchObject({ confirm_required: true, landing_ends: landingEnds });
+});
+
 it("DELETE /api/workspaces/:name は開いた Quarantine と基準の拒否を他の理由と同じ 409 で返す(ADR 0373 決定14)", async () => {
   t = await bootTidepool({
     workspaceAdmin: {

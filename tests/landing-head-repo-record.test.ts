@@ -14,7 +14,7 @@ import { createWorkspace, deleteWorkspace, HeadRepoTaskBranchesNotSentError, pub
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeRemoteBackedWorkspace, makeWorkspace, shimGit } from "./harness.js";
-import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, convergeOn, deletionReaders, finish, landingWork, openBoard, profile, promotionFailures } from "./landing-fixture.js";
+import { attachUnsettledChild, boardEvents, commitThroughTaskCheckout, convergeOn, deletionReaders, finish, landingWork, openBoard, profile, promotionFailures, reDeclareOutsideDoor } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -309,17 +309,19 @@ async function lagoonWithPurelyLocalDoneRoot() {
     git(fork, "fetch", "--quiet", origin, "main:main");
     await updateWorkspace({ name: "lagoon", head_repo: "acme/fork", confirm: true }, doors);
   };
-  // `external` の根は削除の扉を止めない(ADR 0370 決定1)
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: resolve, github, githubAuth, resolveAuthority: () => profile("external") });
   const registerAgain = async (path: string) => {
     await deleteWorkspace({ name: "lagoon", confirm: true }, { ...doors, ...deletionReaders(db, resolve) });
     await createWorkspace({ name: "lagoon", mode: "register", path, confirm: true }, doors);
   };
-  return { addFork, db, doors, github, landing, registerAgain, resolve, root };
+  // 削除の扉は根の着地を終え(ADR 0421 決定1)、repo の手編集は名前の門が workspace の Quarantine で止めるので、base repo の食い違いの止まりは
+  // 扉の外で registry の entry と workspace の状態を消した床で言う
+  const reDeclareAgain = (path: string) => reDeclareOutsideDoor(db, { registryDir, admin, resolve }, { path }, { name: "lagoon", doors });
+  return { addFork, db, doors, github, landing, registerAgain, reDeclareAgain, resolve, root };
 }
 
 it("purely-local で拾われた根は publish では宣言の repo を記録せず、着地の最初の push の直前に記録して PR を開く", async () => {
-  const { addFork, db, doors, github, landing, registerAgain, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
+  const { addFork, db, doors, github, landing, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
   const purelyLocal = resolve();
   await publishWorkspace({ name: "lagoon", repo: REPO }, doors);
   expect(resolve().repo).toBe(REPO);
@@ -340,11 +342,8 @@ it("purely-local で拾われた根は publish では宣言の repo を記録せ
   await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
   expect(startedPush).toBe(true);
 
-  // ADR 0399 決定3: 宣言の repo が同じでも、出元 repo を無くした名前では根だけが止まる。
-  const replacement = await tempDir("tidepool-lagoon-replacement-");
-  git(replacement, "clone", "--quiet", resolve().path, ".");
-  git(replacement, "remote", "set-url", "origin", REPO);
-  await registerAgain(replacement);
+  // ADR 0399 決定3: 宣言の repo が同じでも、設定の扉で出元 repo を外した名前では根だけが止まる。
+  await updateWorkspace({ name: "lagoon", head_repo: "", confirm: true }, doors);
   expect(resolve()).toMatchObject({ repo: REPO });
   expect(resolve().head_repo).toBeUndefined();
 
@@ -356,8 +355,8 @@ it("purely-local で拾われた根は publish では宣言の repo を記録せ
   expect(failure?.purpose).toContain("now declares no head repo");
 });
 
-it("publish の後に PR を開いた根は、名前を別の repo に登録し直すと、記録と今の宣言を名指して止まる", async () => {
-  const { addFork, db, doors, github, landing, registerAgain, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
+it("publish の後に PR を開いた根は、名前を扉の外で別の repo に登録し直すと、記録と今の宣言を名指して止まる", async () => {
+  const { addFork, db, doors, github, landing, reDeclareAgain, resolve, root } = await lagoonWithPurelyLocalDoneRoot();
   await publishWorkspace({ name: "lagoon", repo: REPO }, doors);
   await addFork();
   await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
@@ -365,7 +364,7 @@ it("publish の後に PR を開いた根は、名前を別の repo に登録し�
   const newRepo = "https://github.com/other/lagoon.git";
   await shimGit({ route: [newRepo, replacement.repo!] });
   git(replacement.path, "remote", "set-url", "origin", newRepo);
-  await registerAgain(replacement.path);
+  await reDeclareAgain(replacement.path);
   expect(resolve().repo).toBe(newRepo);
   const previousReads = github.stateChecks.length;
 

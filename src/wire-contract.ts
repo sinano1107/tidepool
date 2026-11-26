@@ -72,12 +72,13 @@ export type SettledByObservation =
   | RootSettledByObservation
   | "pr_promotion_observed"
   | "task_branch_lost_observed"
+  | "workspace_deleted_observed"
   | "quarantine_released"
   | "routing_proposal_stale"
   | "memory_proposal_stale";
 
 /** done の work の行の着地の状態(ADR 0265 決定7、src/landing.ts の landingState)。WebUI の札の文言表がこれで欠けを落とす。 */
-export type LandingState = "auto_merge_queue" | "merge_question" | "merged" | "merge_observed" | "close_observed" | "withdrawn" | "landed" | "branch_lost" | "pr_left";
+export type LandingState = "auto_merge_queue" | "merge_question" | "merged" | "merge_observed" | "close_observed" | "withdrawn" | "landed" | "branch_lost" | "workspace_deleted" | "pr_left";
 
 /** 回答の応答と question の行が運ぶ印。 */
 export interface SettledMark {
@@ -105,6 +106,8 @@ export interface BoardTask extends QueueTask {
   interview_root_id: string | null;
   /** 出題済みの Interview の root が blocked で待つもの(ADR 0273 決定3): 監査か受験者か。他の行には欄が無い。 */
   interview_waiting?: "audit" | "examinees";
+  /** 盤面が開いた PR の番号(根だけ)。 */
+  pr_number: number | null;
   /** 解決前の workspace の名前。Interview の root と受験者では実環境の名前で、受験者の走る場所は面接室(ADR 0273 決定8)。 */
   workspace: string | null;
   review_flag: number;
@@ -148,6 +151,15 @@ interface DangerousValuesConflict {
   error: string;
   confirm_required: true;
   dangerous_values: string[];
+}
+
+/** 削除の確認に出す、着地が終わる task の1行(ADR 0421 決定1)。`pr_head_lacks_unpushed_content` は、GitHub に残る PR の head が、盤面が
+ *  push していない内容を欠くか(断念した PR の根など)。 */
+export interface LandingEndingTask {
+  id: string;
+  title: string;
+  pr_number: number | null;
+  pr_head_lacks_unpushed_content: boolean;
 }
 
 /** 削除の 409(ADR 0087)。確認では買えない `blocked` の形も同じ status で来るので、
@@ -417,7 +429,7 @@ export interface WireContract {
   "POST /api/workspaces/:name/workbench": { message: string };
   /** publish の成功文: 送った範囲と次の手順(issue #3563)。 */
   "POST /api/workspaces/:name/publish": { message: string };
-  "DELETE /api/workspaces/:name 409": DeletionConflict;
+  "DELETE /api/workspaces/:name 409": DeletionConflict & { landing_ends?: LandingEndingTask[] };
   "GET /api/agents": {
     agents: Array<{
       name: string;

@@ -265,6 +265,9 @@ export type EventPayload =
   // 残る(merge も close も刻まない)。question_ids は同じ回答が PR の観測を刻まずに閉じた根の着地の question(merge・他の昇格失敗・local 着地 ——
   // 失われた ref の give-up と同じ片づけ `retireLandingDecisions` を通るので local 着地の question も閉じる)
   | { kind: "landing_ended_pr_left"; question_ids: string[] }
+  // ADR 0421 決定1・2: 削除の扉が通るとき、その名前の着地が終わっていない完了 task —— PR の有無も根かどうかも問わない —— に1つずつ書く。
+  // 以後この task は収束の候補に入らない。PR は GitHub に残り、盤面は merge も close も刻まない
+  | { kind: "landing_ended_workspace_deleted"; workspace: string }
   // ADR 0241 決定1 / ADR 0265 決定3: PR の根に、保護ブランチへ運ぶ内容がもう無いと収束が確かめた —— 着地が終わった
   // 事実で、以後この根は収束の候補に入らない。`basis` は根拠: merge を記録した根は `merge`、記録の無い根(`external` の
   // ダイヤルは盤面の外の merge を観測しない)は `content`。内容で終わっても決裁(キューの行・merge question)は引退しない。
@@ -318,6 +321,8 @@ export type EventPayload =
   // ADR 0407 決定2: 失われた ref を諦める受理が、ブランチを失った task を指すこの着地の question(local 着地・昇格失敗・merge)を回答なしで閉じた ——
   // ブランチが無ければ答えようが無い。task_id は閉じた question で、閉じた理由を question 自身に刻む(#3490)
   | { kind: "task_branch_lost_observed" }
+  // ADR 0421 決定1 / ADR 0407 決定2: 削除の扉が着地を終えた task を指す着地の question を回答なしで閉じた —— 閉じた理由を question 自身に刻む
+  | { kind: "workspace_deleted_observed"; workspace: string }
   // ADR 0394 決定5: 断る回答(`pr_merge` と local_merge の hold、abandon promotion)が断った question と、その question が問うた
   // 内容の写し —— 盤面の部分(tip、書き換えの question では欠けたブランチも)と、`pr_merge` では外の部分。判断は question の decision log に、
   // 断った内容はこの事実として根に残る(ADR 0073 決定2)。何を止め、いつ効かなくなるかは question の種類で読む(決定6)。tip が null は「変わった」
