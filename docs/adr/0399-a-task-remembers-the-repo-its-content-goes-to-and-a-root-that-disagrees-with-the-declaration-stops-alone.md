@@ -1,6 +1,6 @@
 # task は自分の中身が向かう repo を覚え、根を指す記録は根の id で持ち、食い違った根だけを止める
 
-**Status 追記: 決定5 の「PR の無い根」と決定6 の「終えられるのは PR を記録した根だけ」は、PR 番号の記録で読まない —— 番号が無くても出元 repo の記録があれば PR を持ちうる根で、番号のある根と同じ選択肢の組を持ち、食い違えば断念は出ない。その根の「この根の着地を終える」も下の子を塞ぐ。組の判定は question を立てる時点と断念の回答を受ける時点の両方で読む([ADR 0431](0431-a-root-that-pushed-to-its-head-repo-may-have-a-pr-and-its-promotion-is-abandoned-only-after-a-search-finds-none.md) 決定1・2・4・5、2026-11-27、issue #3887)。**
+**Status 追記: 決定5 の「PR の無い根」と決定6 の「終えられるのは PR を記録した根だけ」は、PR 番号の記録で読まない —— 番号が無くても出元 repo の記録があれば PR を持ちうる根で、番号のある根と同じ選択肢の組を持ち、食い違えば断念は出ない。その根の「この根の着地を終える」も下の子を塞ぐ。組の判定は question を立てる時点と断念の回答を受ける時点の両方で読む([ADR 0431](0431-a-root-without-a-pr-number-that-pushed-to-its-head-repo-may-have-a-pr-and-its-promotion-is-abandoned-only-after-a-search-finds-none.md) 決定1・2・4・5、2026-11-27、issue #3887)。**
 
 **Status 追記: 決定2 の代わりの鍵は issue にも在った —— issue つきの task は番号を持ち、repo を今の名前の宣言から引いていた。issue の repo は宣言の repo の記録(決定1)とは別に、登録の扉が issue を読んだときに記録し、issue を読む口はその記録を今の宣言と比べる([ADR 0430](0430-an-issue-backed-task-records-the-repo-its-issue-was-read-from-at-registration-and-an-issue-is-read-only-while-that-record-matches-the-declaration.md)、2026-11-27、issue #3885)。**
 
