@@ -1390,6 +1390,28 @@ it("失われた event が効いたまま ref が在る祖先が上下に2つあ
   await expect(pickUp(b, work(b, "C", { parent_id: lower.id }))).rejects.toMatchObject({ taskId: upper.id });
 });
 
+// #3878: 固定の書くループは下の祖先の fork 元を読む(`createTaskBranch`)が、そこで帰り先なしにはならない —— 作り直す2人の間に死んだ祖先は
+// 未決着のまま挟まらない。task 自身のブランチが在れば固定の前の系譜の読みは飛ぶので、止めているのはその読みでなく give-up の倒し
+it("作り直す祖先 G と B の間に死んだ D が挟まる木は、give-up が D の下の未決着の B と C を倒す —— C が自分のブランチを持っていても(ADR 0380 決定2、#3878)", async () => {
+  const b = await board("dead-between-fixed-ancestors");
+  const g = work(b, "G");
+  const d = work(b, "D", { parent_id: g.id });
+  // B は人間が登録した子 —— D の完了を待たせない
+  const lower = work(b, "B", { parent_id: d.id });
+  // C が先に切り(G・D・B もここで固定される)、その後に G と B が commit を積む —— `task/<C>` はそれらを含まず、give-up で失われない
+  const c = await commitThrough(b, work(b, "C", { parent_id: lower.id }), "c.txt");
+  await commitThrough(b, getTask(b.db, g.id)!, "g.txt");
+  await commitThrough(b, getTask(b.db, lower.id)!, "b.txt");
+  await completeUndelivered(b, getTask(b.db, d.id)!, "d.txt");
+  expect([statusOf(b, d), statusOf(b, lower)]).toEqual(["done", "todo"]);
+
+  await giveUp(b, g.id, d.id, lower.id);
+
+  expect(taskBranchLostInForce(b.db, c.id)).toBeUndefined();
+  expect([g, d, lower].map(({ id }) => taskBranchLostInForce(b.db, id) !== undefined)).toEqual([true, true, true]);
+  expect([statusOf(b, g), statusOf(b, lower), statusOf(b, c)]).toEqual(["todo", "cancelled", "cancelled"]);
+});
+
 it("失われた event の無い解放済みの checkout は今どおり消え、残したことを刻まない(ADR 0369 決定7、ADR 0393 決定1)", async () => {
   const b = await board("released-removed");
   const task = work(b, "task");
