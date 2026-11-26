@@ -1,5 +1,7 @@
 # worker の内容は PR の出元 repo(fork)を通ってだけ GitHub に出て、人間が merge する path に当たる PR は無人で着地しない
 
+**Status 追記: 決定3 の「出元 repo が宣言されたとき `task/*` を出元 repo へ送る」から、宣言の repo の記録が今の宣言と食い違う task のブランチを外す —— 別の repo で登録し直した名前の checkout に残る、旧い repo の内容である。出元 repo の記録の食い違いでは外さない([ADR 0419](0419-a-repo-disagreement-is-read-from-the-records-at-the-entrance-of-a-task-bound-operation-and-a-first-branch-cut-compares-the-record-of-its-fork-source.md) 決定7、2026-11-25、issue #3849)。**
+
 **Status 追記: 決定2 の「覚えた出元 repo を検査が畳む」のうち、古い fork の写しを消しうる前方向の畳みは、行き先の検査が行わない。検査は workspace の Quarantine を立てて止め、畳むのは扉と Quarantine の受理である。行を書くだけの畳みは今どおり検査が行う([ADR 0415](0415-a-fold-that-may-delete-copies-runs-only-where-a-human-is-and-an-unfinished-head-repo-change-stops-the-workspace-once.md)、2026-11-25、issue #3797)。**
 
 **Status 追記: App `tidepool-board` は公開(Any account)を前提とする —— 非公開の App は作った account にしか install できず、決定6 の出元 repo の所有者(org)に install できない。2026-11-21 に公開へ変えた。秘密鍵は broker だけが持ち、token は認証したユーザーが push 権を持つ repo にしか出ない(ADR 0093 決定2)ので、他人の install は盤面の token を与えない(issue #3482)。**
