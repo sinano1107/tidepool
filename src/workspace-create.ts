@@ -169,7 +169,7 @@ export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
 /** 返すのは送った範囲と次の手順の文(issue #3563)。 */
 export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<string>;
 /** 返すのは**残る** checkout の場所(ADR 0087 決定4): 消えるのは registry エントリ
- *  だけなので、応答はホスト上に残った checkout を名指しする。参照検査の事実を
+ *  だけなので、応答はホスト上に残った checkout を名指しする。参照検査の材料を
  *  第2引数で受ける形は `DeleteAgentFn` と同じ。 */
 export type DeleteWorkspaceFn = (
   input: DeleteWorkspaceInput,
@@ -616,13 +616,12 @@ export interface DeleteWorkspaceInput {
   confirm?: boolean;
 }
 
-/** 参照検査に要る**盤面側**の事実(ADR 0087 決定2/3)。agent 側の
- *  `AgentDeletionReferences` の双子で、束ねるのは API 層である。 */
+/** 参照検査に要る**盤面側**の読み口と設定(ADR 0087 決定2/3)。読み口を束ねるのは API 層で、呼ぶ時点は削除の扉が決める(ADR 0421 決定4 追記)。 */
 export interface WorkspaceDeletionReferences {
   /** この workspace を持つ未決着タスクの件数。 */
-  unsettledTaskCount: number;
+  countUnsettledTasks(name: string): number;
   /** この workspace で着地を待つ完了タスクの id(ADR 0226)。 */
-  awaitingLandingTaskIds: string[];
+  listAwaitingLandingTaskIds(name: string): string[];
   /** 盤面の既定 workspace 名。一致すれば消せない —— 既定はポインタである。 */
   defaultWorkspaceName?: string;
 }
@@ -636,11 +635,12 @@ export async function deleteWorkspace(
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
   const reasons: DeletionBlockedReason[] = [];
-  if (deps.unsettledTaskCount > 0) {
+  const unsettled = deps.countUnsettledTasks(input.name);
+  if (unsettled > 0) {
     const intake = openIntakeQuestionId(deps.db, input.name);
-    reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount, ...(intake !== undefined && { intake_question: intake }) });
+    reasons.push({ code: "unsettled_tasks", count: unsettled, ...(intake !== undefined && { intake_question: intake }) });
   }
-  const awaiting = deps.awaitingLandingTaskIds;
+  const awaiting = deps.listAwaitingLandingTaskIds(input.name);
   if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
   if (deps.defaultWorkspaceName === input.name) reasons.push({ code: "board_default" });
   // ADR 0373 決定14: 見つかっている違反を 削除 → 再登録 → `repaired by hand` で比べずに通さない —— 基準の行を持つ間だけ拒む

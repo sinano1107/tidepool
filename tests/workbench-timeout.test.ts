@@ -4,7 +4,9 @@ import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
+import { taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadRegistry } from "../src/registry.js";
+import { countUnsettledTasksReferencing } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
 import { openHumanContentWorkbench } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
@@ -78,8 +80,13 @@ it("削除の扉が作業台を読む git が上限で止まれば、参照の�
   const fifo = join(workbench, ".gitignore");
   execFileSync("mkfifo", [fifo]);
   try {
-    const deps = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: base, unsettledTaskCount: 0, awaitingLandingTaskIds: [], db };
-    const failed = await deleteWorkspace({ name: ws.name, confirm: true }, deps).catch((err: Error) => err);
+    const failed = await deleteWorkspace({ name: ws.name, confirm: true }, {
+      registry: { dir: registryDir, mode: "purely-local" },
+      workspacesBaseDir: base,
+      db,
+      countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
+      listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, () => ws, name),
+    }).catch((err: Error) => err);
 
     expect(failed).toBeInstanceOf(Error);
     expect((failed as Error).name).not.toBe("DeletionBlockedError");

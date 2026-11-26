@@ -140,7 +140,7 @@ it("DELETE /api/agents/:name は未知の agent を 404、未設定を 503 で�
   expect((await api(t.baseUrl, "DELETE", "/api/agents/tako", { confirm: true })).status).toBe(503);
 });
 
-it("DELETE /api/workspaces/:name は未決着タスクの件数と既定 workspace 名を渡し、残る checkout の場所を返す", async () => {
+it("DELETE /api/workspaces/:name は未決着タスクの件数の読み口を渡し、残る checkout の場所を返す", async () => {
   const calls: Array<[DeleteWorkspaceInput, WorkspaceDeletionReferences]> = [];
   t = await bootTidepool({
     workspaceAdmin: {
@@ -157,10 +157,10 @@ it("DELETE /api/workspaces/:name は未決着タスクの件数と既定 workspa
   expect(res.status).toBe(200);
   expect(res.json).toEqual({ checkout: "/home/pi/work/lagoon" });
   expect(calls[0]?.[0]).toEqual({ name: "lagoon", confirm: true });
-  expect(calls[0]?.[1].unsettledTaskCount).toBe(1);
+  expect(calls[0]?.[1].countUnsettledTasks("lagoon")).toBe(1);
 });
 
-it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タスクの件数を渡す(ADR 0226)", async () => {
+it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タスクの読み口を渡す(ADR 0226)", async () => {
   const refs: WorkspaceDeletionReferences[] = [];
   t = await bootTidepool({
     workspaceAdmin: {
@@ -176,7 +176,7 @@ it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タ
 
   await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
 
-  expect(refs[0]?.awaitingLandingTaskIds).toEqual([work.id]);
+  expect(refs[0]?.listAwaitingLandingTaskIds("lagoon")).toEqual([work.id]);
 });
 
 it("DELETE refuses a workspace referenced only through an unsettled task's ancestor", async () => {

@@ -9,7 +9,7 @@ import { openQuarantineQuestion } from "../src/quarantine.js";
 import type { MergeDial } from "../src/registry.js";
 import { loadRegistry } from "../src/registry.js";
 import { countUnsettledTasksReferencing, getTask, listBoard, nextSlotTask, recordPrOpened } from "../src/tasks.js";
-import { buildWorkspaceResolver, resolveExecutionWorkspace, withDeclaredRepoCheck } from "../src/workspace.js";
+import { resolveExecutionWorkspace, withDeclaredRepoCheck } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace, HeadRepoTaskBranchesNotSentError, publishWorkspace, updateWorkspace } from "../src/workspace-create.js";
 import { issuedToken, startFakeBroker } from "./fake-broker.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
@@ -314,8 +314,8 @@ async function lagoonWithPurelyLocalDoneRoot() {
   const registerAgain = async (path: string) => {
     await deleteWorkspace({ name: "lagoon", confirm: true }, {
       ...doors,
-      unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", "lagoon"),
-      awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, buildWorkspaceResolver(resolve, undefined), "lagoon"),
+      countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
+      listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
     });
     await createWorkspace({ name: "lagoon", mode: "register", path, confirm: true }, doors);
   };

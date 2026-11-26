@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadRegistry } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError, RepoCredentialError } from "../src/repo-access.js";
-import { registerTask } from "../src/tasks.js";
+import { countUnsettledTasksReferencing, registerTask } from "../src/tasks.js";
 import { assertRememberedRepo, pickupGate, refreshProtectedBranch, releaseWorkspace, resolveExecutionWorkspace } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
@@ -212,7 +213,11 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     await expect(answer()).rejects.toThrow(repair);
     await declare(dest);
     await answer();
-    await deleteWorkspace({ name: "sandbox", confirm: true }, { ...deps, unsettledTaskCount: 0, awaitingLandingTaskIds: [] });
+    await deleteWorkspace({ name: "sandbox", confirm: true }, {
+      ...deps,
+      countUnsettledTasks: (name) => countUnsettledTasksReferencing(deps.db, "workspace", name),
+      listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(deps.db, resolve, name),
+    });
     await createWorkspace({ name: "sandbox", mode: "register", path: replacement.path, confirm: true }, deps);
 
     await leaveBaseline(deps.db, resolve());

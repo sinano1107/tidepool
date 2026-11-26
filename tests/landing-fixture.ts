@@ -29,7 +29,6 @@ import { workbenchPath } from "../src/workbench.js";
 import {
   announceHeadRepo,
   assertRememberedHeadRepo,
-  buildWorkspaceResolver,
   finishHeadRepoChange,
   protectedBranch,
   recordDeclaredRepo,
@@ -798,8 +797,8 @@ export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceC
   await deleteWorkspace({ name: "reef", confirm: true }, {
     ...reef.admin,
     db,
-    unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", "reef"),
-    awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(db, buildWorkspaceResolver(reef.resolve, undefined), "reef"),
+    countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
+    listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, reef.resolve, name),
   });
   between();
   await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });

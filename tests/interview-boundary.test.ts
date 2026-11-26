@@ -342,7 +342,7 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
   t.worker.exit(childId);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${root.id}/cancel`, {})).status).toBe(200);
   expect((await api(t.baseUrl, "DELETE", "/api/workspaces/reef", { confirm: true })).status).toBe(200);
-  expect(deletions.map((references) => references.unsettledTaskCount)).toEqual([0]);
+  expect(deletions.map((references) => references.countUnsettledTasks("reef"))).toEqual([0]);
   expect(existsSync(join(room, ".git"))).toBe(true);
 });
 

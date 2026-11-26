@@ -3,19 +3,21 @@ import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync }
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
-import { openDb } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { CheckoutHostError } from "../src/git.js";
 import { submitAnswer } from "../src/human-verbs.js";
+import { taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { registerQuarantine, workspaceContainmentValue } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
-import { countUnsettledTasksReferencing, getTask, pickupTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, countUnsettledTasksReferencing, getTask, registerTask } from "../src/tasks.js";
 import { workbenchPath } from "../src/workbench.js";
-import { holdsBaseline, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace, type WorkspaceConfig } from "../src/workspace.js";
+import { holdsBaseline, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace, resolveExecutionWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
-import { unusedLanding } from "./fakes.js";
+import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, completionTreePaths, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, withHistoryOnlyBlob } from "./harness.js";
+import { completeThroughTaskCheckout, landingWork } from "./landing-fixture.js";
 import { FIXTURE_WORKSPACE, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -31,16 +33,13 @@ async function makeMainRegistry(): Promise<string> {
   return dir;
 }
 
-/** 参照ゼロ・既定でもない盤面の事実。 */
-const NO_REFERENCES = { unsettledTaskCount: 0, awaitingLandingTaskIds: [] };
-
-/** 盤面が pickup で基準を撮った `name` の checkout。worker は自分のタスクブランチに1つ commit した。 */
+/** 盤面が基準を撮った `name` の checkout。削除の参照検査にかからないようタスクは決着させておく。 */
 async function sessionWithState(name: string) {
   const db = openDb(":memory:");
   const ws = await makeWorkspace(name);
   const now = new Date();
-  const registered = registerTask(db, { type: "work", title: "t", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
-  const task = pickupTask(db, registered, "deckhand", now)!;
+  const task = registerTask(db, { type: "work", title: "t", purpose: "why", completion_criteria: "done" }, now, ...HUMAN_WEBUI);
+  cancelTaskDirectly(db, task, null, now, {}, "webui");
   const place = await prepareAtPickup(db, ws, task);
   commitWork(place.path, "work.txt", "work\n");
   return { db, ws, place, task, now };
@@ -54,10 +53,17 @@ function expectState(s: Session, kept: boolean): void {
   expect(quarantineQuestion(s.db, "workspace", s.ws.name) === undefined).toBe(kept);
 }
 
-const registryDeps = (dir: string) => ({
-  registry: { dir, mode: "purely-local" as const },
-  workspacesBaseDir: "/workspaces",
-});
+function deletionDeps(db: Db, dir: string, workspacesBaseDir = "/workspaces") {
+  const registry = { dir, mode: "purely-local" as const };
+  return {
+    db, registry, workspacesBaseDir,
+    countUnsettledTasks: (name: string) => countUnsettledTasksReferencing(db, "workspace", name),
+    listAwaitingLandingTaskIds: (name: string) => {
+      const loaded = loadRegistry(dir, registry.mode);
+      return taskIdsAwaitingLandingInWorkspace(db, (taskWorkspace) => resolveExecutionWorkspace(loaded, name, taskWorkspace, workspacesBaseDir), name);
+    },
+  };
+}
 
 describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
   vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -65,7 +71,7 @@ describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
   it("削除が成立すると、その name の行(基準)が無くなる", async () => {
     const s = await sessionWithState("tidepool");
 
-    await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(await makeMainRegistry()), ...NO_REFERENCES, db: s.db });
+    await deleteWorkspace({ name: "tidepool", confirm: true }, deletionDeps(s.db, await makeMainRegistry()));
 
     expectState(s, false);
   });
@@ -73,7 +79,7 @@ describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
   it("deleting a workspace clears its pinned sparse policy before the name is reused (ADR 0351 決定7 / ADR 0356 決定3)", async () => {
     const s = await sessionWithState("tidepool");
     try {
-      await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(await makeMainRegistry()), ...NO_REFERENCES, db: s.db });
+      await deleteWorkspace({ name: "tidepool", confirm: true }, deletionDeps(s.db, await makeMainRegistry()));
       const replacement = await makeWorkspace("tidepool");
       commitWork(replacement.path, "omitted.txt", "new checkout policy\n");
       git(replacement.path, "sparse-checkout", "set", "--no-cone", "/*", "!/omitted.txt");
@@ -91,23 +97,31 @@ describe("deleteWorkspace: workspace_state の行(ADR 0351 決定7)", () => {
     const s = await sessionWithState("tidepool");
 
     await expect(
-      deleteWorkspace({ name: "tidepool" }, { ...registryDeps(await makeMainRegistry()), ...NO_REFERENCES, db: s.db }),
+      deleteWorkspace({ name: "tidepool" }, deletionDeps(s.db, await makeMainRegistry())),
     ).rejects.toThrow(DeletionConfirmationRequiredError);
 
     expectState(s, true);
   });
 
   it.each([
-    ["未決着タスク", { unsettledTaskCount: 1 }],
-    ["着地待ち", { awaitingLandingTaskIds: ["t1"] }],
-    ["既定 workspace", { defaultWorkspaceName: "tidepool" }],
-  ])("確認で買えない拒否(%s)のとき、行はそのまま", async (_reason, references) => {
+    { reason: "未決着タスク", seed: (s: Session, clock: FakeClock) => { landingWork(s.db, clock, s.ws.name); } },
+    {
+      reason: "着地待ち",
+      seed: async (s: Session, clock: FakeClock) => {
+        const task = landingWork(s.db, clock, s.ws.name);
+        await completeThroughTaskCheckout(s.db, clock, s.ws, task, "landing.txt", "landing\n");
+      },
+    },
+    { reason: "既定 workspace", defaultWorkspaceName: "tidepool" },
+  ])("確認で買えない拒否($reason)のとき、行はそのまま", async ({ seed, defaultWorkspaceName }) => {
     const s = await sessionWithState("tidepool");
+    await seed?.(s, new FakeClock());
+    const registryDir = await makeRegistry({ "workspaces.yaml": `${s.ws.name}:\n  path: ${s.ws.path}\n` });
 
     await expect(
       deleteWorkspace(
         { name: "tidepool", confirm: true },
-        { ...registryDeps(await makeMainRegistry()), ...NO_REFERENCES, ...references, db: s.db },
+        { ...deletionDeps(s.db, registryDir), defaultWorkspaceName },
       ),
     ).rejects.toMatchObject({ name: "DeletionBlockedError" });
 
@@ -131,7 +145,7 @@ describe("deleteWorkspace: 開いた Quarantine と基準(ADR 0373 決定14)", (
     const registryDir = await makeMainRegistry();
 
     await expect(
-      deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db: s.db }),
+      deleteWorkspace({ name: "tidepool", confirm: true }, deletionDeps(s.db, registryDir)),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
       message: `workspace "tidepool" cannot be deleted: workspace "tidepool" has an open Quarantine (question ${question.id}) and a baseline — answer it first.`,
@@ -151,7 +165,7 @@ describe("deleteWorkspace: 開いた Quarantine と基準(ADR 0373 決定14)", (
     const question = quarantineQuestion(db, quarantine, value)!;
     const registryDir = await makeMainRegistry();
 
-    await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db });
+    await deleteWorkspace({ name: "tidepool", confirm: true }, deletionDeps(db, registryDir));
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
     expect(getTask(db, question.id)!.status).toBe("done");
@@ -164,10 +178,10 @@ describe("deleteWorkspace: 開いた Quarantine と基準(ADR 0373 決定14)", (
     const s = await sessionWithState("tidepool");
     const registryDir = await makeMainRegistry();
     // registry の commit だけが着地した —— 行は s.db に残る
-    await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db: openDb(":memory:") });
+    await deleteWorkspace({ name: "tidepool", confirm: true }, deletionDeps(openDb(":memory:"), registryDir));
     git(registryDir, "-c", "user.name=test", "-c", "user.email=test@example.com", "revert", "--no-edit", "HEAD");
 
-    await deleteWorkspace({ name: "tidepool", confirm: true }, { ...registryDeps(registryDir), ...NO_REFERENCES, db: s.db });
+    await deleteWorkspace({ name: "tidepool", confirm: true }, deletionDeps(s.db, registryDir));
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
     expectState(s, false);
@@ -180,12 +194,7 @@ describe("deleteWorkspace: 正常系(issue #205 / ADR 0087 決定1・決定4)", 
 
     const checkout = await deleteWorkspace(
       { name: "tidepool", confirm: true },
-      {
-        registry: { dir: registryDir, mode: "purely-local" },
-        workspacesBaseDir: "/workspaces",
-        ...NO_REFERENCES,
-        db: openDb(":memory:"),
-      },
+      deletionDeps(openDb(":memory:"), registryDir),
     );
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
@@ -203,12 +212,7 @@ describe("deleteWorkspace: 確認の門(issue #205 / ADR 0087)", () => {
     await expect(
       deleteWorkspace(
         { name: "tidepool" },
-        {
-          registry: { dir: registryDir, mode: "purely-local" },
-          workspacesBaseDir: "/workspaces",
-          ...NO_REFERENCES,
-          db: openDb(":memory:"),
-        },
+        deletionDeps(openDb(":memory:"), registryDir),
       ),
     ).rejects.toThrow(DeletionConfirmationRequiredError);
 
@@ -220,17 +224,16 @@ describe("deleteWorkspace: 確認の門(issue #205 / ADR 0087)", () => {
 describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
   it("未決着タスクが参照していると confirm があっても消せず、件数が理由に載る", async () => {
     const registryDir = await makeMainRegistry();
+    const db = openDb(":memory:");
+    const now = new Date();
+    for (const title of ["First task", "Second task", "Third task"]) {
+      registerTask(db, { type: "work", title, purpose: "why", completion_criteria: "done", workspace: "tidepool" }, now, ...HUMAN_WEBUI);
+    }
 
     await expect(
       deleteWorkspace(
         { name: "tidepool", confirm: true },
-        {
-          registry: { dir: registryDir, mode: "purely-local" },
-          workspacesBaseDir: "/workspaces",
-          ...NO_REFERENCES,
-          db: openDb(":memory:"),
-          unsettledTaskCount: 3,
-        },
+        deletionDeps(db, registryDir),
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
@@ -241,23 +244,22 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
   });
 
   it("この workspace で着地を待つ完了タスクがあると confirm があっても消せず、件数が理由に載る(ADR 0226)", async () => {
-    const registryDir = await makeMainRegistry();
+    const db = openDb(":memory:");
+    const ws = await makeWorkspace("tidepool");
+    const registryDir = await makeRegistry({ "workspaces.yaml": `${ws.name}:\n  path: ${ws.path}\n` });
+    const clock = new FakeClock();
+    const first = await completeThroughTaskCheckout(db, clock, ws, landingWork(db, clock, ws.name), "first.txt", "first\n");
+    const second = await completeThroughTaskCheckout(db, clock, ws, landingWork(db, clock, ws.name), "second.txt", "second\n");
 
     await expect(
       deleteWorkspace(
         { name: "tidepool", confirm: true },
-        {
-          registry: { dir: registryDir, mode: "purely-local" },
-          workspacesBaseDir: "/workspaces",
-          ...NO_REFERENCES,
-          db: openDb(":memory:"),
-          awaitingLandingTaskIds: ["t1", "t2"],
-        },
+        deletionDeps(db, registryDir),
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
-      message: 'workspace "tidepool" cannot be deleted: 2 completed task(s) still await landing through it: t1, t2',
-      reasons: [{ code: "tasks_awaiting_landing", count: 2, task_ids: ["t1", "t2"] }],
+      message: `workspace "tidepool" cannot be deleted: 2 completed task(s) still await landing through it: ${first.id}, ${second.id}`,
+      reasons: [{ code: "tasks_awaiting_landing", count: 2, task_ids: [first.id, second.id] }],
     });
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeDefined();
@@ -270,10 +272,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       deleteWorkspace(
         { name: "tidepool", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
-          workspacesBaseDir: "/workspaces",
-          ...NO_REFERENCES,
-          db: openDb(":memory:"),
+          ...deletionDeps(openDb(":memory:"), registryDir),
           defaultWorkspaceName: "tidepool",
         },
       ),
@@ -289,12 +288,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
 
     await deleteWorkspace(
       { name: "tidepool", confirm: true },
-      {
-        registry: { dir: registryDir, mode: "purely-local" },
-        workspacesBaseDir: "/workspaces",
-        ...NO_REFERENCES,
-        db: openDb(":memory:"),
-      },
+      deletionDeps(openDb(":memory:"), registryDir),
     );
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
@@ -314,12 +308,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
     await expect(
       deleteWorkspace(
         { name: "registry", confirm: true },
-        {
-          registry: { dir: registryDir, mode: "purely-local" },
-          workspacesBaseDir: "/workspaces",
-          ...NO_REFERENCES,
-          db: openDb(":memory:"),
-        },
+        deletionDeps(openDb(":memory:"), registryDir),
       ),
     ).resolves.toBe(registryDir);
     expect(loadRegistry(registryDir, "purely-local").workspaces.registry).toBeUndefined();
@@ -340,13 +329,7 @@ describe("deleteWorkspace: 人間自身の内容の作業台と intake question(
     await openHumanContentWorkbench(db, ws, base, { actorId: HUMAN_ACTOR_ID, origin: "webui" }, () => new Date(), { resolveRegistered: undefined });
     const question = getTask(db, openIntakeQuestionId(db, ws.name)!)!;
     const workbench = realpathSync(workbenchPath(base, { workspace: ws.name }));
-    const deps = () => ({
-      registry: { dir: registryDir, mode: "purely-local" as const },
-      workspacesBaseDir: base,
-      unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", ws.name),
-      awaitingLandingTaskIds: [],
-      db,
-    });
+    const deps = () => deletionDeps(db, registryDir, base);
     const answer = (option: string, asked = question) =>
       submitAnswer({ db, pollNow: () => {}, landing: unusedLanding, workspace: ws, workspacesDir: base }, asked, [option], undefined, () => new Date(), "webui");
     const close = () => answer("close");
