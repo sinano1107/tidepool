@@ -1,7 +1,9 @@
 import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import type { Db } from "../src/db.js";
-import { assertLandingRefs, createLanding, type LandingDeps, rootPrOutcome } from "../src/landing.js";
+import { HEAD_REPO_REMOTE } from "../src/github-auth.js";
+import { assertLandingRefs, createLanding, type Landing, type LandingDeps, rootPrOutcome } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { registerTask, type Task } from "../src/tasks.js";
 import { DeclaredRepoMismatchError, declaredRepoDisagreement, protectedBranch, taskBranch, type WorkspaceConfig, withRememberedRepoCheck } from "../src/workspace.js";
@@ -29,10 +31,13 @@ import {
   openBoard,
   promotionFailures,
   pushPrHead,
+  type RegisteredReef,
   recordPrOpenedOutsideConvergence,
   registeredReef,
   reRegister,
 } from "./landing-fixture.js";
+import { setWorkspaceEntry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -100,20 +105,15 @@ it("別の repo で登録し直した名前の、PR を開いた根は、運ぶ�
   stoppedNamingBoth(db, root, old.repo!, `repo ${moved.repo}`);
 });
 
-/** 旧い repo で拾われ PR #1 を開いた根に修理が載った盤面で、`hold` が止める await の間に、同じ checkout の origin を別の repo へ向けて
- *  扉で登録し直す(扉は origin から `repo:` を書く —— #3500 の実測の形)。`hold` は収束に足す材料を返せる。`target` は登録し直す先と
- *  削除の後の人間の手を差し替える。 */
-async function reRegisteredDuringAwait(
+/** 旧い repo で拾われ PR #1 を開いた根に修理が載った盤面で、`hold` が止める await の間に `during` を撃つ。`hold` は収束に足す材料を返せる。
+ *  既定の `during` は registry の `path:` を同じ repo の clone へ手で書き換え、古い checkout を消す —— 削除の扉は着地の執行中を拒むので
+ *  (ADR 0421 決定4 追記)、await の間に宣言が変わる形は手編集だけである。`door` は `during` が投げたもの。 */
+async function changedDuringAwait(
   hold: (github: FakeGitHubClient) => { entered: Promise<void>; open: () => void; deps?: Partial<LandingDeps> },
-  target?: (old: WorkspaceConfig) => Promise<{ workspace: WorkspaceConfig; between: () => void }>,
+  during: (fixture: { db: Db; reef: RegisteredReef; old: WorkspaceConfig; landing: Landing }) => Promise<void> = movedToClone,
 ) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeLandingWorkspace("reef-old");
-  const { workspace: other } = await makeRemoteBackedWorkspace("reef-other");
-  const { workspace: declared, between } = (await target?.(old)) ?? {
-    workspace: { ...old, repo: other.repo },
-    between: () => git(old.path, "remote", "set-url", "origin", other.repo!),
-  };
   const reef = await registeredReef(old);
   giveHeadRepo(db, reef, old.head_repo!);
   const github = new FakeGitHubClient();
@@ -128,11 +128,28 @@ async function reRegisteredDuringAwait(
 
   const converging = landing.converge();
   await window.entered;
-  await reRegister(db, reef, declared, between);
+  const door = await during({ db, reef, old, landing }).then(() => undefined, (error: unknown) => error);
   window.open();
   await converging;
-  return { db, github, old, other, declared, root: done, head };
+  return { db, github, reef, old, root: done, head, door };
 }
+
+async function movedToClone({ reef, old }: { reef: RegisteredReef; old: WorkspaceConfig }) {
+  const clone = join(await tempDir("reef-clone-"), "reef");
+  git(old.path, "clone", "--quiet", old.path, clone);
+  git(clone, "remote", "set-url", "origin", old.repo!);
+  git(clone, "remote", "add", HEAD_REPO_REMOTE, old.head_repo!);
+  setWorkspaceEntry(reef.registryDir, "reef", "path", clone);
+  rmSync(old.path, { recursive: true, force: true });
+}
+
+/** 根だけが path の変更の PR 昇格失敗の question で止まり、workspace の Quarantine は立たない(ADR 0399 決定3)。 */
+const stoppedOnPathChange = (db: Db, root: Task) => {
+  const [question, ...rest] = promotionFailures(db, root.id);
+  expect(rest).toEqual([]);
+  expect(question!.purpose).toContain("the registered checkout path changed during the operation");
+  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
+};
 
 /** `method` の呼び出しを、本物の token の await に当たる所で1回止める。 */
 function holdBefore<M extends "getPullRequestState" | "preparePush">(method: M) {
@@ -147,66 +164,58 @@ function holdBefore<M extends "getPullRequestState" | "preparePush">(method: M) 
   };
 }
 
-it("PR の状態を読む前の await(token の取得)の間に扉で別の repo へ登録し直しても、盤面は新しい repo の PR を読まず、記録と今の宣言を名指して止まる", async () => {
-  const { db, github, old, other, root } = await reRegisteredDuringAwait(holdBefore("getPullRequestState"));
+/** push の前に PR の head を手元へ取る token の await(ADR 0242 決定1)。 */
+const holdAtHeadFetch = (github: FakeGitHubClient) => {
+  // 手元に無い head —— 収束は push の前に token を温めてそれを取りに行く
+  github.scriptHead(1, "f".repeat(40));
+  const { window, githubAuth } = fetchHeldAtToken();
+  return { ...window, deps: { githubAuth } };
+};
+
+it("PR の状態を読む前の await(token の取得)の間に registry の path: を同じ repo の clone へ手で書き換えても、盤面は PR を読まず、根だけが path の変更で止まる", async () => {
+  const { db, github, root } = await changedDuringAwait(holdBefore("getPullRequestState"));
 
   expect([github.stateChecks, github.pushes]).toEqual([[], []]);
-  stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
+  stoppedOnPathChange(db, root);
 });
 
-it("push の準備の await の間に扉で別の repo へ登録し直しても、盤面はその根を push せず、workspace の Quarantine でなく記録と今の宣言を名指して止まる", async () => {
-  const { db, github, old, other, root, head } = await reRegisteredDuringAwait(holdBefore("preparePush"));
+it("push の準備の await の間に registry の path: を同じ repo の clone へ手で書き換えても、盤面はその根を push せず、根だけが path の変更で止まる", async () => {
+  const { db, github, old, root, head } = await changedDuringAwait(holdBefore("preparePush"));
 
   expect([github.pushes, github.requests]).toEqual([[], []]);
   expect(git(old.head_repo!, "rev-parse", `task/${root.id}`)).toBe(head);
-  stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
+  stoppedOnPathChange(db, root);
 });
 
-// push の前に PR の head を手元へ取る token の await(ADR 0242 決定1)の後も、古い宣言で名前の場所を比べる前に根の記録を比べる
-it("PR の head を取る token の await の間に扉で別の repo へ登録し直しても、盤面はその根を push せず、workspace の Quarantine でなく記録と今の宣言を名指して止まる", async () => {
-  const { db, github, old, other, root, head } = await reRegisteredDuringAwait((github) => {
-    // 手元に無い head —— 収束は push の前に token を温めてそれを取りに行く
-    github.scriptHead(1, "f".repeat(40));
-    const { window, githubAuth } = fetchHeldAtToken();
-    return { ...window, deps: { githubAuth } };
-  });
+it("PR の head を取る token の await の間に registry の path: を同じ repo の clone へ手で書き換えても、盤面はその根を push せず、根だけが path の変更で止まる", async () => {
+  const { db, github, old, root, head } = await changedDuringAwait(holdAtHeadFetch);
 
   expect([github.pushes, github.requests]).toEqual([[], []]);
   expect(git(old.head_repo!, "rev-parse", `task/${root.id}`)).toBe(head);
-  stoppedNamingBoth(db, root, old.repo!, `repo ${other.repo}`);
+  stoppedOnPathChange(db, root);
 });
 
-// 釘(#3699): 保護ブランチの写しの読み直し(`refreshProtectedBranch`)の token の await。窓に入らなければ `reRegisteredDuringAwait` は進まない
-it.each([
-  ["new path and repo, old checkout removed", async (old: WorkspaceConfig) => {
-    const { workspace } = await makeLandingWorkspace("reef-new");
-    return { workspace, between: () => rmSync(old.path, { recursive: true, force: true }) };
-  }],
-  ["same path, repo swapped", undefined],
-] as const)("merge 済みの根が保護ブランチの写しを読み直す token の await の間に扉で登録し直すと(%s)、根だけが記録と今の宣言を名指して止まる(ADR 0399 決定5)", async (_, target) => {
-  const { db, old, declared, root } = await reRegisteredDuringAwait((github) => {
+// ADR 0421 決定4 追記: この await の間は収束がその名前の根を着地させている —— 扉は登録し直しを拒み、記録と今の宣言は食い違わない
+it("PR の head を取る token の await の間の削除の扉は、push する内容と着地の執行中を名指して拒み、名前は元の repo の登録のまま残る", async () => {
+  const { workspace: other } = await makeRemoteBackedWorkspace("reef-other");
+  const { db, reef, old, root, door } = await changedDuringAwait(holdAtHeadFetch, ({ db, reef, old, landing }) =>
+    reRegister(db, reef, { ...old, repo: other.repo }, () => git(old.path, "remote", "set-url", "origin", other.repo!), landing),
+  );
+
+  expect(door).toMatchObject({ name: "DeletionBlockedError", reasons: [{ code: "unpushed_pr_content", task_ids: [root.id] }, { code: "landing_in_progress", task_ids: [root.id] }] });
+  expect(reef.resolve("reef").repo).toBe(old.repo);
+  expect(promotionFailures(db, root.id).map(({ purpose }) => purpose).join("\n")).not.toContain("now declares");
+});
+
+// 釘(#3699): 保護ブランチの写しの読み直し(`refreshProtectedBranch`)の token の await。窓に入らなければ `changedDuringAwait` は進まない
+it("merge 済みの根が保護ブランチの写しを読み直す token の await の間に registry の path: を同じ repo の clone へ手で書き換えると、根だけが path の変更で止まる", async () => {
+  const { db, root } = await changedDuringAwait((github) => {
     github.scriptMergedOutside(1);
     const { window, githubAuth } = fetchHeldAtToken();
     return { ...window, deps: { githubAuth } };
-  }, target);
-
-  stoppedNamingBoth(db, root, old.repo!, `repo ${declared.repo}`);
-});
-
-// #3700: 削除の扉で基準の行も消えた名前を、await の間に別の path の別の repo で登録し直す。await の後は `assertLandingRefs` より前の行き先の読み
-// (`workspaceNetworkDestination`)が path の変化を見て先に止めるので、この test が固定するのは結果(根の止まり、workspace の Quarantine なし、
-// ADR 0399 決定5)で、`assertLandingRefs` の素の投げ直しの行ではない —— その行は下の domain の test が固定する
-it.each([
-  ["PR の状態を読む前", "getPullRequestState"],
-  ["push の準備", "preparePush"],
-] as const)("%sの await の間に扉で名前を削除し、別の path の別の repo の checkout に登録し直しても、workspace の Quarantine でなく記録と今の宣言を名指して止まる", async (_, method) => {
-  const { db, github, old, declared, root } = await reRegisteredDuringAwait(holdBefore(method), async () => {
-    const { workspace } = await makeRemoteBackedWorkspace("reef-elsewhere");
-    return { workspace, between: () => {} };
   });
 
-  expect([github.pushes, github.requests]).toEqual([[], []]);
-  stoppedNamingBoth(db, root, old.repo!, `repo ${declared.repo}`);
+  stoppedOnPathChange(db, root);
 });
 
 /** 旧い repo で拾われ PR #1 を開いた done の根を残し、`reef` を扉で purely-local の checkout(`moved`)に登録し直した盤面。 */

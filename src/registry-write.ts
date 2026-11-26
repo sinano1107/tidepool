@@ -58,6 +58,9 @@ export class DeletionConfirmationRequiredError extends Error {
 export type DeletionBlockedReason =
   | { code: "unsettled_tasks"; count: number; intake_question?: string }
   | { code: "tasks_awaiting_landing"; count: number; task_ids: string[] }
+  | { code: "teardown_unfinished"; task_ids: string[] }
+  | { code: "unpushed_pr_content"; task_ids: string[] }
+  | { code: "landing_in_progress"; task_ids: string[] }
   | { code: "board_default" }
   | { code: "open_quarantine"; question_id: string }
   | { code: "human_content_workbench"; workbench: string; branch: string; unreadable?: { place: string; error: string } }
@@ -86,6 +89,14 @@ function describeReason(reason: DeletionBlockedReason, resourceName: string): st
   if (reason.code === "tasks_awaiting_landing") {
     return `${reason.count} completed task(s) still await landing through it: ${reason.task_ids.join(", ")}`;
   }
+  // ADR 0421 決定4: 盤面がその名前でまだ運ぶもの —— どれも待てば通るので、何を待つかを言う
+  if (reason.code === "teardown_unfinished") {
+    return `completed task(s) ${reason.task_ids.join(", ")} have not finished their teardown, which merges their work back — wait for it to finish (a failed teardown finishes once its Quarantine is answered)`;
+  }
+  if (reason.code === "unpushed_pr_content") {
+    return `PR root task(s) ${reason.task_ids.join(", ")} hold content the board has not pushed to their PR yet — wait for the board to push it`;
+  }
+  if (reason.code === "landing_in_progress") return `the board is landing task(s) ${reason.task_ids.join(", ")} right now — try again in a moment`;
   if (reason.code === "board_default") return "it is the board's default";
   // spec #3273 text B10。ADR 0373 決定14: 名前を名指す Quarantine が開いていて基準の行がある間は拒む —— 削除 → 再登録 → `repaired by hand` で
   // 比較を迂回させない

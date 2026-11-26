@@ -11,8 +11,10 @@ import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
   createLanding,
   type Landing,
+  prRootIdsWithUnpushedContentInWorkspace,
   registerPrPromotionFailureQuestion,
   taskIdsAwaitingLandingInWorkspace,
+  taskIdsBeingLandedInWorkspace,
 } from "../src/landing.js";
 import { type AuthorityProfile, loadRegistry, type MergeDial, UnknownAgentError } from "../src/registry.js";
 import {
@@ -39,9 +41,10 @@ import {
   resolveExecutionWorkspace,
   taskRunPlaceForBoard,
   type WorkspaceConfig,
+  type WorkspaceResolver,
   writeBoardRefs,
 } from "../src/workspace.js";
-import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
+import { createWorkspace, deleteWorkspace, type WorkspaceDeletionReferences } from "../src/workspace-create.js";
 import { awaitWindow, FakeClock, FakeGitHubClient, fakeHead, unusedLanding } from "./fakes.js";
 import {
   checkoutTaskBranch,
@@ -791,15 +794,21 @@ export async function registeredReef(old: WorkspaceConfig) {
 
 export type RegisteredReef = Awaited<ReturnType<typeof registeredReef>>;
 
-/** 削除の扉 → 登録の扉(register)で `reef` を `moved` の checkout に登録し直す —— 扉は checkout の origin から `repo:` を書く。`between` は
- *  削除の後・登録の前の人間の手(checkout の origin を向け替えるなど)。`moved` が出元 repo を持てば `giveHeadRepo` で足す。 */
-export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceConfig, between = () => {}): Promise<void> {
-  await deleteWorkspace({ name: "reef", confirm: true }, {
-    ...reef.admin,
-    db,
+/** 削除の扉の読み口を api.ts と同じ読み手で束ねる。`landing` が無い盤面では執行中の着地も無い。 */
+export function deletionReaders(db: Db, resolve: WorkspaceResolver | undefined, landing?: Pick<Landing, "isMarked" | "landingRootIn">): WorkspaceDeletionReferences {
+  return {
     countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
-    listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, reef.resolve, name),
-  });
+    listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
+    listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name),
+    listLandingInProgressTaskIds: (name) => (landing ? taskIdsBeingLandedInWorkspace(db, landing, name) : []),
+  };
+}
+
+/** 削除の扉 → 登録の扉(register)で `reef` を `moved` の checkout に登録し直す —— 扉は checkout の origin から `repo:` を書く。`between` は
+ *  削除の後・登録の前の人間の手(checkout の origin を向け替えるなど)。`moved` が出元 repo を持てば `giveHeadRepo` で足す。`landing` は
+ *  扉が執行中の着地を読む盤面の収束。 */
+export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceConfig, between = () => {}, landing?: Landing): Promise<void> {
+  await deleteWorkspace({ name: "reef", confirm: true }, { ...reef.admin, db, ...deletionReaders(db, reef.resolve, landing) });
   between();
   await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
   expect(reef.resolve("reef").repo).toBe(moved.repo);

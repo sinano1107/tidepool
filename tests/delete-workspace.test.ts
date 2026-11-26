@@ -6,18 +6,35 @@ import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { CheckoutHostError } from "../src/git.js";
-import { submitAnswer } from "../src/human-verbs.js";
-import { taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
-import { registerQuarantine, workspaceContainmentValue } from "../src/quarantine.js";
+import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
+import { contentLeftBehindLocally, createLanding, lastPushedHead, prRootIdsWithUnpushedContentInWorkspace, registerPrPromotionFailureQuestion, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { openQuarantineQuestion, registerQuarantine, workspaceContainmentValue } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
+import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, countUnsettledTasksReferencing, getTask, registerTask } from "../src/tasks.js";
+import { acceptTeardownQuarantine, markTeardown, runTeardown, type TeardownDeps, teardownStep } from "../src/teardown.js";
 import { workbenchPath } from "../src/workbench.js";
 import { holdsBaseline, openHumanContentWorkbench, openIntakeQuestionId, quarantineWorkspace, releaseWorkspace, resolveExecutionWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
-import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, completionTreePaths, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, withHistoryOnlyBlob } from "./harness.js";
-import { completeThroughTaskCheckout, landingWork } from "./landing-fixture.js";
+import { awaitWindow, FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
+import { commitWork, completionTreePaths, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, withHistoryOnlyBlob } from "./harness.js";
+import {
+  answerPromotion,
+  commitThroughTaskCheckout,
+  completeThroughTaskCheckout,
+  deletionReaders,
+  finish,
+  giveHeadRepo,
+  landingWork,
+  openBoard,
+  promotionFailures,
+  pushPrHead,
+  recordPrOpenedOutsideConvergence,
+  registeredReef,
+  settleRepairNotMergedBack,
+  tearDownRepair,
+} from "./landing-fixture.js";
 import { FIXTURE_WORKSPACE, makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -55,13 +72,13 @@ function expectState(s: Session, kept: boolean): void {
 
 function deletionDeps(db: Db, dir: string, workspacesBaseDir = "/workspaces") {
   const registry = { dir, mode: "purely-local" as const };
+  const resolveIn = (name: string) => (taskWorkspace: string | null) => resolveExecutionWorkspace(loadRegistry(dir, registry.mode), name, taskWorkspace, workspacesBaseDir);
   return {
     db, registry, workspacesBaseDir,
     countUnsettledTasks: (name: string) => countUnsettledTasksReferencing(db, "workspace", name),
-    listAwaitingLandingTaskIds: (name: string) => {
-      const loaded = loadRegistry(dir, registry.mode);
-      return taskIdsAwaitingLandingInWorkspace(db, (taskWorkspace) => resolveExecutionWorkspace(loaded, name, taskWorkspace, workspacesBaseDir), name);
-    },
+    listAwaitingLandingTaskIds: (name: string) => taskIdsAwaitingLandingInWorkspace(db, resolveIn(name), name),
+    listUnpushedPrRootIds: (name: string) => prRootIdsWithUnpushedContentInWorkspace(db, resolveIn(name), name),
+    listLandingInProgressTaskIds: () => [],
   };
 }
 
@@ -312,6 +329,135 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       ),
     ).resolves.toBe(registryDir);
     expect(loadRegistry(registryDir, "purely-local").workspaces.registry).toBeUndefined();
+  });
+});
+
+describe("deleteWorkspace: 盤面がその名前でまだ運ぶものを持つ間は拒む(ADR 0421 決定4)", () => {
+  vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
+
+  /** `reef` に登録した checkout で PR #1 を開いた `external` の根。`door` は本物の読み口(収束の印も)で削除の扉を叩く。 */
+  async function reefWithPrRoot() {
+    const { db, clock } = await openBoard();
+    const { workspace: old } = await makeLandingWorkspace("reef-old");
+    const reef = await registeredReef(old);
+    giveHeadRepo(db, reef, old.head_repo!);
+    const github = new FakeGitHubClient();
+    const workspace = reef.resolve("reef");
+    const work = landingWork(db, clock, "reef");
+    await commitThroughTaskCheckout(db, clock, workspace, work, "feature.txt", "ready\n");
+    const root = finish(db, clock, work);
+    const head = pushPrHead(github, workspace, root.id, 1);
+    recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge: "external" }, head, workspace });
+    const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github });
+    const door = () => deleteWorkspace({ name: "reef", confirm: true }, { ...reef.admin, db, ...deletionReaders(db, reef.resolve, landing) });
+    /** 根の修理子を merge back まで済ませる(後始末の印は立てない)。 */
+    const mergedBackRepair = async () => tearDownRepair(db, clock, workspace, await settleRepairNotMergedBack(db, clock, workspace, root.id));
+    /** push の失敗 question に断念と答える —— 収束はこの根に何もしなくなる(ADR 0225)。 */
+    const abandon = async () => {
+      registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
+      await answerPromotion(db, clock, landing, workspace, promotionFailures(db, root.id)[0]!, "abandon promotion");
+    };
+    return { db, clock, reef, workspace, github, landing, root, door, mergedBackRepair, abandon };
+  }
+
+  /** 根の修理子を完了させ、後始末の印を立てて枠を後始末に入れる —— merge back はまだ撃っていない。`teardown` が本物の後始末を撃つ。 */
+  async function repairInTeardown(r: Awaited<ReturnType<typeof reefWithPrRoot>>, resolve: TeardownDeps["resolve"] = r.reef.resolve) {
+    const repair = await settleRepairNotMergedBack(r.db, r.clock, r.workspace, r.root.id);
+    const slot = new Slot();
+    slot.occupy(repair.id, sessionId(r.db, repair.id));
+    markTeardown(r.db, repair.id, r.clock.now());
+    slot.enterTeardown();
+    const deps: TeardownDeps = { db: r.db, clock: r.clock, slot, resolve, pollNow: () => {} };
+    return { repair, deps, teardown: () => runTeardown(deps, repair.id, teardownStep(r.db, repair.id)) };
+  }
+
+  it("後始末の済んでいない完了 task と、収束がまだ push する内容を持つ PR の根を名指して拒み、後始末と push を待てば通る", async () => {
+    const r = await reefWithPrRoot();
+    const { repair, teardown } = await repairInTeardown(r);
+
+    await expect(r.door()).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      message: expect.stringContaining(`completed task(s) ${repair.id} have not finished their teardown`),
+      reasons: [{ code: "teardown_unfinished", task_ids: [repair.id] }, { code: "unpushed_pr_content", task_ids: [r.root.id] }],
+    });
+    await teardown();
+    await expect(r.door()).rejects.toMatchObject({
+      message: expect.stringContaining(`PR root task(s) ${r.root.id} hold content the board has not pushed to their PR yet`),
+      reasons: [{ code: "unpushed_pr_content", task_ids: [r.root.id] }],
+    });
+    await r.landing.converge();
+    expect(r.github.pushes.map(({ branch }) => branch)).toEqual([`task/${r.root.id}`]);
+
+    await expect(r.door()).resolves.toBe(r.workspace.path);
+  });
+
+  it("後始末が落ちた task で拒まれた削除は、その Quarantine に答えた後に通る", async () => {
+    const r = await reefWithPrRoot();
+    await r.abandon();
+    let broken = true;
+    const { repair, deps, teardown } = await repairInTeardown(r, (name) => {
+      if (broken) throw new Error("resolve exploded");
+      return r.reef.resolve(name);
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await teardown();
+    const question = getTask(r.db, openQuarantineQuestion(r.db, "failedTeardown", repair.id)!.id)!;
+
+    await expect(r.door()).rejects.toMatchObject({ reasons: [{ code: "teardown_unfinished", task_ids: [repair.id] }] });
+    broken = false;
+    await submitAnswer(
+      { db: r.db, pollNow() {}, landing: r.landing, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db: r.db, teardownQuarantine: (id) => acceptTeardownQuarantine(deps, id) }) },
+      question,
+      ["repaired by hand"],
+      undefined,
+      () => r.clock.now(),
+      "webui",
+    );
+
+    await expect(r.door()).resolves.toBe(r.workspace.path);
+  });
+
+  it("push の失敗に断念と答えた PR の根は、push していない内容を持っていても拒まない", async () => {
+    const r = await reefWithPrRoot();
+    await r.mergedBackRepair();
+    r.github.preparePush = async () => {
+      throw new Error("push rejected");
+    };
+    await r.landing.converge();
+    await answerPromotion(r.db, r.clock, r.landing, r.workspace, promotionFailures(r.db, r.root.id)[0]!, "abandon promotion");
+    expect(contentLeftBehindLocally(r.db, r.workspace, r.root.id, lastPushedHead(r.db, r.root.id))).not.toEqual([]);
+
+    await expect(r.door()).resolves.toBe(r.workspace.path);
+  });
+
+  it("名前の場所に根のブランチが無いとき、push する内容を数えずに通す", async () => {
+    const r = await reefWithPrRoot();
+    await r.mergedBackRepair();
+    git(r.workspace.path, "branch", "-D", `task/${r.root.id}`);
+
+    await expect(r.door()).resolves.toBe(r.workspace.path);
+  });
+
+  it("収束がその名前の根を着地させている間は根を名指して拒み、執行が終われば通る", async () => {
+    const r = await reefWithPrRoot();
+    await r.mergedBackRepair();
+    const window = awaitWindow();
+    const prepare = r.github.preparePush.bind(r.github);
+    r.github.preparePush = async (input) => {
+      await window.hold();
+      return prepare(input);
+    };
+    const converging = r.landing.converge();
+    await window.entered;
+
+    await expect(r.door()).rejects.toMatchObject({
+      message: expect.stringContaining(`the board is landing task(s) ${r.root.id} right now`),
+      reasons: [{ code: "unpushed_pr_content", task_ids: [r.root.id] }, { code: "landing_in_progress", task_ids: [r.root.id] }],
+    });
+    window.open();
+    await converging;
+
+    await expect(r.door()).resolves.toBe(r.workspace.path);
   });
 });
 

@@ -46,7 +46,7 @@ import {
   takeInWorkThroughHumanDoor,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { blockingRootOf, type Landing, landingState, taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "./landing.js";
+import { blockingRootOf, type Landing, landingState, prRootIdsWithUnpushedContentInWorkspace, taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace, taskIdsBeingLandedInWorkspace } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -1224,6 +1224,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
             buildWorkspaceResolver(resolveWorkspace, workspace),
             name,
           ),
+          listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, buildWorkspaceResolver(resolveWorkspace, workspace), name),
+          listLandingInProgressTaskIds: (name) => taskIdsBeingLandedInWorkspace(db, landing, name),
           defaultWorkspaceName: workspace?.name,
         },
       );

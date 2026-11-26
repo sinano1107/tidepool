@@ -28,6 +28,7 @@ import {
   contentSourceFor,
   countUnsettledAttachedChildren,
   derivedWorkspace,
+  doneTaskIdsInWorkspace,
   END_LANDING_OPTION,
   getTask,
   hasTaskBranchSql,
@@ -186,6 +187,33 @@ export function taskIdsAwaitingLandingInWorkspace(db: Db, resolve: WorkspaceReso
   return tasksAwaitingLanding(db, resolve)
     .filter((task) => task.workspace === workspaceName)
     .map(({ id }) => id);
+}
+
+/** ADR 0421 決定4: 収束がまだ push する内容を名前の場所に持つ PR の根。断念が効いている根は収束が何もしないので数えない。内容を読めない根
+ *  (名前を解決できない、根のブランチが無い、比べられない)も数えない —— 数えるとブランチの無い checkout で扉が止まる。`hasContentLeftBehind`
+ *  の fail-closed とは逆の向きである。 */
+export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: WorkspaceResolver | undefined, workspaceName: string): string[] {
+  let workspace: WorkspaceConfig | undefined;
+  try {
+    workspace = resolve?.(workspaceName);
+  } catch {}
+  if (!workspace) return [];
+  return doneTaskIdsInWorkspace(db, workspaceName).filter((id) => {
+    if (getTask(db, id)!.pr_number === null || landingEnded(db, id) || rootPrOutcome(db, id) !== null || declineInForce(db, id, "pr_promotion_retry")) return false;
+    try {
+      return taskBranchExists(workspace, id) && contentLeftBehindLocally(db, workspace, id, lastPushedHead(db, id)).length > 0;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** ADR 0421 決定4 追記: 着地の執行中の task —— その名前の task への処理中の印か、収束がその名前で着地させている根。「着地を終える」の回答と
+ *  「諦める」の受理が拒むのと同じ2つの読み口(ADR 0399 決定6 / ADR 0407 決定2)。 */
+export function taskIdsBeingLandedInWorkspace(db: Db, landing: Pick<Landing, "isMarked" | "landingRootIn">, workspaceName: string): string[] {
+  const landingRoot = landing.landingRootIn(workspaceName);
+  const marked = doneTaskIdsInWorkspace(db, workspaceName).filter((id) => landing.isMarked(id));
+  return [...new Set([...marked, ...(landingRoot ? [landingRoot] : [])])];
 }
 
 /** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226 / ADR 0241 決定6): 収束の導出を1回走らせ、PR をまだ開いていない

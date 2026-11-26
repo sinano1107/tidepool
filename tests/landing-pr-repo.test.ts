@@ -515,7 +515,7 @@ it("別の checkout で登録し直した名前でも、着地を終えた根の
 
 /** PR の無い根の PR 作成で、`createPullRequest` が宣言を読んで PR を作った後の await(本物では作成の応答待ち)で1回止める盤面。
  *  `during` はその窓の間の人間の手。merge dial は PR を読まない(既定)ので、作成の後に宣言を読み直すのは比較器だけ。 */
-async function heldAfterPrCreated(during: (fixture: { db: Db; reef: RegisteredReef; old: WorkspaceConfig }) => Promise<void> | void) {
+async function heldAfterPrCreated(during: (fixture: { db: Db; reef: RegisteredReef; old: WorkspaceConfig; landing: Landing }) => Promise<void> | void) {
   const { db, clock } = await openBoard();
   const { workspace: old } = await makeLandingWorkspace("reef-old");
   const reef = await registeredReef(old);
@@ -535,7 +535,7 @@ async function heldAfterPrCreated(during: (fixture: { db: Db; reef: RegisteredRe
   const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github });
   const converging = landing.converge();
   await window.entered;
-  const door = await Promise.resolve(during({ db, reef, old })).then(() => undefined, (error: unknown) => error);
+  const door = await Promise.resolve(during({ db, reef, old, landing })).then(() => undefined, (error: unknown) => error);
   window.open();
   const [verdict, ...rest] = await converging;
   expect(rest).toEqual([]);
@@ -575,11 +575,11 @@ it("PR を作る応答を待つ間に registry の path: と repo: を別の che
   expect(getTask(db, root.id)?.pr_number).toBe(1);
 });
 
-it("PR を作る応答を待つ間の削除の扉は、着地を待つ根を数えて拒み、根は作った PR で着地する", async () => {
+it("PR を作る応答を待つ間の削除の扉は、着地を待つ根と着地の執行中を数えて拒み、根は作った PR で着地する", async () => {
   const { workspace: moved } = await makeLandingWorkspace("reef-new");
-  const { db, root, verdict, door } = await heldAfterPrCreated(({ db, reef }) => reRegister(db, reef, moved));
+  const { db, root, verdict, door } = await heldAfterPrCreated(({ db, reef, landing }) => reRegister(db, reef, moved, undefined, landing));
 
-  expect(door).toMatchObject({ reasons: [{ code: "tasks_awaiting_landing", task_ids: [root.id] }] });
+  expect(door).toMatchObject({ reasons: [{ code: "tasks_awaiting_landing", task_ids: [root.id] }, { code: "landing_in_progress", task_ids: [root.id] }] });
   expect(verdict).toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
   expect(getTask(db, root.id)?.pr_number).toBe(1);
 });
