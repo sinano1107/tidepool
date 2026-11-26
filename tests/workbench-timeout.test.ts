@@ -8,6 +8,7 @@ import { loadRegistry } from "../src/registry.js";
 import { workbenchPath } from "../src/workbench.js";
 import { openHumanContentWorkbench } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
+import { stallCarriedVerification } from "./carried-verification-fixture.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, quarantineQuestion } from "./harness.js";
 import { deletionReaders } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -37,6 +38,22 @@ it("作業台の作業ツリーを読む git が上限で止まった取り込�
   } finally {
     rmSync(fifo, { force: true });
   }
+});
+
+it("運んだ後の確かめが上限を越えた取り込みは、作業台を名指して拒み、書き先の ref を保つ(ADR 0423 決定5)", async () => {
+  const c = await conflicted();
+  const workbench = c.workbench();
+  resolveInWorkbench(workbench, c.source);
+  const original = git(c.ws.path, "rev-parse", c.target);
+  await stallCarriedVerification();
+  try {
+    await expect(answer(c)).rejects.toThrow(`\`git pack-objects\` on the workbench at ${workbench} did not finish within 1 s`);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(git(c.ws.path, "rev-parse", c.target)).toBe(original);
+  expect(existsSync(workbench)).toBe(true);
+  expect(quarantineQuestion(c.db, "workspace", c.ws.name)).toBeDefined();
 });
 
 // 開く手が既にある作業台を読む git の上限超過は「読めない作業台」ではない —— 消さず、答え直しが開き直す文(text A7d)のまま

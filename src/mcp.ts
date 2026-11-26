@@ -409,16 +409,16 @@ function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | un
 const refusalNamingPaths = (fix: string, paths: string[], { verb = "complete_task", after = "" }: { verb?: string; after?: string } = {}) =>
   new DomainError(`${fix}, then call ${verb} again${after && `.${after}`}\n${paths.map((path) => `- ${displayWorktreePath(path)}`).join("\n")}`);
 
-/** ADR 0357 決定2: 門で worker の tree が盤面の git を上限まで止めたら、拒まずに session を強制回収で決着させる —— 拒めば worker
+/** ADR 0357 決定2: 門で盤面の git が上限に達したら、拒まずに session を強制回収で決着させる —— 拒めば worker
  *  は verb を繰り返して凍結を起こし直せる。failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に
  *  後始末を繋ぐ(ADR 0331 決定6 の畳み方)。資源の停止は登録しない。worker への tool error は付随で、session はもう終わっている。
- *  出題の写しが root の worktree を読む手も同じ扱い(#3031 の決定)。走る場所は全部 task の checkout(ADR 0356 決定1)。 */
+ *  出題の写しが root の worktree を読む手も同じ扱い(#3031 の決定)。ADR 0423 決定6: 文は止まった手を示し、原因は断定しない。 */
 function forceReclaimOnWorkerTreeTimeout(deps: McpDeps, task: Task, workspace: RunPlace, err: WorkerTreeGitTimeoutError, at = "at the completion gate"): never {
   registerFailureAndMarkTeardown(
     deps.db,
     task,
     `${err.message}: ${task.title}`,
-    `${err.message} ${at}, so the board ended this session: a worker's tree that stalls the board's git is a worker repo failure.` +
+    `${err.message} ${at}, so the board ended this session.` +
       ` If the release cannot read the task checkout at ${workspace.path} either, the board keeps it; ${KEPT_TASK_CHECKOUT.beyondBranch}`,
     deps.clock.now(),
     KEPT_TASK_CHECKOUT.retry,

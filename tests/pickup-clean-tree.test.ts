@@ -101,9 +101,18 @@ it.each(STAGING_FAILURES)("出題の写しで $shape を拒んだら面接室に
 });
 
 // ADR 0365 決定2: 出題の写しも記録に worker の tree を書く —— 面接室の保護ブランチの head から gitlink を足す・進める tree は ref を書く前に拒む
-it("root の checkout が gitlink を足していれば、出題の写しは path を名指して拒み、面接室の保護ブランチも keep-around の ref も動かない(ADR 0365 決定2)", async () => {
-  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-gitlink"));
-  commitSubmodule(place.path, await submoduleSource("room-copy-gitlink-source"));
+it.each(["追加", "前進"] as const)("root の checkout が gitlink を%sしたら、出題の写しは path を名指して拒み、面接室の保護ブランチも keep-around の ref も動かない(ADR 0365 決定2)", async (change) => {
+  const source = await submoduleSource("room-copy-gitlink-source");
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-gitlink"), change === "前進" ? (room) => commitSubmodule(room, source) : undefined);
+  if (change === "前進") {
+    commitWork(source, "lib.txt", "v2\n");
+    const tip = git(source, "rev-parse", "HEAD");
+    git(place.path, "update-index", "--cacheinfo", `160000,${tip},mod`);
+    git(place.path, "commit", "-m", "advance the library");
+    mkdirSync(join(place.path, "mod"), { recursive: true });
+  } else {
+    commitSubmodule(place.path, source);
+  }
   const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
   const before = gitObjectFileCount(room.path);
 
@@ -132,6 +141,31 @@ it("面接室の保護ブランチの時点で gitlink があり root が触っ�
 
   expect(git(room.path, "rev-parse", `${head}:mod`)).toBe(git(room.path, "rev-parse", `${protectedHead}:mod`));
   expect(git(room.path, "rev-parse", `${head}:probe.txt`)).not.toBe("");
+});
+
+it("保護ブランチと同名の注釈付きタグがあっても、出題の写しの親はブランチの commit になる(ADR 0360 決定3・5)", async () => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-branch-and-tag"));
+  const parent = git(room.path, "rev-parse", "refs/heads/main");
+  git(room.path, "tag", "-a", "main", parent, "-m", "same name as the protected branch");
+  const tag = git(room.path, "rev-parse", "refs/tags/main");
+  writeFileSync(join(place.path, "probe.txt"), "the environment\n");
+
+  const head = commitRoomCopy(db, place, root.id);
+
+  expect(git(room.path, "rev-parse", `${head}^`)).toBe(parent);
+  expect(git(room.path, "rev-parse", "refs/tags/main")).toBe(tag);
+});
+
+it("保護ブランチの ref が注釈付きタグを指す場合は、出題の写しを書かずに拒む(ADR 0423 決定3)", async () => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-tag-parent"));
+  git(room.path, "tag", "-a", "tag", "-m", "invalid protected branch target");
+  const tag = git(room.path, "rev-parse", "refs/tags/tag");
+  writeFileSync(join(room.path, ".git", "refs", "heads", "main"), `${tag}\n`);
+  writeFileSync(join(place.path, "probe.txt"), "the environment\n");
+
+  expect(() => commitRoomCopy(db, place, root.id)).toThrow(`recorded parent ${tag} is not a commit`);
+  expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(tag);
+  expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe("");
 });
 
 /** 面接室の loose `id` を消す(`missing`)か、zlib でない byte に置き換える(`corrupt`)。 */

@@ -359,6 +359,16 @@ export function gitlinkChanges(delta: TreeDeltaEntry[]): string[] {
   return delta.filter(({ dstMode }) => dstMode === GITLINK_MODE).map(({ path }) => path);
 }
 
+/** ADR 0423 決定3: 記録の tree は名前の場所で読み、stage の tree だけを有界で読む。Git の path は byte 列なので、表示に直す前に比べる。 */
+export function stagedGitlinkChanges(recorded: { at: string; ref: string }, staged: { at: string; ref: string }): string[] {
+  const lsTree = (ref: string) => ["--no-replace-objects", "ls-tree", "-r", "-z", ref];
+  const gitlinks = (entries: Buffer) => entries.toString("latin1").split("\0").filter((line) => line.startsWith(`${GITLINK_MODE} `));
+  const before = new Set(gitlinks(run(recorded.at, lsTree(recorded.ref))));
+  return gitlinks(runOnWorkerTree(staged.at, lsTree(staged.ref)))
+    .filter((line) => !before.has(line))
+    .map((line) => Buffer.from(entryPath(line), "latin1").toString());
+}
+
 /** The repo's own status: only the board's env overrides apply (ADR 0356 決定5). For the named place, whose config is the human's or the board's. */
 export function ownWorktreeStatus(cwd: string): WorktreeChange[] {
   return porcelainChanges(run(cwd, ["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"]).toString());
