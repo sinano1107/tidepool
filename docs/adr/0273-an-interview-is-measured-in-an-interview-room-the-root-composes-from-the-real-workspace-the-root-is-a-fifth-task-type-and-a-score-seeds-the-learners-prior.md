@@ -1,5 +1,7 @@
 # Interview は、実環境を読む root が面接室に組んだ環境で測る —— root は第5の task type `interview` で、採点は学習器の観測ではなく事前分布の種である
 
+**Status 追記: 決定2 の「実環境を読みに開ける」と追記(#2223)の休止位置は、root が名前の場所を開くのではなく、盤面が休止位置の head を fetch した読み専用の checkout を読む —— 他の task のブランチは読まない。envelope の `real_environment` は root にはその checkout、監査にはその cwd を指す([ADR 0426](0426-the-interview-root-reads-a-checkout-of-the-resting-head-not-the-real-workspaces-named-place-and-the-real-environment-it-is-told-is-a-place-it-can-read.md) 決定1〜3、2026-11-26、issue #3865)。**
+
 **Status 追記: 決定3 の出題の写しは、面接室へ入れた直後に、盤面が root の作業ツリーから staging repo に書いた object が面接室で欠けも破損も無く読めて済む —— 欠ければ pack を直に入れ直し、揃わなければ面接室へ運ぶ段の失敗である([ADR 0388](0388-carrying-into-the-named-place-is-done-only-when-the-objects-the-carried-place-holds-read-whole-there-and-later-outside-damage-is-not-guarded.md) 決定1・2、2026-11-21、issue #3222)。**
 
 **Status 追記: 決定8 と追記(#2265)の「受験者は面接室だけ」は改める —— 停止の門はどの task でも `workspace` 列の名前を数え、受験者は面接室と実環境の名前で止まる。封じ込めの組も同じ集合と比べる([ADR 0368](0368-a-resource-stop-returns-a-pickup-to-todo-only-when-the-stop-gate-holds-that-task-and-an-examinee-is-also-stopped-by-its-workspace-column.md) 決定3・4、2026-11-10、issue #3144)。`workspace` 列が層と許可ドメインの出所であること、走る場所が面接室であることはそのまま。**

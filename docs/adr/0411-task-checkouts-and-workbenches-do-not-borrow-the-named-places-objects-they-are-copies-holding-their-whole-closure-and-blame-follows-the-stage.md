@@ -1,5 +1,7 @@
 # task の checkout と作業台は名前の場所の objects を借りない —— 閉包を全部持つ複製で作り、帰責は落ちた手でなく段で決まる
 
+**Status 追記: 決定1 の「worker は名前の場所の objects を読めない」は Interview の root が読む実環境にも成り立つ —— root は実 workspace の名前の場所でなく休止位置の head の読み専用の checkout を読む([ADR 0426](0426-the-interview-root-reads-a-checkout-of-the-resting-head-not-the-real-workspaces-named-place-and-the-real-environment-it-is-told-is-a-place-it-can-read.md) 決定2、2026-11-26、issue #3865)。**
+
 **Status 追記: 決定4 の「閉包の中は守る」は、運ぶ手が読む object(tree・commit)と、運ぶ commit が名前の場所に既にある運び直しにも成り立つ —— 運ぶ手は損傷で落ちる前に入れ直しへ届く([ADR 0425](0425-carrying-reaches-the-reinsertion-before-damage-inside-the-closure-in-the-named-place-fails-it-even-when-the-carried-commit-is-already-there.md) 決定1・2、2026-11-26、issue #3862)。**
 
 **Status 追記: 決定4 の「確かめが上限を越えたときは名前の場所の側で拒む」の帰責は worker の故障に置き換わる —— 読むのは運んだばかりで確かめ終えていない閉包である。入れ直しに進まないことは保つ。決定3 の段の帰責は上限超過には当たらない([ADR 0423](0423-a-bounded-git-call-reads-bytes-not-yet-verified-into-the-record-and-what-reads-only-the-record-runs-unbounded.md) 決定1・5、2026-11-26、issue #3855)。**
