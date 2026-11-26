@@ -189,9 +189,10 @@ export function taskIdsAwaitingLandingInWorkspace(db: Db, resolve: WorkspaceReso
     .map(({ id }) => id);
 }
 
-/** ADR 0421 決定4: 収束がまだ push する内容を名前の場所に持つ PR の根。断念が効いている根は収束が何もしないので数えない。内容を読めない根
- *  (名前を解決できない、根のブランチが無い、比べられない)も数えない —— 数えるとブランチの無い checkout で扉が止まる。`hasContentLeftBehind`
- *  の fail-closed とは逆の向きである。 */
+/** ADR 0421 決定4: 収束がまだ push する内容を名前の場所に持つ PR の根。断念が効いている根と、盤面の外で書き換えられた head の hold が効いている
+ *  根(ADR 0394 決定6・7)は、収束が push しないので数えない —— 数えると待っても通らない。内容を読めない根(名前を解決できない、根のブランチが
+ *  無い、比べられない)も数えない(issue #3893 の (b)、spec #3891)—— 数えるとブランチの無い checkout で扉が止まる。積み残しの fail-closed
+ *  (ADR 0242 決定3)とは逆の向きである。 */
 export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: WorkspaceResolver | undefined, workspaceName: string): string[] {
   let workspace: WorkspaceConfig | undefined;
   try {
@@ -200,6 +201,8 @@ export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: Workspa
   if (!workspace) return [];
   return doneTaskIdsInWorkspace(db, workspaceName).filter((id) => {
     if (getTask(db, id)!.pr_number === null || landingEnded(db, id) || rootPrOutcome(db, id) !== null || declineInForce(db, id, "pr_promotion_retry")) return false;
+    // 素の hold の後は収束がまだ push する —— 書き換えの head を断った hold だけを外す
+    if (declineInForce(db, id, "pr_merge")?.payload.outside != null) return false;
     try {
       return taskBranchExists(workspace, id) && contentLeftBehindLocally(db, workspace, id, lastPushedHead(db, id)).length > 0;
     } catch {

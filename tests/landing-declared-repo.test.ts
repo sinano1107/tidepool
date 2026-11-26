@@ -107,8 +107,8 @@ it("別の repo で登録し直した名前の、PR を開いた根は、運ぶ�
 
 /** 旧い repo で拾われ PR #1 を開いた根に修理が載った盤面で、`hold` が止める await の間に `during` を撃つ。`hold` は収束に足す材料を返せる。
  *  既定の `during` は registry の `path:` を同じ repo の clone へ手で書き換え、古い checkout を消す —— 削除の扉は着地の執行中を拒む
- *  (ADR 0421 決定4 追記)。`repo:` の手編集と出元 repo の差し替えは、await の間では名前の門が workspace の Quarantine で止める。
- *  `door` は `during` が投げたもの。 */
+ *  (ADR 0421 決定4 追記)。`repo:` の手編集は、await の間でも名前の門が workspace の Quarantine で止める。設定の扉で出元 repo を差し替える
+ *  await の間の止まりは tests/landing-head-repo-record.test.ts が言う。`door` は `during` が投げたもの。 */
 async function changedDuringAwait(
   hold: (github: FakeGitHubClient) => { entered: Promise<void>; open: () => void; deps?: Partial<LandingDeps> },
   during: (fixture: { db: Db; reef: RegisteredReef; old: WorkspaceConfig; landing: Landing }) => Promise<void> = movedToClone,

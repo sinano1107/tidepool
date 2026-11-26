@@ -637,7 +637,7 @@ export async function deleteWorkspace(
   // HTTP の層から読み口を移しても、registry の refresh を待つ前に読む点は同じ(#3892)。
   const unsettled = deps.countUnsettledTasks(input.name);
   const awaiting = deps.listAwaitingLandingTaskIds(input.name);
-  const tearingDown = doneTaskIdsInWorkspace(deps.db, input.name, true);
+  const tearingDown = doneTaskIdsInWorkspace(deps.db, input.name, { teardownUnfinished: true });
   const unpushed = deps.listUnpushedPrRootIds(input.name);
   const beingLanded = deps.listLandingInProgressTaskIds(input.name);
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);

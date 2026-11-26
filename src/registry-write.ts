@@ -94,7 +94,7 @@ function describeReason(reason: DeletionBlockedReason, resourceName: string): st
     return `completed task(s) ${reason.task_ids.join(", ")} have not finished their teardown, which merges their work back — wait for it to finish (a failed teardown finishes once its Quarantine is answered)`;
   }
   if (reason.code === "unpushed_pr_content") {
-    return `PR root task(s) ${reason.task_ids.join(", ")} hold content the board has not pushed to their PR yet — wait for the board to push it`;
+    return `PR root task(s) ${reason.task_ids.join(", ")} hold content the board has not pushed to their PR yet — wait for the board to push it, or answer its open PR promotion question`;
   }
   if (reason.code === "landing_in_progress") return `the board is landing task(s) ${reason.task_ids.join(", ")} right now — try again in a moment`;
   if (reason.code === "board_default") return "it is the board's default";

@@ -1253,7 +1253,7 @@ export function teardownUnfinishedUnder(db: Db, taskId: string): { id: string; t
 
 /** その名前(導出した workspace)の done の task の id を登録順に。`teardownUnfinished` なら後始末の印が立っているものだけ —— 削除の扉が読む
  *  (ADR 0421 決定4)。 */
-export function doneTaskIdsInWorkspace(db: Db, name: string, teardownUnfinished = false): string[] {
+export function doneTaskIdsInWorkspace(db: Db, name: string, { teardownUnfinished = false } = {}): string[] {
   return db
     .prepare(`SELECT id FROM tasks WHERE status = 'done' AND ${derivedWorkspaceSql("tasks")} = ?${teardownUnfinished ? " AND teardown_started_at IS NOT NULL" : ""} ORDER BY rowid`)
     .pluck()

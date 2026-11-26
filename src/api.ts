@@ -1215,16 +1215,13 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
+      const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
       const checkout = await workspaceAdmin.delete(
         { name: req.params.name, ...parsed.data },
         {
           countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
-          listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(
-            db,
-            buildWorkspaceResolver(resolveWorkspace, workspace),
-            name,
-          ),
-          listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, buildWorkspaceResolver(resolveWorkspace, workspace), name),
+          listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
+          listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name),
           listLandingInProgressTaskIds: (name) => taskIdsBeingLandedInWorkspace(db, landing, name),
           defaultWorkspaceName: workspace?.name,
         },

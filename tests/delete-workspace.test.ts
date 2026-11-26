@@ -20,15 +20,18 @@ import { deleteWorkspace } from "../src/workspace-create.js";
 import { awaitWindow, FakeClock, FakeGitHubClient, unusedLanding } from "./fakes.js";
 import { commitWork, completionTreePaths, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, sessionId, withHistoryOnlyBlob } from "./harness.js";
 import {
+  answerHoldOnPr,
   answerPromotion,
   commitThroughTaskCheckout,
   completeThroughTaskCheckout,
+  convergeOn,
   deletionReaders,
   finish,
   giveHeadRepo,
   landingWork,
   openBoard,
   promotionFailures,
+  pushOutsideBoard,
   pushPrHead,
   recordPrOpenedOutsideConvergence,
   registeredReef,
@@ -357,7 +360,7 @@ describe("deleteWorkspace: 盤面がその名前でまだ運ぶものを持つ�
       registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
       await answerPromotion(db, clock, landing, workspace, promotionFailures(db, root.id)[0]!, "abandon promotion");
     };
-    return { db, clock, reef, workspace, github, landing, root, door, mergedBackRepair, abandon };
+    return { db, clock, reef, workspace, github, landing, root, head, door, mergedBackRepair, abandon };
   }
 
   /** 根の修理子を完了させ、後始末の印を立てて枠を後始末に入れる —— merge back はまだ撃っていない。`teardown` が本物の後始末を撃つ。 */
@@ -375,14 +378,17 @@ describe("deleteWorkspace: 盤面がその名前でまだ運ぶものを持つ�
     const r = await reefWithPrRoot();
     const { repair, teardown } = await repairInTeardown(r);
 
+    const unpushed = `PR root task(s) ${r.root.id} hold content the board has not pushed to their PR yet — wait for the board to push it, or answer its open PR promotion question`;
     await expect(r.door()).rejects.toMatchObject({
       name: "DeletionBlockedError",
-      message: expect.stringContaining(`completed task(s) ${repair.id} have not finished their teardown`),
+      message:
+        `workspace "reef" cannot be deleted: completed task(s) ${repair.id} have not finished their teardown, which merges their work back — ` +
+        `wait for it to finish (a failed teardown finishes once its Quarantine is answered); ${unpushed}`,
       reasons: [{ code: "teardown_unfinished", task_ids: [repair.id] }, { code: "unpushed_pr_content", task_ids: [r.root.id] }],
     });
     await teardown();
     await expect(r.door()).rejects.toMatchObject({
-      message: expect.stringContaining(`PR root task(s) ${r.root.id} hold content the board has not pushed to their PR yet`),
+      message: `workspace "reef" cannot be deleted: ${unpushed}`,
       reasons: [{ code: "unpushed_pr_content", task_ids: [r.root.id] }],
     });
     await r.landing.converge();
@@ -430,10 +436,35 @@ describe("deleteWorkspace: 盤面がその名前でまだ運ぶものを持つ�
     await expect(r.door()).resolves.toBe(r.workspace.path);
   });
 
+  // ADR 0394 決定6・7: 書き換えの head を hold した根に収束は push しない —— 待っても通らない拒否にしない
+  it("盤面の外で書き換えられた head の merge question に hold と答えた PR の根は、push していない内容を持っていても拒まない", async () => {
+    const r = await reefWithPrRoot();
+    await r.mergedBackRepair();
+    await pushOutsideBoard(r.workspace, r.root.id, `${r.head}~1`);
+    expect(await convergeOn(r.landing, r.root.id)).toEqual({ kind: "landed", form: "merge_question", prNumber: 1 });
+    await answerHoldOnPr(r);
+    expect(await convergeOn(r.landing, r.root.id)).toMatchObject({ kind: "awaiting_held_question" });
+
+    await expect(r.door()).resolves.toBe(r.workspace.path);
+  });
+
   it("名前の場所に根のブランチが無いとき、push する内容を数えずに通す", async () => {
     const r = await reefWithPrRoot();
     await r.mergedBackRepair();
     git(r.workspace.path, "branch", "-D", `task/${r.root.id}`);
+
+    await expect(r.door()).resolves.toBe(r.workspace.path);
+  });
+
+  it("根に処理中の印だけが付いている間は根を名指して拒み、印が放されれば通る", async () => {
+    const r = await reefWithPrRoot();
+    const release = r.landing.takeInFlightMark(r.root.id)!;
+
+    await expect(r.door()).rejects.toMatchObject({
+      message: `workspace "reef" cannot be deleted: the board is landing task(s) ${r.root.id} right now — try again in a moment`,
+      reasons: [{ code: "landing_in_progress", task_ids: [r.root.id] }],
+    });
+    release();
 
     await expect(r.door()).resolves.toBe(r.workspace.path);
   });
