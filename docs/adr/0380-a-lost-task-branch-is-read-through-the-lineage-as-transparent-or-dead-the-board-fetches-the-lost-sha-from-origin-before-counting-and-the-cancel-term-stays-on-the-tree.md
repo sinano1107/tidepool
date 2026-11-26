@@ -1,6 +1,6 @@
 # 失われたタスクブランチは系譜が記録で「透明」か「死んだ」と読み、数える前に盤面が origin から取りに行き、cancel の項は木のまま読む
 
-**Status 追記: 決定3 の「失われた祖先に git を当てない」に、着地済みの祖先のうちタスクブランチが名前の場所に無いものが加わる —— 系譜の読みは読まずに飛ばし、失われた event は書かない([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定5、2026-11-26、issue #3890)。**
+**Status 追記: 決定3 の「失われた祖先に git を当てない」に、着地済みの祖先のうちタスクブランチが名前の場所に無いものが加わる —— 系譜の読みは読まずに飛ばし、失われた event は書かない。決定3 の帰り先なしには、削除の扉が着地を終えた祖先を数える task も入る([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定3・5、2026-11-26、issue #3890)。**
 
 **Status 追記: 決定4 の「origin に届かない(通信・認証の失敗)ときは失われたと決めず、回答を拒む」は、「origin が無いと答えたときだけ失われたと数え、在るか無いか分からなければ拒む」と読む。「無い」とするのは、その sha の fetch に相手が `upload-pack: not our ref <sha>` と答えたときだけで、それ以外の失敗は拒む。タスクブランチの sha は、出元 repo で取れなければ origin にも聞き、両方がそう答えたときだけ「無い」とする。spec #3273 の2回の probe は外す。その近似では、probe が通る間に fetch だけが落ちる失敗が、取り消せない失われた記録になっていた([ADR 0409](0409-a-ref-counts-as-lost-only-when-its-object-is-known-absent-and-an-answer-that-cannot-tell-is-refused.md) 決定1・3・4、2026-11-24、issue #3607)。**
 
