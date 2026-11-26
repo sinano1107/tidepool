@@ -1218,11 +1218,11 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const checkout = await workspaceAdmin.delete(
         { name: req.params.name, ...parsed.data },
         {
-          unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", req.params.name),
-          awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(
+          countUnsettledTasks: (name) => countUnsettledTasksReferencing(db, "workspace", name),
+          listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(
             db,
             buildWorkspaceResolver(resolveWorkspace, workspace),
-            req.params.name,
+            name,
           ),
           defaultWorkspaceName: workspace?.name,
         },

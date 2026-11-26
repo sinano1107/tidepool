@@ -739,8 +739,7 @@ function workspaceAdmin(
     // ADR 0066 決定2 / ADR 0067 決定8: push は `githubAuth` で撃ち、宛先への到達性
     // probe は `github` があるときだけ撃つ —— どちらも上の deps と同じ組である
     publish: (input) => publishWorkspace(input, { ...deps, github }),
-    // ADR 0087: 参照検査の事実(件数・既定名)は API 層が足す —— registry 側の
-    // deps だけをここで束ねる
+    // ADR 0087 決定2・3 / ADR 0421 決定4 追記: 参照検査の読み口と既定名は API 層が渡し、扉が読み口を呼ぶ。
     delete: (input, refs) => deleteWorkspace(input, { ...deps, ...refs }),
     openWorkbench: (input, origin) => openWorkspaceWorkbench(input, origin, deps),
   };
