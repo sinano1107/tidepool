@@ -192,17 +192,18 @@ export function taskIdsAwaitingLandingInWorkspace(db: Db, resolve: WorkspaceReso
 /** ADR 0421 決定4: 収束がまだ push する内容を名前の場所に持つ PR の根。断念が効いている根と、盤面の外で書き換えられた head の hold が効いている
  *  根(ADR 0394 決定6・7)は、収束が push しないので数えない —— 数えると待っても通らない。内容を読めない根(名前を解決できない、根のブランチが
  *  無い、比べられない)も数えない(issue #3893 の (b)、spec #3891)—— 数えるとブランチの無い checkout で扉が止まる。積み残しの fail-closed
- *  (ADR 0242 決定3)とは逆の向きである。 */
-export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: WorkspaceResolver | undefined, workspaceName: string): string[] {
+ *  (ADR 0242 決定3)とは逆の向きである。`declined` は削除の確認が読む —— 断念と書き換えの head の hold が効いた根も、GitHub に残る PR の
+ *  head が内容を欠く(ADR 0421 帰結)。 */
+export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: WorkspaceResolver | undefined, workspaceName: string, { declined = false } = {}): string[] {
   let workspace: WorkspaceConfig | undefined;
   try {
     workspace = resolve?.(workspaceName);
   } catch {}
   if (!workspace) return [];
   return doneTaskIdsInWorkspace(db, workspaceName).filter((id) => {
-    if (getTask(db, id)!.pr_number === null || landingEnded(db, id) || rootPrOutcome(db, id) !== null || declineInForce(db, id, "pr_promotion_retry")) return false;
+    if (getTask(db, id)!.pr_number === null || landingEnded(db, id) || rootPrOutcome(db, id) !== null) return false;
     // 素の hold の後は収束がまだ push する —— 書き換えの head を断った hold だけを外す
-    if (declineInForce(db, id, "pr_merge")?.payload.outside != null) return false;
+    if (!declined && (declineInForce(db, id, "pr_promotion_retry") || declineInForce(db, id, "pr_merge")?.payload.outside != null)) return false;
     try {
       return taskBranchExists(workspace, id) && contentLeftBehindLocally(db, workspace, id, lastPushedHead(db, id)).length > 0;
     } catch {
@@ -733,7 +734,8 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "questi
 }
 
 /** done の work の着地の状態(ADR 0265 決定7): 根の PR の決着 → 無人 merge キュー → 開いた merge question → 内容で
- *  終わった(`landing_finished`)→ ブランチを失って死んだ(効いている失われた event、ADR 0407 帰結)→ 人間が着地を終えた(`landing_ended_pr_left`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
+ *  終わった(`landing_finished`)→ ブランチを失って死んだ(効いている失われた event、ADR 0407 帰結)→ 削除の扉が着地を終えた
+ *  (`landing_ended_workspace_deleted`、ADR 0421 決定2)→ 人間が着地を終えた(`landing_ended_pr_left`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
  *  生きているキューの行と merge question を先に言う。done の work でない行と、どれも無い行(PR を開く前で止まっている根・
  *  根でない行)は null。キューに残る理由は名指さない(#1866)。 */
 export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace" | "parent_id" | "interview_target_id"> & { status: string }): LandingState | null {
@@ -745,6 +747,8 @@ export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace
   if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
   // ADR 0407 帰結: ブランチを失って終わった死んだ work —— 根かどうかを問わない。handoff だけと透明は成果を失っていない(ADR 0265 Status 追記)
   if (lostWorkIsDead(db, task)) return "branch_lost";
+  // ADR 0421 決定2: 削除の扉が着地を終えた task —— PR を持てば PR は GitHub に残る
+  if (latestEventOfTask(db, task.id, "landing_ended_workspace_deleted")) return "workspace_deleted";
   // ADR 0399 決定6: 人間が着地を終えた PR の根 —— PR は記録の repo に残る
   if (latestEventOfTask(db, task.id, "landing_ended_pr_left")) return "pr_left";
   return latestEventOfTask(db, task.id, "auto_merge_withdrawn") ? "withdrawn" : null;

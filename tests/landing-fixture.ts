@@ -31,6 +31,7 @@ import { workbenchPath } from "../src/workbench.js";
 import {
   announceHeadRepo,
   assertRememberedHeadRepo,
+  dropWorkspaceState,
   finishHeadRepoChange,
   protectedBranch,
   recordDeclaredRepo,
@@ -59,7 +60,7 @@ import {
   settleReviews,
   squashTaskIntoOrigin,
 } from "./harness.js";
-import { makeRegistry, setWorkspaceEntry } from "./registry-fixture.js";
+import { commitWorkspaceDeletion, makeRegistry, setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 let opened: Db | undefined;
@@ -784,11 +785,19 @@ export function fetchHeldAtToken() {
   return { window, githubAuth: { ensureToken: () => window.hold(), env: () => process.env } as unknown as GitHubAuth };
 }
 
-/** The name `reef` registered for `old`'s checkout: the registry, the doors' materials, and the resolver that reads it fresh. */
-export async function registeredReef(old: WorkspaceConfig) {
-  const registryDir = await makeRegistry({ "workspaces.yaml": `reef:\n  path: ${old.path}\n  repo: ${old.repo}\n` });
-  const admin = { registry: { dir: registryDir, mode: "purely-local" as const }, workspacesBaseDir: await tempDir("tidepool-ws-base-") };
-  const resolve = (name: string | null) => resolveExecutionWorkspace(loadRegistry(registryDir, "purely-local"), name ?? "reef", null, admin.workspacesBaseDir);
+/** The name `reef` registered for `old`'s checkout (`repo:` only when `old` declares one): the registry, the doors' materials, and the resolver
+ *  that reads it fresh. `remoteBacked` gives the registry a bare origin —— 書く扉の registry の refresh が `githubAuth` の token を await する盤面。 */
+export async function registeredReef(old: WorkspaceConfig, { remoteBacked = false } = {}) {
+  const registryDir = await makeRegistry({ "workspaces.yaml": `reef:\n  path: ${old.path}\n${old.repo === undefined ? "" : `  repo: ${old.repo}\n`}` });
+  const mode = remoteBacked ? ("remote-backed" as const) : ("purely-local" as const);
+  if (remoteBacked) {
+    const origin = await tempDir("tidepool-registry-remote-");
+    git(origin, "init", "--bare", "-b", "main");
+    git(registryDir, "remote", "add", "origin", origin);
+    git(registryDir, "push", "-u", "origin", "main");
+  }
+  const admin = { registry: { dir: registryDir, mode }, workspacesBaseDir: await tempDir("tidepool-ws-base-") };
+  const resolve = (name: string | null) => resolveExecutionWorkspace(loadRegistry(registryDir, mode), name ?? "reef", null, admin.workspacesBaseDir);
   return { registryDir, admin, resolve };
 }
 
@@ -801,6 +810,7 @@ export function deletionReaders(db: Db, resolve: WorkspaceResolver | undefined, 
     listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
     listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name),
     listLandingInProgressTaskIds: (name) => (landing ? taskIdsBeingLandedInWorkspace(db, landing, name) : []),
+    listPrRootIdsLackingPushedContent: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name, { declined: true }),
   };
 }
 
@@ -809,6 +819,18 @@ export function deletionReaders(db: Db, resolve: WorkspaceResolver | undefined, 
  *  扉が執行中の着地を読む盤面の収束。 */
 export async function reRegister(db: Db, reef: RegisteredReef, moved: WorkspaceConfig, between = () => {}, landing?: Landing): Promise<void> {
   await deleteWorkspace({ name: "reef", confirm: true }, { ...reef.admin, db, ...deletionReaders(db, reef.resolve, landing) });
+  between();
+  await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
+  expect(reef.resolve("reef").repo).toBe(moved.repo);
+  if (moved.head_repo !== undefined) giveHeadRepo(db, reef, moved.head_repo);
+}
+
+/** 削除の扉を通らずに `reef` を `moved` の checkout に登録し直す —— registry の entry の削除の commit と workspace の状態の行を扉の外で消し、
+ *  登録の扉で登録する。扉なら名前に残る完了 task の着地を終える(ADR 0421 決定1)ので、根が生き延びて今の宣言と食い違う床の題材になる
+ *  (ADR 0399 決定5)。`between` は `reRegister` と同じ。 */
+export async function reDeclareOutsideDoor(db: Db, reef: RegisteredReef, moved: WorkspaceConfig, between = () => {}): Promise<void> {
+  commitWorkspaceDeletion(reef.registryDir, "reef");
+  dropWorkspaceState(db, "reef");
   between();
   await createWorkspace({ name: "reef", mode: "register", path: moved.path, confirm: true }, { ...reef.admin, db });
   expect(reef.resolve("reef").repo).toBe(moved.repo);

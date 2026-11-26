@@ -493,25 +493,34 @@ it removes under `refs/keep-around/<sha>`.
   `refs/keep-around/<sha>`; merge or cherry-pick it in a workbench. A commit made in the
   workspace's own checkout is a moved ref again.
 - **A workspace slowed by thousands of `refs/keep-around/*`.** Every fetch and comparison reads
-  them. When the workspace has no unsettled or landing-waiting task, is not the default
-  workspace and has no open quarantine question: delete the workspace, remove the refs by hand
+  them. Delete the workspace (see *Deleting a workspace* below), remove the refs by hand
   (`git for-each-ref --format='delete %(refname)' refs/keep-around/ | git update-ref --stdin`),
   and register it again. The board takes its baseline anew, and the removed values can no longer
   be picked up.
+- **Deleting a workspace.** Delete it in the settings tab. The delete is refused, naming the
+  tasks, while the workspace has an unsettled task, a completed task that has not opened its PR
+  or sits in the auto-merge queue, a completed task whose teardown has not finished, a PR the
+  board still has to push to, or a landing the board is carrying out right now — wait and delete
+  again. It is refused while a workbench of your own work under the name holds commits not yet
+  taken in, and for the board's default workspace. It is refused while the workspace has an open
+  quarantine question and the board holds a baseline for it — answer the question first; when the
+  board holds no baseline, the delete closes the question. Deleting ends the landing of every
+  completed task under the name that has not landed, and the confirmation lists them. The board
+  no longer pushes to, merges or closes their PRs: each PR stays on GitHub as it is, for you to
+  merge or close there. The confirmation also says when a PR's head lacks work the board had not
+  pushed yet. A held or abandoned task cannot be resumed after the delete. When you register the
+  name again, those tasks raise no question and no quarantine.
 - **Renaming a workspace or pointing it at another checkout.** Delete the workspace in the settings
   tab, then register it again under the new name or with the other checkout. Do not rename the
   entry in `workspaces.yaml`: while a name the board holds a baseline for is missing from the
   registry, no new workspace takes its first baseline, and the board raises a quarantine question
   under the missing name. Moving the same checkout (its `.git` included) to another directory and
-  updating `path` to match is fine — its refs are unchanged. The delete is refused while the
-  workspace has an open quarantine question — answer it first. If you register it again with a
-  checkout of a different repository, each completed task whose PR is still open stops with a PR
-  promotion failure question naming both repositories; new work under the name goes on.
+  updating `path` to match is fine — its refs are unchanged, and no landing ends.
 - **Moving a workspace to another repository.** Delete the workspace in Settings, then register
   it again with a checkout of the new repository. If you edited `repo:` in `workspaces.yaml`, put
   it back and answer the workspace quarantine before deleting. The same delete and register steps
-  apply after a GitHub repository rename or transfer, which changes its `owner/name`; after it,
-  each completed task whose PR is still open stops too.
+  apply after a GitHub repository rename or transfer, which changes its `owner/name`. The landing
+  of completed tasks from before ends with the delete; their PRs stay in the old repository.
 - **Linked worktrees.** Do not run `git worktree add` in a workspace's checkout. Without
   arguments it creates a branch; `git stash` there writes the shared `refs/stash`; a commit on a
   branch the board advanced stacks a commit that reverts the advance; and a commit there after a

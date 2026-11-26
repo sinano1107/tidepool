@@ -829,6 +829,8 @@ interface SettingsSection<R extends SettingsRecord> {
   deleteLead: string;
   /** 削除の要求。既定は `DELETE /api/<節>/<name>` を送るだけで、応答を読む節だけが持つ。 */
   remove?(confirm: Record<string, true>, name: string): Promise<string | void>;
+  /** 削除の確認の 409 から、ダイアログに足す一行(workspace の着地が終わる task、ADR 0421 決定1)。 */
+  deleteConfirmNote?(err: unknown): React.ReactNode;
 }
 
 function DeleteRecord({ section, sectionKey, name, say, onDeleted }: {
@@ -847,7 +849,7 @@ function DeleteRecord({ section, sectionKey, name, say, onDeleted }: {
     // ダイアログの本文がそのまま資源ごとの説明である
     dialogLead: section.deleteLead,
     confirmLabel: 'Delete',
-    confirmOf: (err) => (apiErrorDetail(err, `DELETE /api/${sectionKey}/:name 409`)?.confirm_required ? { reasons: [] } : null),
+    confirmOf: (err) => (apiErrorDetail(err, `DELETE /api/${sectionKey}/:name 409`)?.confirm_required ? { reasons: [], note: section.deleteConfirmNote?.(err) } : null),
   });
   const remove = section.remove
     ?? (async (confirm: Record<string, true>) => { await api(`/api/${sectionKey}/${encodeURIComponent(name)}`, confirm, 'DELETE'); });
@@ -3274,6 +3276,24 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
       remove: async (confirm, name) => {
         const { checkout } = await api('DELETE /api/workspaces/:name', { params: { name }, body: confirm });
         return `checkout remains at ${checkout}`;
+      },
+      // ADR 0421 決定1: 削除は名前に残る完了 task の着地を終える —— 何を手放すかを、PR が GitHub に残ることと一緒に名指す
+      deleteConfirmNote: (err) => {
+        const ends = apiErrorDetail(err, 'DELETE /api/workspaces/:name 409')?.landing_ends ?? [];
+        return ends.length === 0 ? null : (
+          <div style={{ margin: '8px 0 0', fontSize: 'var(--text-sm)' }}>
+            <p style={{ margin: '0 0 4px' }}>Deleting ends the landing of these completed tasks — the board will not push to, merge or close their PRs:</p>
+            <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {ends.map((task) => (
+                <li key={task.id}>
+                  {task.title} <span style={{ fontFamily: 'var(--font-mono)' }}>{task.id.slice(0, 8)}</span>
+                  {task.pr_number !== null && ` — PR #${task.pr_number} stays on GitHub as it is`}
+                  {task.pr_head_lacks_unpushed_content && '; its head lacks work the board had not pushed yet'}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
       },
     },
     agents: {

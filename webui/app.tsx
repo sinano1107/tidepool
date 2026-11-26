@@ -33,6 +33,8 @@ const LANDING_STATE_COPY = {
   withdrawn: 'landing · withdrawn from auto-merge',
   landed: 'landing · landed',
   branch_lost: 'landing · ended — the task branch was lost',
+  // ADR 0421 決定1: 行は PR の有無を運ばないので、PR を持つ task にも持たない task にも真の1文
+  workspace_deleted: 'landing · ended — the workspace registration was deleted; any PR stays on GitHub as it is',
   pr_left: 'landing · ended by a human — the PR was left as it is',
 } satisfies Record<import('../src/wire-contract').LandingState, string>;
 /** 塞ぐ根に塞がれた行の理由(ADR 0413 決定3・4)—— 文言は画面が持つ(ADR 0102 決定5)。種類を足して文言を足さないと typecheck が落ちる。 */

@@ -77,7 +77,7 @@ export type SettledByObservation =
   | "memory_proposal_stale";
 
 /** done の work の行の着地の状態(ADR 0265 決定7、src/landing.ts の landingState)。WebUI の札の文言表がこれで欠けを落とす。 */
-export type LandingState = "auto_merge_queue" | "merge_question" | "merged" | "merge_observed" | "close_observed" | "withdrawn" | "landed" | "branch_lost" | "pr_left";
+export type LandingState = "auto_merge_queue" | "merge_question" | "merged" | "merge_observed" | "close_observed" | "withdrawn" | "landed" | "branch_lost" | "workspace_deleted" | "pr_left";
 
 /** 回答の応答と question の行が運ぶ印。 */
 export interface SettledMark {
@@ -148,6 +148,15 @@ interface DangerousValuesConflict {
   error: string;
   confirm_required: true;
   dangerous_values: string[];
+}
+
+/** 削除の確認に出す、着地が終わる task の1行(ADR 0421 決定1)。`pr_head_lacks_unpushed_content` は、GitHub に残る PR の head が、盤面が
+ *  push していない内容を欠くか(断念した PR の根など)。 */
+export interface LandingEndingTask {
+  id: string;
+  title: string;
+  pr_number: number | null;
+  pr_head_lacks_unpushed_content: boolean;
 }
 
 /** 削除の 409(ADR 0087)。確認では買えない `blocked` の形も同じ status で来るので、
@@ -417,7 +426,7 @@ export interface WireContract {
   "POST /api/workspaces/:name/workbench": { message: string };
   /** publish の成功文: 送った範囲と次の手順(issue #3563)。 */
   "POST /api/workspaces/:name/publish": { message: string };
-  "DELETE /api/workspaces/:name 409": DeletionConflict;
+  "DELETE /api/workspaces/:name 409": DeletionConflict & { landing_ends?: LandingEndingTask[] };
   "GET /api/agents": {
     agents: Array<{
       name: string;

@@ -57,7 +57,7 @@ import {
   sameRepository,
 } from "./repo-access.js";
 import { recordedSettingsDisposition } from "./sandbox.js";
-import { doneTaskIdsInWorkspace, settleQuestionAsObserved } from "./tasks.js";
+import { doneTaskIdsInWorkspace, endLandingOnWorkspaceDeletion, settleQuestionAsObserved, tasksLandingEndsOnDeletion } from "./tasks.js";
 import type { LiveCheckoutSignal } from "./wire-contract.js";
 import { BOARD_BRANCHES } from "./workbench.js";
 import {
@@ -626,6 +626,8 @@ export interface WorkspaceDeletionReferences {
   listUnpushedPrRootIds(name: string): string[];
   /** 着地の執行中の task の id(ADR 0421 決定4 追記)。 */
   listLandingInProgressTaskIds(name: string): string[];
+  /** GitHub に残る PR の head が、盤面が push していない内容を欠く PR の根の id —— 断念した根も数える(ADR 0421 帰結)。確認の一覧が読む。 */
+  listPrRootIdsLackingPushedContent(name: string): string[];
   /** 盤面の既定 workspace 名。一致すれば消せない —— 既定はポインタである。 */
   defaultWorkspaceName?: string;
 }
@@ -639,8 +641,11 @@ export async function deleteWorkspace(
   const awaiting = deps.listAwaitingLandingTaskIds(input.name);
   const tearingDown = doneTaskIdsInWorkspace(deps.db, input.name, { teardownUnfinished: true });
   const unpushed = deps.listUnpushedPrRootIds(input.name);
-  const beingLanded = deps.listLandingInProgressTaskIds(input.name);
+  const beingLandedAtEntry = deps.listLandingInProgressTaskIds(input.name);
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
+  // ADR 0421 決定4 追記: 執行中は await の後にも読み直す —— その間に始まった執行と終わりの記録を競らせない。ここから終える transaction まで
+  // await は無い(registry の commit も同期)ので、拒めば registry の行も基準の行も書かない
+  const beingLanded = [...new Set([...beingLandedAtEntry, ...deps.listLandingInProgressTaskIds(input.name)])];
   const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
@@ -665,7 +670,15 @@ export async function deleteWorkspace(
   const workbenchLeft = humanContentWorkbenchLeft(named, deps.workspacesBaseDir);
   if (workbenchLeft !== undefined) reasons.push({ code: "human_content_workbench", ...workbenchLeft });
   if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
-  if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);
+  if (input.confirm !== true) {
+    // ADR 0421 決定1: 確認は着地が終わる task を名指す。通すときの集合は transaction の中で読み直す(この一覧と違ってよい)
+    const lacking = deps.listPrRootIdsLackingPushedContent(input.name);
+    throw new DeletionConfirmationRequiredError(
+      "workspace",
+      input.name,
+      tasksLandingEndsOnDeletion(deps.db, input.name).map(({ id, title, pr_number }) => ({ id, title, pr_number, pr_head_lacks_unpushed_content: lacking.includes(id) })),
+    );
+  }
   // 作業台は entry と行より先に消す —— 行が先に消えて作業台が残ると、登録の扉(ADR 0401 決定5)は同じ名前の登録し直しを止めず、残った作業台が使い続けられる
   removeHumanContentWorkbench(named, deps.workspacesBaseDir);
   commitToRegistry(
@@ -684,6 +697,8 @@ export async function deleteWorkspace(
   deps.db.transaction(() => {
     dropWorkspaceState(deps.db, input.name);
     const now = (deps.clock ?? new SystemClock()).now();
+    // ADR 0421 決定1: 終える集合も行を消すのと同じ transaction で読む —— registry の refresh を待つ間に完了した task も終わる
+    endLandingOnWorkspaceDeletion(deps.db, input.name, now);
     for (const { id, kind, value } of openQuarantinesNaming(deps.db, input.name)) {
       settleQuestionAsObserved(deps.db, id, { kind: "quarantine_released", quarantine: kind, value }, now);
     }

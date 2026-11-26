@@ -1054,8 +1054,9 @@ export function localLandingOpenOrExecutedSql(taskRef: string): string {
 }
 
 /** 着地の終わりの記録の kind —— merge の記録か内容で終わった PR の根(`landing_finished`、ADR 0265 決定3)、運ぶ内容が無かった根
- *  (`nothing_to_land`)、人間が着地を終えた PR の根(`landing_ended_pr_left`、ADR 0399 決定6)。`landingEndedSql` だけが読む。 */
-const LANDING_ENDED_KINDS_SQL = "('landing_finished', 'nothing_to_land', 'landing_ended_pr_left')";
+ *  (`nothing_to_land`)、人間が着地を終えた PR の根(`landing_ended_pr_left`、ADR 0399 決定6)、削除の扉が着地を終えた task
+ *  (`landing_ended_workspace_deleted`、ADR 0421 決定2)。`landingEndedSql` だけが読む。 */
+const LANDING_ENDED_KINDS_SQL = "('landing_finished', 'nothing_to_land', 'landing_ended_pr_left', 'landing_ended_workspace_deleted')";
 
 /** `taskBranchLostInForce` の SQL の対(ADR 0375 決定2): 失われた event の後に `task_branch_created` が無い。 */
 function taskBranchLostInForceSql(taskRef: string): string {
@@ -1258,6 +1259,34 @@ export function doneTaskIdsInWorkspace(db: Db, name: string, { teardownUnfinishe
     .prepare(`SELECT id FROM tasks WHERE status = 'done' AND ${derivedWorkspaceSql("tasks")} = ?${teardownUnfinished ? " AND teardown_started_at IS NOT NULL" : ""} ORDER BY rowid`)
     .pluck()
     .all(name) as string[];
+}
+
+/** ADR 0421 決定1: 削除の扉が着地を終える task —— その名前(導出した workspace)の done の work のうち、着地が終わった記録も、内容が保護
+ *  ブランチに届いた記録も持たないもの。根かどうかは問わない —— 根だけ終えると、子孫が次の登録で根として読まれる。収束の候補の述語と同じく、
+ *  盤面のタスクブランチを持たない人間担当の work と Interview の受験者は着地しないので入れない。local 着地の question が開いた根は入れる
+ *  (終える側がその question を閉じる)。登録順。 */
+export function tasksLandingEndsOnDeletion(db: Db, name: string): Array<Pick<Task, "id" | "title" | "pr_number">> {
+  return db
+    .prepare(
+      `SELECT t.id, t.title, t.pr_number FROM tasks t
+        WHERE t.type = 'work' AND t.status = 'done' AND ${derivedWorkspaceSql("t")} = ?
+          AND (t.assignee IS NOT '${HUMAN_ACTOR_ID}' OR ${hasTaskBranchSql("t.id")})
+          AND t.interview_target_id IS NULL
+          AND NOT ${landingEndedSql("t.id")}
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN (${REACHED_PROTECTED_BRANCH_KINDS.map((kind) => `'${kind}'`).join(", ")}))
+        ORDER BY t.rowid`,
+    )
+    .all(name) as Array<Pick<Task, "id" | "title" | "pr_number">>;
+}
+
+/** ADR 0421 決定1・2: `tasksLandingEndsOnDeletion` の task の着地を終える —— 終わりの記録を1つずつ書き、その task の着地の決裁(開いた着地の
+ *  question と無人 merge キューの行)を、失われた ref の give-up と同じ片づけで引退させる(ADR 0407 決定2)。告知は書かない。削除の扉が、基準の
+ *  行を消すのと同じ transaction で呼ぶ(ADR 0405)。 */
+export function endLandingOnWorkspaceDeletion(db: Db, name: string, now: Date): void {
+  for (const { id } of tasksLandingEndsOnDeletion(db, name)) {
+    retireLandingDecisions(db, id, now, {});
+    appendEvent(db, { taskId: id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_ended_workspace_deleted", workspace: name }, at: now });
+  }
 }
 
 /** 空の列だけに workspace を書く —— 固定は埋まった列を書き換えない(ADR 0233 決定2 / ADR 0372 決定1)。 */
