@@ -172,6 +172,8 @@ it("既定 agent が走らせられない対象(entry に無い Provider・導�
   expect(others).toEqual([]);
   expect(failure).toMatchObject({ type: "question", title: expect.stringContaining("pose_probe"), question_cancel_option: "abandon" });
   expect(failure.purpose).toContain(`${JSON.stringify(opus46)} cannot run as fake-worker`);
+  expect(failure.purpose).toContain(`fix the default agent's entry and answer "retry"`);
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
   expect(await servedQuarantineQuestion(t, "workspace", root.id)).toBeUndefined();
 });
 

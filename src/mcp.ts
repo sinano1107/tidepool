@@ -436,8 +436,7 @@ function reclaimUnfixable(deps: McpDeps, task: Task, verb: string, err: unknown,
   );
 }
 
-/** 回収の経路1本: failure question と後始末の印を1つの transaction で書き、強制回収の回収済み観測に後始末を繋ぐ(ADR 0331 決定6 の畳み方)。
- *  agent への tool error は付随で、session はもう終わっている。 */
+/** 回収の経路1本(時間切れと ADR 0424 の回収が共有する)。 */
 function reclaimSession(deps: McpDeps, task: Task, title: string, reason: string, workspace: RunPlace | undefined): never {
   registerFailureAndMarkTeardown(deps.db, task, title, reason, deps.clock.now(), KEPT_TASK_CHECKOUT.retry);
   reclaimIntoTeardown(teardownDeps(deps), deps.containers, task.id, deps.slot.currentSessionId!, workspace);
@@ -461,7 +460,10 @@ function teardownDeps(deps: McpDeps): TeardownDeps {
  *  domain verb attributed to the slot worker, then hand the release to the
  *  session's 後始末. Work completion opts into lineage merge-back; every other
  *  release only stashes WIP. A domain error keeps the slot — the session
- *  continues.
+ *  continues. With `reclaimAs`, any other throw of the record transaction
+ *  (CONSTRAINT, BUSY) is a failure the agent cannot fix: once it has rolled
+ *  back, the board registers a failure question naming that verb and reclaims
+ *  the session (ADR 0424 決定2).
  *
  *  ADR 0109 決定1: verb は final MCP call の中で同期に着地し、response はすぐ返る ——
  *  workspace の解放と slot の解放**だけ**が回収済み観測の後ろへ移る。worker exit と
@@ -498,7 +500,6 @@ function runReleasingVerb(
         return recorded;
       })();
     } catch (err) {
-      // ADR 0424 決定2: `reclaimAs` の verb では記録の transaction の型の無い失敗(CONSTRAINT・BUSY)も agent に直せない —— 巻き戻った後に回収する
       if (reclaimAs === undefined || err instanceof DomainError) throw err;
       reclaimUnfixable(deps, task, reclaimAs, err, workspace);
     }
@@ -540,6 +541,9 @@ function auditedProbeEnvelope(deps: McpDeps, task: Task) {
   const { head, root_id } = posedProbe(deps.db, posedId);
   return { interview_audit: { head, interview_room: sessionReadCheckoutOf(deps.db, task.id, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
 }
+
+/** 走れない対象の pose_probe の failure question に載せる直し方(人間の扉の retry の文と同じ形、tasks.ts の broken_probe)。 */
+const UNRUNNABLE_TARGET_REMEDY = ' — fix the default agent\'s entry and answer "retry", or answer "abandon"';
 
 /** 自分では直せない拒否の結び —— 人間に渡す出口を指す(complete_task の registry から消えた workspace。#3907 が回収に替える)。 */
 const ESCALATE_UNFIXABLE = " — this task cannot fix that: escalate so a human decides";
@@ -880,27 +884,25 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             return { audit_id: audit.id, parent_status: "blocked" };
           },
           (task) => {
-            // ADR 0363 決定1〜3 の Status 追記: root の名前の場所は記録にある面接室 —— 実環境を解かないので resolver を渡さない。root では
-            // undefined にならない(開いていなければ PlaceNotOpenError —— 盤面の記録の食い違いなので回収し、解放する場所は後始末が解く)
-            let place: TaskCheckoutPlace;
+            // ADR 0424 決定1・2: root に直せる失敗(入力・状態の拒否、読めない task branch、gitlink)だけを拒み、ほかは failure question を
+            // 登録して回収する —— 分けるのはこの catch 1つ。走れない対象の拒否は domain に残し(人間の扉が共有する)、ここでだけ回収に替える
+            let place: TaskCheckoutPlace | undefined;
+            let checkingTargets = false;
             try {
+              // ADR 0363 決定1〜3 の Status 追記: root の名前の場所は記録にある面接室 —— 実環境を解かないので resolver を渡さない。root では
+              // undefined にならない(開いていなければ PlaceNotOpenError)
               place = taskRunPlaceForBoard(deps.db, task, undefined)!;
-            } catch (err) {
-              reclaimUnfixable(deps, task, "pose_probe", err);
-            }
-            assertPosable(deps.db, task);
-            if (deps.taskExecutionCandidates) {
-              // ADR 0424 決定2: 走れない対象は registry を直す人間にしか直せない —— 拒否は人間の扉にだけ残し、ここは回収する
-              try {
-                assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName);
-              } catch (err) {
-                reclaimUnfixable(deps, task, "pose_probe", err, place);
+              assertPosable(deps.db, task);
+              if (deps.taskExecutionCandidates) {
+                checkingTargets = true;
+                assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, UNRUNNABLE_TARGET_REMEDY);
+                checkingTargets = false;
               }
-            }
-            try {
               head = commitRoomCopy(deps.db, place, task.id);
+              return place;
             } catch (err) {
-              if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, place, err, "while copying the probe's environment");
+              if (err instanceof DomainError && !checkingTargets) throw err;
+              if (place && err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, place, err, "while copying the probe's environment");
               // complete_task と同じ形: worker の repo が読めないのは worker が直せる —— 拒んで session を続ける
               if (err instanceof CheckoutUnreadableError) {
                 throw new DomainError(`${err.message} — the board cannot copy your working tree for the targets, so the probe is not posed. Restore your task branch and call pose_probe again, or escalate.`);
@@ -914,10 +916,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
                   { verb: "pose_probe" },
                 );
               }
-              // ADR 0424 決定2: 写しの host・面接室の側・盤面の不変条件の失敗は root に直せない
+              // ADR 0424 決定2: 写しの host・面接室の側・盤面の不変条件・記録の食い違い・走れない対象は root に直せない。走る場所が開いて
+              // いなければ(PlaceNotOpenError)place は無く、解放する場所は後始末が自分で解く
               reclaimUnfixable(deps, task, "pose_probe", err, place);
             }
-            return place;
           },
           "pose_probe",
         );

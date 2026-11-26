@@ -176,7 +176,7 @@ function damageLoose(repo: string, id: string, damage: "missing" | "corrupt"): v
 }
 
 // #3814: 出題の写しの callback は面接室にしか無い保護ブランチの親を読む。親の commit・tree の損傷は root の worktree の故障(`pose_probe` が
-// 「作業ツリーを直せ」と拒む型)にも worker の git の時間切れ(root の回収)にもならない —— 型の無い失敗は面接室の側の拒みに落ちる。
+// 「作業ツリーを直せ」と拒む型)にも worker の git の時間切れ(root の回収)にもならない —— 型の無い失敗は pose_probe で直せない失敗の回収になる(ADR 0424 決定2)。
 // worktree が再現する面接室の tree(前の出題の写し)の破損は下の固定が扱う
 it.each([
   ["commit", "missing"],
