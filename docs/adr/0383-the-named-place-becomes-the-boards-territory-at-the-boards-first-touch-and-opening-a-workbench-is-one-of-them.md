@@ -1,5 +1,7 @@
 # 名前の場所は盤面が最初に触れた時点から盤面の専有領域になり、作業台を開く操作もその1つである
 
+**Status 追記: 決定2 の開く前の項に、着地が終わっていない根のタスクブランチが名前の場所に在ることの確認が加わる。「失われた ref を諦めて基準へ戻す」の回答は、この項だけを越える([ADR 0420](0420-before-the-first-capture-the-task-branch-of-every-root-whose-landing-has-not-ended-must-be-in-the-named-place-and-the-give-up-counts-the-absent-ones-as-lost.md) 決定1・3、2026-11-26、issue #3886)。**
+
 **Status 追記: 決定2 の開く前の項は、着地の最初の撮り(基準の行が無い名前で着地が撮るとき)にも求める。最初に触れる4つの入口のうち着地だけが外れていた([ADR 0399](0399-a-task-remembers-the-repo-its-content-goes-to-and-a-root-that-disagrees-with-the-declaration-stops-alone.md) 決定7、2026-11-22、issue #3390)。**
 
 2026-11-18 の grilling(#3367)で決定。ADR 0351 決定1 は checkout を「最初の pickup 以降」盤面の専有領域とし、最初の撮りはその時点の
