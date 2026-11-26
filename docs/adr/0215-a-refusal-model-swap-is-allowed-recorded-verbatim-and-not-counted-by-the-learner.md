@@ -1,5 +1,7 @@
 # refusal による差し替えは止めず、逐語で記録し、学習器は数えない
 
+**Status 追記: 決定4 の `excluded` は、復旧が transcript を読めなかった(`stream_read: false`)Claude の session にも当たる([ADR 0432](0432-recovery-that-could-not-read-a-transcript-marks-the-exit-and-a-board-call-input-drops-what-cannot-be-observed-and-explains-only-what-it-holds.md) 決定3、2026-11-27、issue #3898)** —— 差し替えの有無が分からない session の結果も pin の行の実績にしない。
+
 **Status 追記: 決定3 の置き場(`worker_exited.usage` の中)は [ADR 0317](0317-what-the-board-counted-off-the-stream-sits-beside-usage-not-inside-it-and-survives-a-session-with-no-consumption-report.md) 決定1 で反転(issue #2637)** —— 差し替えと拒否は `usage` の外、`worker_exited` の直下に置き、消費の報告(result 行)の無い session でも残す。advisor との同居と判定の形はそのまま。
 
 **Status 追記 2: 決定1〜3 は答えを取りに行く Board call にも当たる([ADR 0323](0323-an-answer-fetching-board-call-reads-its-stream-and-records-the-swap-beside-its-usage-row.md)、issue #2661)** —— 止める env は Board call の env からも消し、runner は stream を読んで差し替えと拒否を `board_calls` の行の列に逐語で残す。usage の無い呼び出しで観測した差し替えは残さない(ADR 0317 との違い)。

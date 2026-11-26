@@ -1,5 +1,7 @@
 # 記憶は記録の派生索引であり、承認状態を持ち、外部の記憶ライブラリは入れない
 
+**Status 追記: 追記10 の「Codex の配分評価の行動列は観測なし(null)」は、入力から外す形に変わる([ADR 0432](0432-recovery-that-could-not-read-a-transcript-marks-the-exit-and-a-board-call-input-drops-what-cannot-be-observed-and-explains-only-what-it-holds.md) 決定4、2026-11-27、issue #3898)** —— 構造的に観測できない欄は外し、null は観測できたが観測しなかったときに限る。
+
 **Status 追記: 追記10 の live の投影が盤面のバグで投げたら、失敗を log して流さず、閉じ切らなかった session の停止と残りを持つ(ADR 0344 決定1〜3、2026-11-02、issue #2918)。** transcript の close の後は新しい runner で、既に閉じていれば同期に入れ子の runner で投影の手を撃つ。盤面 DB の拒否は床へ投げる(ADR 0342 決定4)。
 
 **Status 追記: 追記10 の投影の呼び手に、起動時の復旧が加わる(ADR 0315 決定1・4)** —— 前の盤面が投影の前に落ちた session は、次の起動が記録済みの transcript から投影する。全走査の backfill は明示の操作のまま。

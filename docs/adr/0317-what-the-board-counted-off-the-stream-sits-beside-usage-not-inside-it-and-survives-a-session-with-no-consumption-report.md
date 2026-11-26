@@ -1,5 +1,7 @@
 # 盤面が stream から数えた事実は消費の報告と独立に worker_exited の直下に置き、報告の無い session でも残す
 
+**Status 追記: 決定5 の欄ごとの null と決定6 の欄そのものの null の文は [ADR 0432](0432-recovery-that-could-not-read-a-transcript-marks-the-exit-and-a-board-call-input-drops-what-cannot-be-observed-and-explains-only-what-it-holds.md) 決定2・4 で置き換わる(2026-11-27、issue #3898)** —— 3欄は入力のまとまり `output_observations` になり、Claude で exit が無いか復旧が transcript を読めなかった(`stream_read: false`)ときまとまりごと null、Codex では入力から外す。prompt の説明は入力がその値を持つときだけ出す。
+
 **Status 追記: 決定1 の「報告の無い session でも残す」は worker session の線で、答えを取りに行く Board call には当てない([ADR 0323](0323-an-answer-fetching-board-call-reads-its-stream-and-records-the-swap-beside-its-usage-row.md) 決定4、issue #2661)** —— Board call の行は usage を報告した呼び出しだけが持ち(ADR 0299 決定3)、差し替えと拒否はその行の隣の列に置く。
 
 2026-10-27 の triage → grilling(issue #2637、#2632 / ADR 0316 が退けた案)で決定。`worker_exited.usage` は CLI の消費の報告(result 行)が
