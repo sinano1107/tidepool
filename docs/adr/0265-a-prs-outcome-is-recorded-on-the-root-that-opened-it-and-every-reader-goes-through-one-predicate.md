@@ -1,7 +1,5 @@
 # PR の決着は PR を開いた根に刻み、読み手は1本の述語を通る —— `external` の根は内容で終わり、読めなければ止まる
 
-**Status 追記: 決定6 の塞ぎは3種類になる —— 盤面の外で閉じた PR の根、人間が着地を終えた根に、記録した repo が今の宣言と食い違う根を足す。3つ目は記録を書かず、記録と宣言から毎回導き、宣言を戻せば消える。告知は書かない([ADR 0419](0419-a-repo-disagreement-is-read-from-the-records-at-the-entrance-of-a-task-bound-operation-and-a-disagreeing-root-blocks-its-children.md) 決定5・6、2026-11-25、issue #3849)。**
-
 **Status 追記: 決定6 の告知(判断行)は、走らない子の id と件数を言わなくなる —— 書く条件は「根の下に終わっていない子がある」で、git を読まない。どの子がなぜ走らないかは、キューの行と子の詳細が毎回導いて言う。人間が着地を終えた根にも同じ告知を書く([ADR 0413](0413-the-notice-of-a-blocked-root-does-not-count-its-children-and-the-row-and-the-task-say-why-a-child-does-not-run.md) 決定1〜3、2026-11-24、issue #3703)。**
 
 **Status 追記: 決定7 の8つ目の状態「ブランチが失われて終了」(`branch_lost`)は、終わりの記録(`landing_ended_branch_lost`、廃止)でなく、効いている失われた event を持つ死んだ(透明でない)`done` の work から導く。根かどうかは問わない([ADR 0407](0407-a-task-whose-branch-is-lost-reads-as-landing-ended-no-ending-record-is-written-and-the-give-up-closes-its-landing-questions-with-the-lost-event.md) 帰結、2026-11-23、issue #3582)。**
