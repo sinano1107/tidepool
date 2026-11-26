@@ -16,6 +16,13 @@ import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpCl
 let t: Tidepool;
 afterEach(() => t?.stop());
 
+const recordedExit = {
+  kind: "worker_exited" as const,
+  ...QUIET_EXIT,
+  worker_spawned_event_id: 7,
+  output_closed: true,
+};
+
 const usage = {
   input_tokens: 100,
   output_tokens: 20,
@@ -41,10 +48,7 @@ it("配分評価の入力は verdict・findings・実行設定と出所・走っ
       tier: "standard",
       spawned,
       exited: {
-        kind: "worker_exited",
-        ...QUIET_EXIT,
-        worker_spawned_event_id: 7,
-        output_closed: true,
+        ...recordedExit,
         usage,
         ...observations,
       },
@@ -88,10 +92,7 @@ it("Claude の session は exit に差し替えと拒否が無ければ空の観
       tier: "economy",
       spawned,
       exited: {
-        kind: "worker_exited",
-        ...QUIET_EXIT,
-        worker_spawned_event_id: 7,
-        output_closed: true,
+        ...recordedExit,
         usage: null,
         model_swaps: [],
         refusals: [],
@@ -110,10 +111,7 @@ it("Codex の session は Episode や exit に値があっても行動列・差�
       tier: "economy",
       spawned: { ...spawned, harness: "codex", provider: "openai", model: "gpt-6.2-sol", advisor: null },
       exited: {
-        kind: "worker_exited",
-        ...QUIET_EXIT,
-        worker_spawned_event_id: 7,
-        output_closed: true,
+        ...recordedExit,
         usage,
         ...observations,
         advisor: null,
