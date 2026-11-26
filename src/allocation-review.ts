@@ -19,8 +19,8 @@ export interface AllocationJudgment {
 
 /** Board call に渡す入力。**model 名を持つのは Board call だけ** —— review session
  *  はこれを見ない(ADR 0111 決定4)。`usage` の null は worker_exited の usage 欠測、`actions` の null は Precedent の
- *  episode 行が無い session と Codex の session —— どちらも「観測が無い」であって「何もしなかった」ではない(`advisor.usage` の null も同じく「測れない」であって費用 0 ではない —— 3欄とも prompt が名指しで述べる)。Codex の Episode は構造マーカーを持たない
- *  (compaction は stdout に出ず、commit の item も advisor も無い)ので、空の列を 0 回にしない(ADR 0083 追記10)。 */
+ *  episode 行が無い session と構造マーカーを持たない Codex の session(ADR 0083 追記10)。`advisor.usage` の null は測れなかった費用。
+ *  `model_swaps` / `refusals` の null は盤面がその session の stream を観測していないことを示す(ADR 0317 決定5)。 */
 export interface AllocationReviewInput {
   verdict: string | null;
   findings: string | null;
@@ -30,8 +30,8 @@ export interface AllocationReviewInput {
   >;
   tier: Tier;
   usage: Extract<EventPayload, { kind: "worker_exited" }>["usage"];
-  model_swaps: Extract<EventPayload, { kind: "worker_exited" }>["model_swaps"];
-  refusals: Extract<EventPayload, { kind: "worker_exited" }>["refusals"];
+  model_swaps: Extract<EventPayload, { kind: "worker_exited" }>["model_swaps"] | null;
+  refusals: Extract<EventPayload, { kind: "worker_exited" }>["refusals"] | null;
   advisor: Extract<EventPayload, { kind: "worker_exited" }>["advisor"];
   actions: { advisor_consultations: number; compactions: number; commits: number } | null;
 }
@@ -57,6 +57,8 @@ export function buildAllocationReviewInput(data: {
   exited: Extract<EventPayload, { kind: "worker_exited" }> | undefined;
   markers: readonly MarkerKind[] | null;
 }): AllocationReviewInput {
+  const isCodex = data.spawned.harness === "codex";
+  const observedExit = isCodex ? undefined : data.exited;
   const count = (kind: MarkerKind) => data.markers!.filter((m) => m === kind).length;
   return {
     verdict: data.verdict,
@@ -70,12 +72,12 @@ export function buildAllocationReviewInput(data: {
     },
     tier: data.tier,
     usage: data.exited?.usage ?? null,
-    model_swaps: data.exited?.model_swaps ?? [],
-    refusals: data.exited?.refusals ?? [],
+    model_swaps: observedExit?.model_swaps ?? null,
+    refusals: observedExit?.refusals ?? null,
     advisor: data.exited?.advisor ?? null,
     // 観測できないかどうかはマーカーの有無ではなく Harness で決める(ADR 0083 追記10)
     actions:
-      data.markers === null || data.spawned.harness === "codex"
+      data.markers === null || isCodex
         ? null
         : { advisor_consultations: count("advisor"), compactions: count("compaction"), commits: count("commit") },
   };

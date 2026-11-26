@@ -15,8 +15,8 @@ const input: AllocationReviewInput = {
   },
   tier: "economy",
   usage: null,
-  model_swaps: [],
-  refusals: [],
+  model_swaps: null,
+  refusals: null,
   advisor: null,
   actions: null,
 };
@@ -49,9 +49,18 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(prompt).toContain('"model": "sonnet"');
   expect(prompt).toContain('"tier": "economy"');
   expect(prompt).toContain("The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor.");
-  // usage / actions / advisor.usage の null は観測なしであって 0 でも「何もしなかった」でもない(ADR 0083 追記10)
+  // 欄そのものの null は観測なしで、いずれの方向の証拠にもならない(ADR 0083 追記10 / ADR 0317 決定6)
   expect(prompt).toContain(
-    'A null usage (the session filed no consumption report), actions (the action counts were not observed), or advisor.usage (the advisor\'s share of the consumption could not be measured) means that value was not observed — never zero, never "did nothing", never zero cost; do not read it as evidence either way.',
+    'A null usage (the session filed no consumption report), actions (the action counts were not observed), model_swaps, refusals, or advisor.usage (the advisor\'s share of the consumption could not be measured) means that value was not observed — never zero, never "did nothing", never zero cost. Do not read it as evidence either way.',
+  );
+  expect(prompt).toContain(
+    "Each element of refusals represents one response stopped by the provider's safeguards. A null element records a refusal whose classification was not received.",
+  );
+  expect(prompt).toContain(
+    "Each element of model_swaps represents one model substitution by the CLI during the session. A null from, to, scope, or category means the CLI did not report that field.",
+  );
+  expect(prompt).toContain(
+    "For Claude, a null advisor means neither a consultation nor a failed call was observed in the main thread. Consultations made only by subagents still leave advisor null.",
   );
   // 上位の token 欄は親スレッドの通常の推論だけで compaction も入らず、Claude の models / cost は subagent・advisor・compaction を含み、
   // Codex の subagent と compaction の消費は観測されない(ADR 0297 決定1・2)

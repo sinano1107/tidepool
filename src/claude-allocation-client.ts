@@ -26,7 +26,8 @@ const ALLOCATION_CAUSES = CAUSES.filter((cause) => !["memory", "agent_definition
 /** The question the board asks after quality is fixed (ADR 0111 決定4): the
  *  review has already said whether the deliverable is acceptable; this call
  *  says whether the compute spent on it was the right amount, and why a miss
- *  happened — so an environment failure is never read as a weak model. */
+ *  happened — so an environment failure is never read as a weak model.
+ *  ADR 0317 決定6: explain null for each observation field and its contents. */
 function buildPrompt(input: AllocationReviewInput): string {
   return (
     "You are the allocation reviewer of a work-tracking board. A worker session ran a task under " +
@@ -35,9 +36,15 @@ function buildPrompt(input: AllocationReviewInput): string {
     `to re-litigate. ${TIER_QUALITY_FLOOR}, and setting.source.tier identifies who set that floor. ` +
     "Judge only whether the execution setting was appropriate for this task's " +
     "outcome, and what caused any shortfall. A null usage (the session filed no consumption report), " +
-    "actions (the action counts were not observed), or advisor.usage (the advisor's share of the " +
+    "actions (the action counts were not observed), model_swaps, refusals, or advisor.usage (the advisor's share of the " +
     "consumption could not be measured) means that value was not observed — never zero, never \"did nothing\", " +
-    "never zero cost; do not read it as evidence either way. " +
+    "never zero cost. Do not read it as evidence either way. " +
+    "Each element of refusals represents one response stopped by the provider's safeguards. " +
+    "A null element records a refusal whose classification was not received. " +
+    "Each element of model_swaps represents one model substitution by the CLI during the session. " +
+    "A null from, to, scope, or category means the CLI did not report that field. " +
+    "For Claude, a null advisor means neither a consultation nor a failed call was observed in the main thread. " +
+    "Consultations made only by subagents still leave advisor null. " +
     "The token counts in usage cover the worker's main thread only, and leave out context compaction. " +
     "For Claude, usage.models and usage.estimated_cost_usd include subagents, the advisor and compaction; " +
     "for Codex, neither subagent nor compaction consumption is observed anywhere, so its counts can be lower " +

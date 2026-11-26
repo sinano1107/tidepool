@@ -25,7 +25,10 @@ const usage = {
 };
 
 const observations = {
-  model_swaps: [{ from: "sonnet", to: "opus", scope: "session" as const, category: "cyber" }],
+  model_swaps: [
+    { from: "sonnet", to: "opus", scope: "session" as const, category: "cyber" },
+    { from: null, to: "sonnet", scope: null, category: null },
+  ],
   refusals: ["cyber", null],
   advisor: { model: null, consultations: 1, failed_calls: ["unavailable"], usage: null },
 };
@@ -74,20 +77,50 @@ it("usage と Precedent の episode が無い(投影前の)session は null で�
       exited: undefined,
       markers: null,
     }),
-  ).toMatchObject({ verdict: null, findings: null, tier: "economy", usage: null, actions: null, model_swaps: [], refusals: [], advisor: null });
+  ).toMatchObject({ verdict: null, findings: null, tier: "economy", usage: null, actions: null, model_swaps: null, refusals: null, advisor: null });
 });
 
-it("Codex の session は Episode があっても行動列が観測なし(null)—— compaction が stdout に出ないので、空のマーカー列を 0 回として渡さない(ADR 0083 追記10)", () => {
+it("Claude の session は exit に差し替えと拒否が無ければ空の観測を渡す(ADR 0317 決定5)", () => {
   expect(
     buildAllocationReviewInput({
       verdict: null,
       findings: null,
       tier: "economy",
-      spawned: { ...spawned, harness: "codex" },
-      exited: undefined,
+      spawned,
+      exited: {
+        kind: "worker_exited",
+        ...QUIET_EXIT,
+        worker_spawned_event_id: 7,
+        output_closed: true,
+        usage: null,
+        model_swaps: [],
+        refusals: [],
+        advisor: null,
+      },
+      markers: null,
+    }),
+  ).toMatchObject({ model_swaps: [], refusals: [] });
+});
+
+it("Codex の session は Episode や exit に値があっても行動列・差し替え・拒否が観測なし(null)(ADR 0083 追記10 / ADR 0317 決定5)", () => {
+  expect(
+    buildAllocationReviewInput({
+      verdict: null,
+      findings: null,
+      tier: "economy",
+      spawned: { ...spawned, harness: "codex", provider: "openai", model: "gpt-6.2-sol", advisor: null },
+      exited: {
+        kind: "worker_exited",
+        ...QUIET_EXIT,
+        worker_spawned_event_id: 7,
+        output_closed: true,
+        usage,
+        ...observations,
+        advisor: null,
+      },
       markers: ["decision", "memory"],
-    }).actions,
-  ).toBeNull();
+    }),
+  ).toMatchObject({ actions: null, model_swaps: null, refusals: null });
 });
 
 /** Recorded subject session and review completion for the allocation-input domain seam. */
