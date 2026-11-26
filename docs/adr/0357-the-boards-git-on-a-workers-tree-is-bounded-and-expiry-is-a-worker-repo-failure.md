@@ -1,5 +1,7 @@
 # 盤面が worker の tree に撃つ git は有界で、上限で止まった手は worker の repo の故障である —— 観測の失敗でも名前の場所の quarantine でもない
 
+**Status 追記: 決定2 の「上限で止まった手」は記録として確かめ終えていない byte を読む手に限る —— 記録の byte だけで読める部分は上限を持たない名前の場所の側の手に分け、上限超過の帰責は段でなく手が読む byte で決まる。語は残し、意味は原因の断定でなく止めるものの分類である([ADR 0423](0423-a-bounded-git-call-reads-bytes-not-yet-verified-into-the-record-and-what-reads-only-the-record-runs-unbounded.md) 決定1〜4・6、2026-11-26、issue #3855)。**
+
 **Status 追記: 決定1 の有界の対象は path の持ち主でなく byte の出所 —— worker の `.git` から写した盤面所有の repo からの fetch も含む。決定2 の分類は、写す段の失敗(worker の repo の故障)と名前の場所へ fetch する段の失敗(名前の場所の側)に分かれる([ADR 0364](0364-the-board-never-opens-the-workers-git-as-a-repository-and-fetches-the-tip-from-a-board-owned-copy-of-its-regular-files.md) 決定2・3、2026-11-09、issue #3097)。**
 
 **Status 追記: 決定2 の分類は完了済みの解放には当たらない —— そこでは fetch が走らず、view の上限超過は報告後の書き込みの「読めない」観測になる([ADR 0359](0359-the-completion-gate-lands-the-tip-in-the-record-before-done-and-a-completed-release-carries-only-the-recorded-tip.md) 決定5、2026-11-08、issue #3053)。**

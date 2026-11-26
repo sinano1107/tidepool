@@ -1,5 +1,7 @@
 # task の checkout と作業台は名前の場所の objects を借りない —— 閉包を全部持つ複製で作り、帰責は落ちた手でなく段で決まる
 
+**Status 追記: 決定4 の「確かめが上限を越えたときは名前の場所の側で拒む」の帰責は worker の故障に置き換わる —— 読むのは運んだばかりで確かめ終えていない閉包である。入れ直しに進まないことは保つ。決定3 の段の帰責は上限超過には当たらない([ADR 0423](0423-a-bounded-git-call-reads-bytes-not-yet-verified-into-the-record-and-what-reads-only-the-record-runs-unbounded.md) 決定1・5、2026-11-26、issue #3855)。**
+
 2026-11-24 の grilling(issue #3734、#3588・#3589・#3501 の族の根)で決定。ADR 0356 決定2 は、work / review の task の checkout を「alternates で名前の場所の objects を借りる」形で作った。理由は「今日と同じ可視性」の1句で、複製と比べていない。借りると、盤面が tip を検証する写しに checkout の byte と名前の場所の object が混ざり、検証の git が落ちたとき、盤面はどの手が落ちたかからどちらの故障かを推すことになる。この推しは両方の向きに外れた —— worker が借りている tree の id に偽の loose を1つ書くと名前の場所の Quarantine が立ち、名前の場所で壊れた借りている blob は checkout の故障になる。ADR 0364 の追記(#3495)の確かめ直しも同じ形で騙された。借りない役(Interview の2役)にはこの族の問題が1つも無い。実測と費用の表は #3734 に置く。
 
 1. **task の checkout は、どの type でも、自分の branch の閉包を全部持つ複製で作る。** ADR 0356 決定2 の「work / review は alternates で借りる」を置き換える。検証(ADR 0364 決定1)は4つの役とも「閉包が全部写しの中で解ける」の1つの手になり、名前の場所の ref から届く閉包を除外する形と、ADR 0364 の追記(#3495)の確かめ直しは要らなくなる。worker は名前の場所の objects を読めない —— sandbox の読み path からも外れ、名前の場所にあるだけの commit を親にした tip は checkout の故障になる(ADR 0364 決定1 の「worker が読める object だけで作れる」は、読める範囲が自分の閉包に狭まる)。
