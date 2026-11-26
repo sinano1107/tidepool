@@ -1,5 +1,7 @@
 # 収束は push の前に GitHub の head を読み、外の commit を盤面は自分では merge しない —— remote-backed の人間しか書けない path は origin 経由のまま
 
+**Status 追記: 決定7 の question を立てる直前の読み直し(profile → 門 → workspace の Quarantine)は、`merge` の回答の途中の立て直し(ADR 0394 決定3)にも掛かる —— 止まっていれば答えた question を取り替えず、回答はその verdict で拒まれる([ADR 0429](0429-convergence-reads-one-stop-right-before-it-writes-any-question-on-a-root-and-a-stopped-pr-creation-defers-its-record.md) 決定2、2026-11-26、issue #3879)。**
+
 **Status 追記: 決定2 の「値が読めない」は、最後に push した値の記録(ADR 0422 の fork ごとの記録)が「読めて、無い」とき(初回・未記録)に限る —— 記録が壊れて読めなければ push せず昇格の失敗にする。壊れた記録を無いと読むと、人間が出元 repo で巻き戻したブランチを push で上書きする([ADR 0427](0427-git-that-could-not-read-a-ref-is-unknown-not-absent-it-stops-once-on-the-resource-of-the-place-and-no-caller-chooses-the-reader.md) 決定5、2026-11-26、issue #3910)。**
 
 **Status 追記: 決定3 の PR が無いか未記録の根の「写しから読む」最後に push した値は、宣言中の fork の記録である —— fork ごとに repo id で持ち、出元 repo の差し替え・削除で消さない。下の 2026-11-22 の追記(issue #3562)の「出元 repo の差し替え・削除で前の repo の写しを消す」は外れる。消すと、前に使った fork へ戻った後の決定6 の巻き戻しを「値が読めない」として決定2 が push で上書きする([ADR 0422](0422-what-the-board-last-pushed-to-a-head-repo-is-kept-per-fork-by-repository-id-and-a-head-repo-change-does-not-forget-it.md)、2026-11-26、issue #3851)。**
