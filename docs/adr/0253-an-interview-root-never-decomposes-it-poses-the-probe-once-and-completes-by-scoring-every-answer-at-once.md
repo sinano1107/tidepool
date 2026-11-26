@@ -1,5 +1,7 @@
 # Interview の root は分解しない —— 出題で probe と rubric を確定して盤面が対象ごとの子を立て、採点完了で全答案の採点と完了を一度に行う
 
+**Status 追記: 決定3 の「出題の拒否は root には直せないので escalate を指す」は、盤面が受験者の名前を書いた failure question を登録して session を回収する形に変わる([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
+
 2026-10-14 の triage / grilling(issue #1901)で決定。ADR 0111 決定6 の「probe + rubric を先に decision log に書く」を
 守らせていたのは verb の説明の1文だけで、判断ログの行は型を持たず、盤面はどれが probe かを引けなかった。pin の子の題・目的・
 完了基準は root が子ごとに自由に書くので、全対象が同じ問題を解く保証も無かった。さらに pin の子は親の history から rubric を

@@ -1,5 +1,7 @@
 # 上限を持つ git の手は記録として確かめ終えていない byte を読む手であり、記録だけで読める部分は上限を持たない手に分ける
 
+**Status 追記: 決定3 の「verb の時点では拒むだけ」は、名前の場所の側の失敗では failure question を登録して session を回収する形に変わる。資源を止めない点は変わらない([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
+
 2026-11-26 の triage → grilling(issue #3855、#3814 の派生)で決定。ADR 0357 決定2 は上限で止まった手を worker の repo の故障とし、
 それは上限を持つ runner の型でそのまま決まる。一方、上限超過以外の失敗は段で帰責する(ADR 0411 決定3)。そのため上限を持つ手が
 名前の場所の byte も読むと、名前の場所の遅さが worker の時間切れとして刻まれる —— 出題の写しは面接室にしか無い親の tree を worker の

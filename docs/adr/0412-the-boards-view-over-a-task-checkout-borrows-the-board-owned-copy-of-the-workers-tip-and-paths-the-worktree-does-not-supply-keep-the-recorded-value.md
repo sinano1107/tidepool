@@ -1,5 +1,7 @@
 # task の checkout を読む盤面の view は盤面所有の写しを借りる —— worktree が供給しない path は記録の値のまま
 
+**Status 追記: Consequences の「完了の門が view の失敗を名指さず拒むだけなのは ADR 0359 決定4 のまま」は変わった —— worker の段の失敗は直し方を言う拒否文、それ以外は failure question と session の回収([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
+
 2026-11-24 の grilling(issue #3139、#3111 の ponytail-review の疑いと #3734 の triage の派生)で決定。ADR 0356 決定3 は、盤面が worker の worktree を読む view(盤面所有の使い捨て GIT_DIR + 新規 index)に名前の場所の objects を使わせた。当時は task の checkout 自体が名前の場所を借りていたので、借りる先はそれしか無かった。ADR 0411 決定1 がその前提を消した後も、task の checkout の view の2つの呼び手(完了の門と完了後の観測、解放の stage)は名前の場所を渡し続けていた —— 作業台と出題の写しの呼び手は、worker の tip を写して検証した盤面所有の写し(ADR 0364 決定1)を既に渡している。名前の場所を借りる view は、`add -A` / `write-tree` / `status` の1回の呼び出しで worker の worktree と名前の場所の blob の両方を読み、落ちたときの帰責を落ちた手から推す。ADR 0411 が task の checkout について退けた形が、view に残っていた。ADR 0411 決定4 の入れ直しが stage の前に tip の閉包を直すので届く形は縮んだが、基準がその閉包の外にある2つの形(完了の後に名前の場所が壊れた門付きの完了解放、worker が記録済みの commit から巻き戻した未決着の解放)では、名前の場所の blob の損傷が worker の「読めない」観測と task の失敗として刻まれる。実測の表と `file:line` は #3139 に置く。
 
 1. **task の checkout を読む view は、worker の tip を写して検証した盤面所有の写しを借りる。** 完了の門、完了後の観測、解放の stage のどれも同じ。ADR 0356 決定3 の「名前の場所の objects」を置き換える。view が読むのは worker の worktree と、盤面が検証した写しだけになり、stage と観測の失敗は作りの上で worker の側になる —— ADR 0367 決定1 の「記録から index を作る失敗を分ける」手と、ADR 0359 決定3 の「status の段だけを観測の失敗にする」分け方は、分ける相手が無くなる。

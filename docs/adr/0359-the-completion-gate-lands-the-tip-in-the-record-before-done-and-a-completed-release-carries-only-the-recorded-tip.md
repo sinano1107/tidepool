@@ -1,5 +1,7 @@
 # 完了の門は tip を記録に着けるまで `done` にせず、完了済みの解放は記録の tip だけを運ぶ —— 報告後の書き込みは記録され、名前の場所を止めない
 
+**Status 追記: 決定4 の「拒むだけ」は、worker が自分で直せる失敗に限る —— 名前の場所の側の失敗で直せないものは、盤面が見た失敗の文を載せた failure question を登録して session を回収する。資源の停止を verb で登録しない点は変わらない([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
+
 **Status 追記: 決定1 の門は、`task/<id>` を書く前に tip の履歴も見る —— 他の task のブランチの commit を持つ tip は何も書かずに拒む。完了以外の解放の WIP の退避は、同じ tip を書かずに解放の失敗にする([ADR 0417](0417-a-worker-tip-holding-another-tasks-commits-is-refused-where-the-board-receives-it-the-gate-writes-nothing-and-a-release-fails-and-keeps-the-checkout.md)、2026-11-25、issue #3824)。**
 
 **Status 追記: 決定3 の「記録から index を作る段と worker の worktree を観測する段の失敗を分ける」は、分ける相手が無くなる —— 観測の view は盤面所有の写しだけを借り、完了の門は tip を記録する手と同じ写しを使う。完了後の観測は写しを作るので、worker が自分の repo を壊した形と写しが上限を越えた形は「読めない」観測になる([ADR 0412](0412-the-boards-view-over-a-task-checkout-borrows-the-board-owned-copy-of-the-workers-tip-and-paths-the-worktree-does-not-supply-keep-the-recorded-value.md) 決定1・4・5、2026-11-24、issue #3139)。**

@@ -1,5 +1,7 @@
 # Quarantine の受理は全 ref が基準と同じであることだけを確かめる —— 動いた ref は盤面が「基準へ戻す」で戻し、失われた ref だけが名指しの選択肢で基準に入る
 
+**Status 追記: 決定12 の「完了の門は worker を拒むだけで Quarantine を立てない」のうち Quarantine を立てない点は保つ。「retry では直らない、escalate する」と言う拒否文は、failure question を登録して session を回収する形に変わる([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
+
 **Status 追記: 決定14 の削除の扉は、通すときに、その名前の着地が終わっていない完了 task すべての着地を終える。削除から再登録までの間に盤面の持ち物でなくなるのは基準だけでなく、その名前で作られた task の着地もである([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1、2026-11-26、issue #3890)。**
 
 **Status 追記: 決定5 の「戻す先の object が無い」は、「無い」と積極的に分かったことを指す。手元では、git が `missing` と答え、ほかに何も報告しないとき。remote-backed では、それに加えて取りに行った先も無いと答えたとき —— タスクブランチの sha は、出元 repo と origin の両方。在るか無いか分からなければ、どちらの選択肢も何も書かずに拒む。header の読めない loose へ戻す決定3 の書き戻しも、拒む側に変わる([ADR 0409](0409-a-ref-counts-as-lost-only-when-its-object-is-known-absent-and-an-answer-that-cannot-tell-is-refused.md) 決定1・2・4、2026-11-24、issue #3607)。**

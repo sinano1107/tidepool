@@ -1,5 +1,7 @@
 # 盤面は worker の `.git` をリポジトリとして開かない —— regular file だけを盤面所有の repo に写し、tip はそこから fetch する
 
+**Status 追記: 決定2 の「verb なら ADR 0359 決定4 の拒むだけ」は、worker が直せない名前の場所の側と host の失敗では failure question を登録して session を回収する形に変わる([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
+
 **Status 追記: 決定2 の「上限超過は worker の repo の故障のまま」は、記録の byte と確かめていない byte を1度に辿る手(fetch・入れ直し・履歴の比較)の決定として保つ。記録の byte だけで読める部分は上限なしの手に分ける([ADR 0423](0423-a-bounded-git-call-reads-bytes-not-yet-verified-into-the-record-and-what-reads-only-the-record-runs-unbounded.md) 決定3・4、2026-11-26、issue #3855)。**
 
 **Status 追記: 決定1 の「work / review は写しの alternates を名前の場所に向ける」と、決定2 の検証の段の帰責の追記(#3495 の確かめ直し、#3501 の入れ直しへ進める分岐)は要らなくなる —— task の checkout と作業台は複製で、検証は4つの役とも閉包が全部写しの中で解けることを要求し、帰責は落ちた手でなく段で決まる。作業台は、検証を通った盤面所有の写しに名前の場所を借りさせて比べる([ADR 0411](0411-task-checkouts-and-workbenches-do-not-borrow-the-named-places-objects-they-are-copies-holding-their-whole-closure-and-blame-follows-the-stage.md) 決定1〜3、2026-11-24、issue #3734)。**
