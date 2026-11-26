@@ -100,6 +100,7 @@ import {
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
   LostTaskBranchPresentError,
+  NoReturnLineageError,
   openInterviewRoom,
   PickupGateError,
   pickupGate,
@@ -316,6 +317,18 @@ type TaskGated = { content: Partial<TaskContent>; parentBriefing: ParentBriefing
 export type PollOutcome = { outcome: "succeeded" } | { outcome: "threw"; message: string } | { outcome: "blocked"; reason: string };
 const SUCCEEDED: PollOutcome = { outcome: "succeeded" };
 const IN_FLIGHT: PollOutcome = { outcome: "blocked", reason: "another poll is in flight" };
+
+/** pickup の失敗のうち、その task だけの失敗で同じ tree の retry が同じ失敗になる型と、その spawn failure の kind(`SpawnFailure.kind`)。
+ *  準備の catch は名前の場所を quarantine せずに投げ直し、spawn failure の記録が kind を写す(出口は abandon だけ)。 */
+const TASK_FAILURES = [
+  [UnhideableTaskSettingsError, "unhideable-task-settings"],
+  // ADR 0392 決定2: 失われた event が効いたまま在る `task/<id>`
+  [LostTaskBranchPresentError, "lost-task-branch-present"],
+  // ADR 0421 決定3: 帰り先の無い系譜の task の fork 元
+  [NoReturnLineageError, "no-return-lineage"],
+] as const;
+
+const taskFailureKind = (err: unknown): SpawnFailure["kind"] => TASK_FAILURES.find(([type]) => err instanceof type)?.[1];
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
  *  to the worker and mark it in_progress. */
@@ -667,8 +680,8 @@ export function startScheduler(deps: {
           if (err instanceof CheckoutHostError) throw err;
           // ADR 0373 決定13: 確認が registry を読めないのは、task 自身の名前の解決が registry を読めないのと同じ spawn の失敗
           if (err instanceof FirstCaptureRegistryReadError) throw err;
-          // ADR 0392 決定2: 失われた event が効いたまま在る `task/<id>` はその task の失敗(出口は cancel)—— 名前の場所を quarantine しない
-          if (err instanceof LostTaskBranchPresentError) throw err;
+          // その task だけの失敗(`TASK_FAILURES`)—— 名前の場所を quarantine しない
+          if (taskFailureKind(err) !== undefined) throw err;
           // ADR 0399 決定5: a task's recorded repo disagreement goes to its normal failure question.
           if (err instanceof DeclaredRepoMismatchError) throw err;
           const failedPlace = err instanceof PickupGateError ? err.place : place;
@@ -705,7 +718,7 @@ export function startScheduler(deps: {
           onSpawnFailed(
             picked.id,
             sessionId,
-            err instanceof UnhideableTaskSettingsError ? { ...failure, kind: "unhideable-task-settings" } : err instanceof LostTaskBranchPresentError ? { ...failure, kind: "lost-task-branch-present" } : failure,
+            taskFailureKind(err) === undefined ? failure : { ...failure, kind: taskFailureKind(err) },
           ),
       );
     }

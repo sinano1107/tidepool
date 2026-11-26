@@ -1,5 +1,7 @@
 # 着地は運ぶ前と記録を書く前に名前の場所の全 ref を基準と比べる —— 受理が見せていない移動を受け入れる穴は、人間の内容の扉の設計に渡す
 
+**Status 追記: 下の追記の「対象が無くなる」は、削除の扉が残す根についての文である。扉が registry の commit を待つ間に登録・完了した task は、扉の transaction の後に、基準の行の無い名前の着地の候補になりうる。決定1 の末尾の経路は消さずに残す(issue #3322 の窓、2026-11-27、issue #3895)。**
+
 **Status 追記: 決定1 の末尾「基準の行が無い workspace(削除して再登録した後に、PR の根・hold した根・断念した根が残る)」は対象が無くなる —— 削除の扉が、通すときにその名前の着地が終わっていない完了 task の着地を終える([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定1、2026-11-26、issue #3890)。**
 
 **Status 追記: 決定1 の例外「取り残された子の告知は比べずに書く」は対象が無くなる —— 告知は ref を読まなくなった([ADR 0413](0413-the-notice-of-a-blocked-root-does-not-count-its-children-and-the-row-and-the-task-say-why-a-child-does-not-run.md) 決定1、2026-11-24、issue #3703)。**

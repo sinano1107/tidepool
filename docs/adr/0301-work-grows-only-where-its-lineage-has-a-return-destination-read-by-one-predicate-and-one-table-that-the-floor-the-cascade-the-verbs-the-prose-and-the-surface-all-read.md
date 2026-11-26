@@ -1,5 +1,7 @@
 # work が立つのは帰り先のある系譜だけで、帰り先は1本の述語と1つの表で読み、床・cascade・verb・文・画面はすべてそれを読む
 
+**Status 追記: 下の追記の3つ目の種類は、終わりの記録より前に、その task 自身が内容の保護ブランチへの到達の記録を持つものを数えない。子は根の記録を継がない([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) の Status 追記、2026-11-27、issue #3895)。**
+
 **Status 追記: 帰り先の無い系譜に、3つ目の種類が加わる —— 削除の扉が着地を終えた task と、自分の系譜がそれを祖先に数える task。記録だけで読む。宛先がブランチに依存する task が立たず、依存しない task が立つ線は変えない([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定3、2026-11-26、issue #3890)。**
 
 **Status 追記: 決定7 の「別 workspace への分解子(registry の編集の提案)も今は立たない」は置き換わる —— 別の workspace への分解は子でなく、分解した task を分解元に持つ根として登録され、根は自分の workspace の保護ブランチを帰り先に持つので、決定7 が理由に挙げた「帰り先を work 自身の workspace で読むか」は問う必要が無くなる。帰り先の無い系譜の RCA の下では、その根を立てる承認 question が決定2 の床で今どおり拒まれ、そこを開くかは #2510 が決める。決定4 の cascade は、計画の work の分解元の cancel で未決着の分解元つきの根も倒すが、理由は表の「宛先が親の生死に依るか」ではなく計画が死んだことで、done の根の付帯子は表のとおり倒れない。付帯子とその子孫が分解元の根は倒れない。先の Status 追記の「登録の床は、子が親と違う workspace の列を明示したとき子の系譜でも問う」は、子が workspace を入力に持たなくなったので当たる場面が無い([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 決定3〜5 と帰結、2026-11-19、issue #1796)。**

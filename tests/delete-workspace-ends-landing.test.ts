@@ -14,7 +14,7 @@ import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { holdsBaseline, refreshProtectedBranch } from "../src/workspace.js";
 import { deleteWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeLandingWorkspace, makeRemoteBackedWorkspace, makeWorkspace, POSED_HEAD, poseAccepted } from "./harness.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, POSED_HEAD, poseAccepted } from "./harness.js";
 import {
   answerHoldOnPr,
   answerPromotion,
@@ -24,14 +24,13 @@ import {
   deletionReaders,
   fetchHeldAtToken,
   finish,
-  giveHeadRepo,
   landingWork,
   mergeOnGitHub,
   openBoard,
   openLocalMergeQuestions,
   promotionFailures,
-  pushPrHead,
   recordPrOpenedOutsideConvergence,
+  reefWithPrRootAndChild,
   registeredReef,
   reRegister,
   settleRepairNotMergedBack,
@@ -42,27 +41,6 @@ import { tempDir } from "./temp-dir.js";
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 // ADR 0421 決定1・2: 削除の扉は、通すときに、その名前の着地が終わっていない完了 task すべての着地を終える。domain 層の釘(ADR 0107)。
-
-/** `reef` に登録した checkout で PR #1 を開いた根と、その下で merge back まで済んで収束が push した done の子。`door` は本物の読み口で削除の扉を叩く。 */
-async function reefWithPrRootAndChild(merge: "external" | "escalate" = "external") {
-  const { db, clock } = await openBoard();
-  const { workspace: old } = await makeLandingWorkspace("reef-old");
-  const reef = await registeredReef(old);
-  giveHeadRepo(db, reef, old.head_repo!);
-  const github = new FakeGitHubClient();
-  const workspace = reef.resolve("reef");
-  const work = landingWork(db, clock, "reef");
-  await commitThroughTaskCheckout(db, clock, workspace, work, "feature.txt", "ready\n");
-  const root = finish(db, clock, work);
-  const head = pushPrHead(github, workspace, root.id, 1);
-  recordPrOpenedOutsideConvergence(db, root, 1, clock.now(), { authority: { merge }, head, workspace });
-  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: reef.resolve, github });
-  const child = await settleRepairNotMergedBack(db, clock, workspace, root.id);
-  tearDownRepair(db, clock, workspace, child);
-  await landing.converge();
-  const door = (confirm = true) => deleteWorkspace({ name: "reef", confirm }, { ...reef.admin, db, ...deletionReaders(db, reef.resolve, landing) });
-  return { db, clock, reef, workspace, github, landing, root, child: getTask(db, child.id)!, door };
-}
 
 /** 削除の後、収束と2つの tick が `tasks` に何もしないこと —— verdict も GitHub への書き込みも開いた question も無い。 */
 async function expectLandingDoesNothing(c: { db: Db; landing: Landing; github: FakeGitHubClient }, tasks: Task[]) {
