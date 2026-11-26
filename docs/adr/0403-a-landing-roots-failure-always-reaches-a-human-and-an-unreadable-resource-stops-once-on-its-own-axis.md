@@ -1,7 +1,5 @@
 # 着地の根の失敗は必ず人間に届き、読めない資源はその資源の軸で1回だけ止まる
 
-**Status 追記: 決定4 の「読めない checkout は workspace の Quarantine で1回止める」は、着地の ref 検査の外で起きていた出元 repo の畳みの git の失敗にも届く —— 畳みを行き先の検査から外し、終わっていない変更を workspace の Quarantine で止めて、受理が畳む。git の失敗は受理の拒否として人間に返る([ADR 0415](0415-a-fold-that-may-delete-copies-runs-only-where-a-human-is-and-an-unfinished-head-repo-change-stops-the-workspace-once.md)、2026-11-25、issue #3797)。**
-
 2026-11-23 の grilling(issue #3554、#3671 を畳んだ)で決定。収束は、失敗した根に昇格失敗 question を立てて人間に見せる。ところが
 question に写す tip を読む所でもう一度落ちると、ログだけ出して終わっていた。無人の収束は verdict を捨て、`landing_state` も null なので、
 人間には着地の印の無い「done」しか見えない。ADR 0229 決定1 がログだけを選べたのは、キューの行に印が残るからで、ここには当たらない。

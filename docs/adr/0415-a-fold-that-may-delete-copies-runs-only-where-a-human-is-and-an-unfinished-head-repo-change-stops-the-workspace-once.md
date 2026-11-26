@@ -1,5 +1,7 @@
 # 写しを消しうる畳みは人間のいる所でだけ行い、終わっていない出元 repo の変更は workspace を1回止める
 
+**Status: 取り下げ。[ADR 0422](0422-what-the-board-last-pushed-to-a-head-repo-is-kept-per-fork-by-repository-id-and-a-head-repo-change-does-not-forget-it.md) が置き換える —— 盤面が出元 repo へ最後に push した値を fork ごとに持ち、出元 repo の変更で消さないので、前方向の畳みは消しうる写しを持たず、行を書くだけの畳みとして行き先の検査が人間を待たずに行う。決定1〜4 は対象が無い(2026-11-26、issue #3851)。**
+
 2026-11-25 の grilling(issue #3797)で決定。ADR 0395 決定2 は出元 repo の変更を ADR 0391 の形(予告 → 書く → 検査が畳む)に載せた。
 ところが出元 repo は repo と違って差し替えられるので、前方向の畳みは古い fork の写し(`refs/remotes/head-repo/*`)を消す。その結果、
 行き先を読むだけの検査が ref を書いていた。扉が途中で死んで予告が残ると、次に行き先を読んだ呼び手がこの書き込みを引き受け、git が
