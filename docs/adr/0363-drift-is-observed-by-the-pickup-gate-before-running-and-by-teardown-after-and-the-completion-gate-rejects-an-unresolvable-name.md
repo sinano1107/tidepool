@@ -1,6 +1,6 @@
 # drift の観測者は走る前なら pickup の門、走った後なら後始末であり、verb は拒むだけ —— 完了の門は名前が解けないときも tip の記録を待って `done` にしない
 
-**Status 追記: 決定2 の「verb は drift に資源の停止を登録しない」と観測者を後始末1人に絞る線は保つ。「拒むだけ」は、registry から消えた workspace を verb が見たら failure question を登録して session を回収する形に変わる([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
+**Status 追記: 決定2 の「verb は drift に資源の停止を登録しない」と観測者を後始末1人に絞る線は保つ。「拒むだけ」は、registry から消えた workspace を完了の門が見たら(読む verb は今どおり登録も回収もしない) failure question を登録して session を回収する形に変わる([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**
 
 **Status 追記: 決定4 の「盤面は残した成果を運ばない」「立てる Quarantine の理由にその在り処を書く」と、退けた形の「Quarantine の受理で残した checkout から tip を fetch する」は反転した —— 名前の場所の事情で運べなかった解放は drift に限らず(名前の場所の故障でも)起き、受理がやり直す。「読み手は帯域外の操作をした人間 1 人」は drift だけを数えた理由だった。理由に在り処は書かない。worker への拒否文の在り処は変わらない([ADR 0369](0369-a-release-the-named-place-kept-from-finishing-is-redone-by-the-acceptance-of-its-quarantine-and-a-task-that-owes-one-is-not-picked-up.md) 決定1・6、2026-11-11、issue #3147)。**
 
