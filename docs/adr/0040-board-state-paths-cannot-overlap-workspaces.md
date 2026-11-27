@@ -1,5 +1,7 @@
 # 盤面の状態パスは workspace と交差できない: 重なりガードは pickup 時の workspace quarantine
 
+**Status 追記: 盤面が書く固定点は個別の env を廃し、盤面の家1つとその下から導く置き場になる。家の外に置く名前の場所には所属の印が付く。workspace との交差を拒む検査の線は変わらない([ADR 0436](0436-a-board-owns-one-board-home-and-two-boards-share-nothing-they-write-the-homes-lock-refuses-a-second-process-and-places-outside-it-carry-a-belonging-mark.md) 決定1・3、2026-11-27、issue #3961)。**
+
 **Status 追記: 「registryDir は意図的に対象外」は反転する —— registry clone は workspace にならず、6つ目の固定点として workspace の path との交差を拒む(「5点」「固定5点」は6点)。執行の節の「pickup 側が必ず捕まえる」は、下の追記のとおり spawn の検査が task の checkout の番地に当たるので名前の場所については成り立っておらず、pickup の側に名前の場所と固定点の交差の検査を1つ足して成り立たせる([ADR 0377](0377-the-registry-clone-is-not-a-workspace-it-is-a-fixed-point-no-workspace-may-overlap-and-the-registry-floor-is-keyed-by-repository-identity.md) 決定1・3・4、2026-11-15、issue #3178)。**
 
 **Status 追記: 決定の「workspace の中」は worker の読み書きの半径で、worker は task の checkout で走るので重なりの検査はその番地に当たる([ADR 0356](0356-the-workers-bench-and-the-boards-record-are-different-git-directories.md)、2026-11-07、issue #2956)。**

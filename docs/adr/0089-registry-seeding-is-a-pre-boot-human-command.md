@@ -1,5 +1,7 @@
 # 空の盤面への registry の種まきは boot 前の人間の一発コマンド — 初回起動時の自動作成はしない
 
+**Status 追記: seed の前に、盤面の家を作る起動前の人間のコマンドが来る。seed は registry の repo に家の識別子を所属の印として commit で置く([ADR 0436](0436-a-board-owns-one-board-home-and-two-boards-share-nothing-they-write-the-homes-lock-refuses-a-second-process-and-places-outside-it-carry-a-belonging-mark.md) 決定3・5、2026-11-27、issue #3961)。**
+
 **Status 追記: 決定5 の既定 agent の `allowed_workspaces: ["*"]` とその理由は欄ごと消え、既定 agent の profile は `assignable_to: ["*"]` / `merge: escalate` になる ([ADR 0384](0384-a-child-shares-its-parents-workspace-and-work-in-another-workspace-becomes-a-root-whose-origin-delegates-only-when-it-is-plan-work.md) 帰結、2026-11-20、issue #1796)。**
 
 issue #365 のグリリング(2026-08-19)で決定。友人テスト(#364)では、空の registry から既定 agent / authority

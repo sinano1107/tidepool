@@ -1,5 +1,7 @@
 # 登録の門は着地先とその出所を見せる — 配備の事実はソースコメントに書かない
 
+**Status 追記: 決定5 の必須キーのうち `TIDEPOOL_REGISTRY` / `TIDEPOOL_DB` / `TIDEPOOL_WORKER_LOGS` は廃され、盤面の家を指す1つのキーになる。`TIDEPOOL_WORKSPACES_DIR` は残る([ADR 0436](0436-a-board-owns-one-board-home-and-two-boards-share-nothing-they-write-the-homes-lock-refuses-a-second-process-and-places-outside-it-carry-a-belonging-mark.md) 決定1、2026-11-27、issue #3961)。**
+
 issue #305 のグリリング(2026-08-15)で決定。ADR 0052 の実環境動作確認 第3段の準備で、Pi の
 `/etc/default/tidepool` に `TIDEPOOL_WORKSPACES_DIR` が無いまま `clone` モードの登録直前まで進んでいたことが
 見つかった。登録していれば checkout は SD カード側の既定 `~/tidepool-workspaces/<name>` に落ち、#205 未実装のため
