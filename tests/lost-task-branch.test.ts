@@ -1309,9 +1309,16 @@ it("pickup never writes through a dangling symref placed after the fixing check 
   const main = git(b.ws.path, "rev-parse", "main");
   afterAncestorRefWrite(b, parent, () => git(b.ws.path, "symbolic-ref", ref, target));
 
-  await pickUp(b, task);
+  const refusal = await pickUp(b, task).then(() => null, (error: unknown) => ({ error }));
 
   expect(git(b.ws.path, "for-each-ref", target)).toBe("");
+  // Git versions differ on whether the absence check permits replacing a dangling symref.
+  if (refusal) {
+    expect(refusal.error).toMatchObject({ message: expect.stringContaining("dangling symref already exists") });
+    expect(git(b.ws.path, "symbolic-ref", ref)).toBe(target);
+    expect(createdShas(b, task)).toEqual([]);
+    return;
+  }
   expect(git(b.ws.path, "rev-parse", ref)).toBe(main);
   expect(createdShas(b, task)).toEqual([main]);
 });
