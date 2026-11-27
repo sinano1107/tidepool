@@ -484,7 +484,7 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
     ...composition(),
     registryDir,
     logDir,
-    boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logDir }],
+    boardState: [{ label: "board home (TIDEPOOL_HOME)", path: logDir }],
   };
   const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, onSessionCloseStep: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
 

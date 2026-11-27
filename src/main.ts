@@ -1,16 +1,15 @@
-import { mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openHumanCredential, resolvePublicOrigins, resolveTokenFile } from "./auth.js";
+import { openHumanCredential, resolvePublicOrigins } from "./auth.js";
 import type { BoardCall } from "./board-call.js";
+import { openBoardHome, resolveBoardPlaces, startBoardOnHome } from "./board-home.js";
 import { boardStatePaths } from "./board-state.js";
 import { ClaudeTranslationClient } from "./claude-translation-client.js";
 import { execThrough, resolveMoonshotApiKeyFile } from "./claude-worker.js";
 import { resolveCliAuthExpiry } from "./cli-auth.js";
 import { SystemClock } from "./clock.js";
 import { resolveCodexExecutable } from "./codex-worker.js";
-import { openDb } from "./db.js";
 import {
   DEFAULT_AGENT_NAME,
   DEFAULT_AUDITOR_NAME,
@@ -24,7 +23,6 @@ import { startServer } from "./server.js";
 import { buildServerOptions, declaredRegistryMode } from "./server-options.js";
 import type { TranslationClient } from "./translate.js";
 import { installUnhandledRejectionFloor } from "./unhandled-rejection-floor.js";
-import { resolveWorkspacesBaseDir, workspacesBaseDirSource } from "./workspace.js";
 
 // ADR 0294 決定4 / ADR 0389 決定3: 起動の最初に未処理の reject を記録する床を置く(bootTidepool の外 —— テストは reject と throw を失敗として見る)
 installUnhandledRejectionFloor();
@@ -33,12 +31,13 @@ const port = Number(process.env.PORT ?? 4589);
 // /mcp's own 127.0.0.1-only port (issue #37) — kept off `port` so
 // `tailscale serve <port>` never also publishes MCP tool calls
 const mcpPort = Number(process.env.MCP_PORT ?? port + 1);
-const registryDir = process.env.TIDEPOOL_REGISTRY;
+// ADR 0436 決定1: 盤面が書く置き場は盤面の家(TIDEPOOL_HOME)から導く。workspaces の基点(ADR 0018)と
+// その出所(ADR 0082 決定2)だけは家の外に残る
+const places = resolveBoardPlaces(process.env);
+const { workspacesDir, workspacesDirSource, logDir, codexHome } = places;
+// ADR 0140: registry を持たない盤面は、家の中の registry clone の dir が無い盤面
+const registryDir = existsSync(places.registryDir) ? places.registryDir : undefined;
 const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? DEFAULT_WORKSPACE_NAME;
-// ADR 0018: base directory a path-omitting workspace entry derives from.
-const workspacesDir = resolveWorkspacesBaseDir(process.env.TIDEPOOL_WORKSPACES_DIR);
-// ADR 0082 決定2: 同じ env の値から出所も導く(登録の門が着地先に添えて見せる)。
-const workspacesDirSource = workspacesBaseDirSource(process.env.TIDEPOOL_WORKSPACES_DIR);
 // ADR 0012 / issue #36: TIDEPOOL_AGENT is a pointer to the board's default
 // agent, not "the one worker" — an unspecified assignee resolves here, but a
 // pre-set delegation to a different registry name overrides it per task
@@ -55,38 +54,29 @@ const interviewerName = process.env.TIDEPOOL_INTERVIEWER ?? DEFAULT_INTERVIEWER_
 // `root` (dirname(fileURLToPath(import.meta.url)) + "..").
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-// ADR 0040 / issue #149: 盤面自身の状態パスは**1箇所で読む**。DB と worker-logs は
-// これまで使う場所(startServer 呼び出し / workerFactory)で env を読んでいたが、
-// 重なりガードが同じ値を見る以上、綴りが2つあると守る対象と実際の置き場が黙って
-// ずれる。既定は cwd 相対のまま残す(ADR 0040: cwd 全体が保護対象になった今、
-// 既定を動かしても罠の表面積は縮まらない)。
-const dbPath = process.env.TIDEPOOL_DB ?? "board.sqlite";
-const logDir = process.env.TIDEPOOL_WORKER_LOGS ?? "worker-logs";
-const apiTokenFile = resolveTokenFile(process.env.TIDEPOOL_API_TOKEN_FILE);
 // ADR 0097 決定4 / issue #445: Moonshot キーは盤面の env に置かず状態ファイルに
 // 置く(human-surface credential と同じ doctrine)。アダプタが spawn 時に読む。
 const moonshotApiKeyFile = resolveMoonshotApiKeyFile(process.env.TIDEPOOL_MOONSHOT_API_KEY_FILE);
-const codexHome = process.env.TIDEPOOL_CODEX_HOME ?? join(homedir(), ".tidepool", "codex");
 const { executable: codexExecutable, onPath: codexOnPath } = resolveCodexExecutable();
 // env 未設定 = 盤面に GitHub 識別情報が無い(ADR 0024)ので守る対象も無い。
 // **githubAuth の有無ではなく env の有無で見る**: mode が 600 でなくて識別情報が
 // 立たなかった場合でも、平文のファイルはそこに在る。
 const githubTokenFile = process.env.TIDEPOOL_GITHUB_TOKEN_FILE;
 const boardState = boardStatePaths({
-  dbPath,
-  workerLogDir: logDir,
-  apiTokenFile,
+  home: places.home,
   githubTokenFile,
   moonshotApiKeyFile,
-  codexHome,
-  // 5点目の「盤面の実行 checkout」は2つの綴りを持つ(ADR 0040): 既定の状態パスが
-  // 相対で解決される先は cwd、`public/` を実際に配信するのは server.ts が
-  // モジュールの位置から導く checkout(= repoRoot)。リポジトリ外から起動すれば
+  // 「盤面の実行 checkout」は2つの綴りを持つ(ADR 0040): cwd と、`public/` を実際に配信する
+  // server.ts がモジュールの位置から導く checkout(= repoRoot)。リポジトリ外から起動すれば
   // 両者は一致しないので、cwd だけ守ると配信元が無防備になる。
   cwd: process.cwd(),
   servedRoot: repoRoot,
   registryDir,
 });
+
+// ADR 0436 決定2: 家の lock を最初の書き込み(token file の初回作成、worker logs の dir、`openDb` の DDL と seed)より前に取る。
+// 取れなければ BoardHomeLockedError で何も書かずに終わる
+const home = openBoardHome(places.home);
 
 // ADR 0043 / issue #33: worker options の口の一覧も server-options.ts が持つ。
 // ここに残るのはホストの副作用だけ —— ディレクトリの作成そのもの。registry 未設定
@@ -132,7 +122,7 @@ function vapidConfig(): VapidConfig | undefined {
 // cookie はオリジン単位なので、盤面は自分が公開されている URL を知っている必要が
 // ある(自力では導出できない)。Pi なら tailnet の公開 URL をここに設定する。
 const { credential, messages } = openHumanCredential({
-  tokenFile: apiTokenFile,
+  tokenFile: places.apiTokenFile,
   origins: resolvePublicOrigins(process.env.TIDEPOOL_PUBLIC_ORIGINS, port),
 });
 for (const message of messages) {
@@ -144,11 +134,10 @@ for (const message of messages) {
 // **ServerOptions の口の一覧は持たない** —— 一覧を持てば、任意フィールドを1つ
 // 渡し忘れても型もテストも何も言わない(watchdog が本番で一度も走っていなかった
 // のがその形)。口の一覧は server-options.ts が単独で持ち、テストがそれを観測する。
-// 盤面の唯一の SQLite 接続はここで開く: server-options の resolver たちが合成の
+// 盤面の唯一の SQLite 接続は家を開く口が開く: server-options の resolver たちが合成の
 // 時点で盤面の行(実行設定の表、ADR 0110)を読むため、`startServer` の中で開いて
 // いては間に合わない。閉じるのは server の `stop()`。
-const db = openDb(dbPath);
-const server = await startServer(
+const server = await startBoardOnHome(home, async () => startServer(
   await buildServerOptions({
     port,
     mcpPort,
@@ -180,7 +169,7 @@ const server = await startServer(
     vapid: vapidConfig(),
     translationClient: translationClientFactory,
     cliAuthExpiresAt: resolveCliAuthExpiry(process.env.TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT),
-  }, db),
-);
+  }, home.db),
+));
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
 console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);

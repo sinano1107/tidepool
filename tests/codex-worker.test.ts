@@ -1232,13 +1232,13 @@ describe("CodexWorker (ADR 0098)", () => {
   it.each([
     ["registry に無い workspace 名(registry drift)", { workspace: "ghost" }, false, { quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" }],
     ["registry に無い agent 名(registry drift)", { assignee: "ghost" }, false, { quarantine: "agent", value: "ghost", reason: expect.stringContaining("ghost") }],
-    ["盤面の状態パスと重なる workspace", {}, true, { quarantine: "workspace", value: "work", reason: expect.stringContaining("board database (TIDEPOOL_DB)") }],
+    ["盤面の状態パスと重なる workspace", {}, true, { quarantine: "workspace", value: "work", reason: expect.stringContaining("board home (TIDEPOOL_HOME)") }],
   ])("%s は spawn も skill の列挙もせずに quarantine し、spawn_failed ではなく盤面の一撃で todo へ戻す(ADR 0274)", async (_case, fields, overlap, stop) => {
     const onSpawnFailed = vi.fn();
     const onPickupStopped = vi.fn();
     const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {
       onPickupStopped,
-      boardState: overlap ? (workspace) => [{ label: "board database (TIDEPOOL_DB)", path: join(workspace, "board.sqlite") }] : undefined,
+      boardState: overlap ? (workspace) => [{ label: "board home (TIDEPOOL_HOME)", path: join(workspace, "board.sqlite") }] : undefined,
     });
     const value = registerTask(f.db, { type: "work", assignee: "codex-agent", workspace: "work", title: "stopped", purpose: "p", completion_criteria: "c", ...fields }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
     expect(f.start(value)).toBeUndefined();

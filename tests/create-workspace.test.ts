@@ -1012,7 +1012,7 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
     const boardDir = await tempDir("tidepool-board-");
     const deps = {
       ...(await makeDeps(registryDir)),
-      boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }],
+      boardState: [{ label: "board home (TIDEPOOL_HOME)", path: join(boardDir, "board.sqlite") }],
     };
 
     await expect(
@@ -1028,7 +1028,7 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
     const guarded = {
       ...deps,
       // worker-logs の中に workspace を掘る形 — 逆包含も同じ交差
-      boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: deps.workspacesBaseDir }],
+      boardState: [{ label: "board home (TIDEPOOL_HOME)", path: deps.workspacesBaseDir }],
     };
 
     await expect(
@@ -1073,7 +1073,7 @@ describe("createWorkspace: 盤面の状態パスとの重なりは登録の門�
 
     await createWorkspace({ mode: "register", name: "sandbox", path }, {
       ...deps,
-      boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }],
+      boardState: [{ label: "board home (TIDEPOOL_HOME)", path: join(boardDir, "board.sqlite") }],
     });
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toEqual({ path });

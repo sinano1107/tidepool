@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readBoardHomeIdentifier, resolveBoardPlaces } from "../src/board-home.js";
 import { DEFAULT_AGENT_NAME, DEFAULT_WORKSPACE_NAME } from "../src/defaults.js";
 import {
   assertValidAgentName,
@@ -15,7 +16,6 @@ import {
   isBuiltInAgentName,
   type Registry,
 } from "../src/registry.js";
-import { resolveWorkspacesBaseDir } from "../src/workspace.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATE_ROOT = join(ROOT, "templates", "registry");
@@ -32,8 +32,10 @@ function copyTemplate(source: string, destination: string): void {
 }
 
 function main(): void {
-  const registryDir = process.env.TIDEPOOL_REGISTRY;
-  if (!registryDir) throw new Error("TIDEPOOL_REGISTRY is required");
+  // ADR 0436 決定1: 盤面と同じ家を解決し、registry clone は家の中の固定のパスにある
+  const { home, registryDir, workspacesDir } = resolveBoardPlaces(process.env);
+  readBoardHomeIdentifier(home);
+  if (!existsSync(registryDir)) throw new Error(`no registry clone at ${registryDir} — clone the registry repository there first`);
 
   // TIDEPOOL_AUDITOR は読まない —— Auditor の既定は組み込みで種に無い(ADR 0117 決定1)
   const agentName = process.env.TIDEPOOL_AGENT ?? DEFAULT_AGENT_NAME;
@@ -46,7 +48,6 @@ function main(): void {
     throw new Error(`TIDEPOOL_AGENT must not name the built-in agent "${agentName}"`);
   }
   assertValidWorkspaceName(emptyRegistry, workspaceName);
-  const workspacesDir = resolveWorkspacesBaseDir(process.env.TIDEPOOL_WORKSPACES_DIR);
   const workspaceDir = join(workspacesDir, workspaceName);
 
   if (existsSync(workspaceDir)) {

@@ -16,17 +16,17 @@ describe("boardStateOverlap: パス包含(ADR 0040)", () => {
   it("保護対象が workspace 配下にあれば重なりとして報告する", async () => {
     const ws = await tempDir("ws");
     const hit = boardStateOverlap(ws, [
-      { label: "board database (TIDEPOOL_DB)", path: join(ws, "board.sqlite") },
+      { label: "board home (TIDEPOOL_HOME)", path: join(ws, "board.sqlite") },
     ]);
-    expect(hit?.reason).toContain("overlaps the board's board database (TIDEPOOL_DB)");
+    expect(hit?.reason).toContain("overlaps the board's board home (TIDEPOOL_HOME)");
   });
 
   it("workspace が保護対象の配下にあっても重なり(双方向 — worker-logs の中に workspace を掘る逆包含)", async () => {
     const logs = await tempDir("worker-logs");
     const hit = boardStateOverlap(join(logs, "nested-workspace"), [
-      { label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logs },
+      { label: "board home (TIDEPOOL_HOME)", path: logs },
     ]);
-    expect(hit?.reason).toContain("overlaps the board's worker logs (TIDEPOOL_WORKER_LOGS)");
+    expect(hit?.reason).toContain("overlaps the board's board home (TIDEPOOL_HOME)");
   });
 
   it("workspace と保護対象が同一パスなら重なり", async () => {
@@ -57,7 +57,7 @@ describe("boardStateOverlap: パス包含(ADR 0040)", () => {
     await mkdir(real);
     await symlink(real, link);
     const hit = boardStateOverlap(link, [
-      { label: "board database (TIDEPOOL_DB)", path: join(real, "board.sqlite") },
+      { label: "board home (TIDEPOOL_HOME)", path: join(real, "board.sqlite") },
     ]);
     expect(hit?.reason).toContain("overlaps");
   });
@@ -116,39 +116,39 @@ describe("boardStateOverlap: 大文字小文字の扱いはプラットフォー
   });
 });
 
-describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 の5点)", () => {
+// ADR 0436 決定1 / ADR 0040: 保護対象は盤面の家1つ、読むだけの credential、走っている checkout(と家の中の registry clone)
+describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 / ADR 0436)", () => {
   const INPUT = {
-    dbPath: "/srv/tidepool/board.sqlite",
-    workerLogDir: "/srv/tidepool/worker-logs",
-    apiTokenFile: "/home/pi/.tidepool/api-token",
+    home: "/home/pi/.tidepool/board",
     githubTokenFile: "/home/pi/.tidepool/github-token",
     moonshotApiKeyFile: "/home/pi/.tidepool/moonshot-api-key",
-    codexHome: "/home/pi/.tidepool/codex",
     cwd: "/srv/tidepool",
     servedRoot: "/srv/tidepool",
   };
 
-  it("DB・worker-logs・API token・GitHub token・Moonshot キー・盤面の実行 checkout をこの順に並べる", () => {
+  it("盤面の家・GitHub token・Moonshot キー・盤面の実行 checkout をこの順に並べる", () => {
     expect(boardStatePaths(INPUT).map((p) => p.path)).toEqual([
-      "/srv/tidepool/board.sqlite",
-      "/srv/tidepool/worker-logs",
-      "/home/pi/.tidepool/api-token",
+      "/home/pi/.tidepool/board",
       "/home/pi/.tidepool/github-token",
       "/home/pi/.tidepool/moonshot-api-key",
-      "/home/pi/.tidepool/codex",
       "/srv/tidepool",
     ]);
   });
 
   it("ラベルは人間が「どれを動かせばよいか」を読める綴りで、env 変数名を含む", () => {
     const labels = boardStatePaths(INPUT).map((p) => p.label);
-    expect(labels).toContain("board database (TIDEPOOL_DB)");
-    expect(labels).toContain("worker logs (TIDEPOOL_WORKER_LOGS)");
-    expect(labels).toContain("human-surface token file (TIDEPOOL_API_TOKEN_FILE)");
-    expect(labels).toContain("GitHub token file (TIDEPOOL_GITHUB_TOKEN_FILE)");
-    expect(labels).toContain("Moonshot API key file (TIDEPOOL_MOONSHOT_API_KEY_FILE)");
-    expect(labels).toContain("Codex worker home (TIDEPOOL_CODEX_HOME)");
-    expect(labels).toContain("the board's own working directory (process cwd)");
+    expect(labels).toEqual([
+      "board home (TIDEPOOL_HOME)",
+      "GitHub token file (TIDEPOOL_GITHUB_TOKEN_FILE)",
+      "Moonshot API key file (TIDEPOOL_MOONSHOT_API_KEY_FILE)",
+      "the board's own working directory (process cwd)",
+    ]);
+  });
+
+  it("家の中の置き場(db・worker logs・token file・Codex home)に重なる workspace は、盤面の家との重なりとして止まる", async () => {
+    const home = await tempDir("home");
+    const hit = boardStateOverlap(join(home, "inside"), boardStatePaths({ ...INPUT, home }));
+    expect(hit?.reason).toContain("overlaps the board's board home (TIDEPOOL_HOME)");
   });
 
   it("配信元の checkout が cwd と違うなら(リポジトリ外から起動した盤面)両方を守る", () => {
@@ -166,7 +166,7 @@ describe("boardStatePaths: 保護対象は盤面プロセスに固定(ADR 0040 �
 
   it("GitHub token ファイルは env 未設定なら守る対象そのものが無いので落ちる(ADR 0024 の fail-closed な不在)", () => {
     const paths = boardStatePaths({ ...INPUT, githubTokenFile: undefined });
-    expect(paths).toHaveLength(6);
+    expect(paths).toHaveLength(3);
     expect(paths.some((p) => p.label.includes("GITHUB"))).toBe(false);
   });
 });
@@ -180,6 +180,13 @@ describe("boardStatePaths: registry clone は固定点(ADR 0377 決定3)", () =>
   ])("a path %s the registry clone overlaps it with spec #3273 text E1", async (_, at) => {
     const registryDir = await tempDir("registry");
     expect(boardStateOverlap(at(registryDir), registryFixedPoints(registryDir))?.reason).toBe(registryCloneOverlap(at(registryDir), registryDir));
+  });
+
+  it("the registry clone inside the board home still overlaps with text E1, not as the home", async () => {
+    const home = await tempDir("home");
+    const registryDir = join(home, "registry");
+    const paths = boardStatePaths({ home, moonshotApiKeyFile: "/nonexistent/key", cwd: "/nonexistent/tidepool", servedRoot: "/nonexistent/tidepool", registryDir });
+    expect(boardStateOverlap(registryDir, paths)?.reason).toBe(registryCloneOverlap(registryDir, registryDir));
   });
 
   it("a board without a registry has no registry clone to protect", () => {

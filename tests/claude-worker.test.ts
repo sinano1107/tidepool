@@ -2090,14 +2090,14 @@ describe("ClaudeCodeWorker", () => {
     const wsDir = await tempDir("tidepool-ws-");
     const { start, calls, db, stops } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
-      { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(wsDir, "board.sqlite") }] },
+      { boardState: [{ label: "board home (TIDEPOOL_HOME)", path: join(wsDir, "board.sqlite") }] },
     );
     const task = start("task-overlap");
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
     const question = quarantineQuestion(db, "workspace", "tidepool");
-    expect(question?.purpose).toContain("board database (TIDEPOOL_DB)");
-    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("board database (TIDEPOOL_DB)") }]]);
+    expect(question?.purpose).toContain("board home (TIDEPOOL_HOME)");
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("board home (TIDEPOOL_HOME)") }]]);
   });
 
   it("盤面の状態パスと交差しない workspace は spawn を止めない", async () => {
@@ -2105,7 +2105,7 @@ describe("ClaudeCodeWorker", () => {
     const boardDir = await tempDir("tidepool-board-");
     const { start, calls, db } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
-      { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }] },
+      { boardState: [{ label: "board home (TIDEPOOL_HOME)", path: join(boardDir, "board.sqlite") }] },
     );
     start("task-no-overlap");
     await vi.waitFor(() => expect(calls).toHaveLength(1));

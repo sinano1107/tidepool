@@ -96,7 +96,7 @@ it("盤面の状態パスと重なる登録(BoardStateOverlapError)は 400 で�
     workspaceAdmin: {
       create: async () => {
         throw new BoardStateOverlapError(
-          "workspace path /srv/tidepool overlaps the board's board database (TIDEPOOL_DB)",
+          "workspace path /srv/tidepool overlaps the board's board home (TIDEPOOL_HOME)",
         );
       },
     },
@@ -111,7 +111,7 @@ it("盤面の状態パスと重なる登録(BoardStateOverlapError)は 400 で�
   // 400: 出し直せば通り得る呼び出し側の入力の問題(パスを変える)であって、
   // 盤面が壊れている(502)のでも未設定(503)のでもない
   expect(res.status).toBe(400);
-  expect(res.json.error).toContain("board database (TIDEPOOL_DB)");
+  expect(res.json.error).toContain("board home (TIDEPOOL_HOME)");
 });
 
 it("削除の途中で残った行の上の登録(LeftoverWorkspaceStateError)は 400 で出口の文を返す(ADR 0401 決定5)", async () => {

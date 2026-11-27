@@ -24,7 +24,7 @@ it("boot 時に登録済み全 workspace を検査し、盤面の状態パスと
     workspace: clean,
     boardState: {
       // 盤面 DB が overlapping の checkout の中にある形
-      paths: [{ label: "board database (TIDEPOOL_DB)", path: join(overlapping.path, "board.sqlite") }],
+      paths: [{ label: "board home (TIDEPOOL_HOME)", path: join(overlapping.path, "board.sqlite") }],
       listWorkspaces: () => [clean, overlapping],
     },
   });
@@ -32,7 +32,7 @@ it("boot 時に登録済み全 workspace を検査し、盤面の状態パスと
   const list = await questions(t);
   expect(list).toHaveLength(1);
   expect(list[0].title).toContain("tidepool-self");
-  expect(list[0].purpose).toContain("board database (TIDEPOOL_DB)");
+  expect(list[0].purpose).toContain("board home (TIDEPOOL_HOME)");
 });
 
 it("起動そのものは拒まない — 早く騒ぐだけで、床は pickup 側(ADR 0036 の fail-open)", async () => {
@@ -52,7 +52,7 @@ it("起動そのものは拒まない — 早く騒ぐだけで、床は pickup 
 it("重なったまま再起動しても question は増えない(1資源につき確認は最大1枚 — GLOSSARY.md)", async () => {
   const overlapping = await makeWorkspace("self");
   const boardState = {
-    paths: [{ label: "board database (TIDEPOOL_DB)", path: join(overlapping.path, "board.sqlite") }],
+    paths: [{ label: "board home (TIDEPOOL_HOME)", path: join(overlapping.path, "board.sqlite") }],
     listWorkspaces: () => [overlapping],
   };
   t = await bootTidepool({ workspace: overlapping, boardState });
@@ -72,7 +72,7 @@ it("workspace の列挙自体が失敗しても起動は続く(registry が壊�
   };
   t = await bootTidepool({
     workspace: clean,
-    boardState: { paths: [{ label: "board database (TIDEPOOL_DB)", path: "/nowhere/board.sqlite" }], listWorkspaces },
+    boardState: { paths: [{ label: "board home (TIDEPOOL_HOME)", path: "/nowhere/board.sqlite" }], listWorkspaces },
   });
 
   expect((await api(t.baseUrl, "GET", "/api/tasks")).status).toBe(200);

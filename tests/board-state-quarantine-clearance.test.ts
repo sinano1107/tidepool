@@ -30,7 +30,7 @@ async function bootWithOverlap(): Promise<{ live: { path: string }; questionId: 
   t = await bootTidepool({
     resolveWorkspace: resolve,
     boardState: {
-      paths: [{ label: "board database (TIDEPOOL_DB)", path: join(overlapping.path, "board.sqlite") }],
+      paths: [{ label: "board home (TIDEPOOL_HOME)", path: join(overlapping.path, "board.sqlite") }],
       listWorkspaces: () => [{ name: "self", path: live.path }],
     },
   });
@@ -49,7 +49,7 @@ it("重なりが残ったままの「直した」回答は拒否され、questio
   });
 
   expect(res.status).toBe(409);
-  expect(res.json.error).toContain("board database (TIDEPOOL_DB)");
+  expect(res.json.error).toContain("board home (TIDEPOOL_HOME)");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json.status).toBe("todo");
 });
 

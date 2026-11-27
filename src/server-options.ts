@@ -424,8 +424,8 @@ function loadBoardRegistry(board: BoardComposition, db: Db) {
   return loadRegistryOrStop(db, { dir: board.registryDir, mode: board.registryMode }, board.clock);
 }
 
-/** ADR 0052 決定3 の宣言そのもの: `TIDEPOOL_REGISTRY` を設定した盤面は remote
- *  正本を持つ。**clone を覗かない** — remote の有無を見て切り替えると、remote が
+/** ADR 0052 決定3 の宣言そのもの: 盤面の家に registry clone を置いた盤面は remote
+ *  正本を持つ(ADR 0436 決定1)。**clone の中を覗かない** — remote の有無を見て切り替えると、remote が
  *  失われた瞬間に「merge が spawn に効かない」旧挙動へ静かに戻り、どこも赤く
  *  ならない(ADR 0052 が名指しで却下した道)。
  *
