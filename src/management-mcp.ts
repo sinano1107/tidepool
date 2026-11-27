@@ -37,6 +37,7 @@ import {
   gatedHumanEntryInput,
   humanCompletionInputSchema,
   listMemoryEntriesForHuman,
+  placeThroughHumanDoor,
   registerThroughHumanDoor,
   retryInterviewThroughHumanDoor,
   startWorkThroughHumanDoor,
@@ -1154,7 +1155,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Split a human task into child tasks in one recorded decision. Children run in the parent's workspace; " +
-        "to place work in another workspace, register_task a root (no parent_id). Children fork from the parent's task branch; " +
+        "to place work in another workspace, use place_task. Children fork from the parent's task branch; " +
         "`warning` says when the parent's workbench holds commits not taken in yet (take_in_work).",
       inputSchema: {
         task_id: z.string(),
@@ -1187,6 +1188,33 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       return result.ok
         ? toolResult({ child_ids: result.value.children.map((child) => child.id), parent_status: "blocked", ...(result.value.warning !== undefined && { warning: result.value.warning }) })
         : toolError(result.failure.error);
+    },
+  );
+  server.registerTool(
+    "place_task",
+    {
+      description:
+        "Place work in another workspace from a human task: registers a root in the named workspace that keeps task_id as its " +
+        "origin, with the reason recorded as a decision on task_id. The root forks from its own workspace's protected branch " +
+        "and lands there; its worker reads task_id's text, handoff and history.",
+      inputSchema: {
+        task_id: z.string(),
+        reason: z.string(),
+        title: z.string(),
+        purpose: z.string(),
+        completion_criteria: z.string(),
+        workspace: z.string(),
+        risk_flag: z.boolean().optional(),
+        assignee: z.string().optional(),
+        tier: z.string().optional().describe(tierDescriptions.tier),
+        review_by: z.array(requiredTextSchema).optional(),
+        review_tier: z.string().optional().describe(tierDescriptions.review_tier),
+        priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
+      },
+    },
+    async ({ task_id, reason, ...root }) => {
+      const result = placeThroughHumanDoor(deps, task_id, { reason, root }, () => deps.clock.now(), "mcp");
+      return result.ok ? toolResult({ id: result.value.id }) : toolError(result.failure.error);
     },
   );
   server.registerTool(

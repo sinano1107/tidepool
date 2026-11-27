@@ -91,6 +91,7 @@ import {
   listExaminees,
   logDecision,
   metaReviewSubjectOf,
+  parentOrOrigin,
   posedProbe,
   poseProbe,
   REPAIR_NOTICES,
@@ -695,7 +696,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       runVerb(deps, attributedTaskId, async (task) => {
         const read = readPosition("get_current_task", input);
         // ADR 0384 決定4・5: 分解元つきの根は分解元の handoff_doc と history を親の欄で受ける
-        const parentId = task.parent_id ?? task.origin_task_id;
+        const parentId = parentOrOrigin(task).taskId;
         const parent = parentId ? (getTask(deps.db, parentId) ?? null) : null;
         // 親の history の後に task の history を、decision の子ごとの行で1列に詰める(ADR 0195)。境目の鍵は行の event id
         const rows = [

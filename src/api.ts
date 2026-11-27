@@ -301,21 +301,13 @@ const editTaskSchema = z.strictObject({
   review_by: z.array(requiredTextSchema).optional(),
 });
 
-// 人間の「別の workspace に置く」の payload(ADR 0384 決定3): 子の欄に理由と必須の workspace を足した根。strict なので parent_id や
-// issue の参照は 400 —— 子でも issue つきでもない
-const placeTaskSchema = z.strictObject({
-  reason: requiredTextSchema,
-  title: requiredTextSchema,
-  purpose: requiredTextSchema,
-  completion_criteria: requiredTextSchema,
-  workspace: requiredTextSchema,
-  assignee: z.string().optional(),
-  risk_flag: z.boolean().optional(),
-  review_by: z.array(requiredTextSchema).optional(),
-  review_tier: z.string().optional(),
-  tier: z.string().optional(),
-  priority: z.string().optional(),
-});
+// 人間の「別の workspace に置く」の payload(ADR 0384 決定3): 登録の欄のうち work の根が持つものに、理由と必須の内容・workspace。
+// strict なので parent_id や issue の参照は 400 —— 子でも issue つきでもない
+const placeTaskSchema = registerTaskSchema
+  .pick({ title: true, purpose: true, completion_criteria: true, workspace: true, assignee: true, risk_flag: true, review_by: true, review_tier: true, tier: true, priority: true })
+  .required({ title: true, purpose: true, completion_criteria: true, workspace: true })
+  .extend({ reason: requiredTextSchema })
+  .strict();
 
 // the direct-cancel payload (issue #130): reason is optional (理由の記入は任意)
 const cancelTaskSchema = z.object({

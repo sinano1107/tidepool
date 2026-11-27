@@ -13,7 +13,9 @@
 // ChildSpec has no such fields either) and one field added: a required
 // free-text reason for the split, which lands as a decision-log entry
 // (GLOSSARY.md's Decompose point 5) and steers the child's own AI
-// draft as context (point 4).
+// draft as context (point 4). With mode 'place' (ADR 0384 決定3) the same
+// form instead places a root in a workspace the human picks, with parentTask
+// as its origin.
 // この画面がサーバとやりとりする形 —— 画面内で閉じた型で、集合ごとの移送は
 // issue #352 が持つ。POST /api/tasks の本文(登録の門が読む)。
 /** 2経路は必須欄が違う —— 全欄 optional の1つに潰すと `{ type: 'work' }` だけの
@@ -118,21 +120,27 @@ function InterviewTargetsField({ value, onChange, providers }: {
 
 /** 登録の門の 422 本文(src/human-verbs.ts の issue_rejected)+ 検査した要求そのもの。 */
 type RegisterScreenGate = WireContract['POST /api/tasks 422'] & { fields: RegisterScreenIssueFields };
+/** 'root' は根の登録、'child' は parentTask の子の追加、'place' は parentTask を分解元に別の workspace へ根を置く(ADR 0384 決定3)。 */
+type RegisterScreenMode = 'root' | 'child' | 'place';
+const REGISTER_SCREEN_COPY: Record<RegisterScreenMode, { heading: string; submit: string }> = {
+  root: { heading: 'Register', submit: 'Register — appends to queue tail' },
+  child: { heading: 'Add child', submit: 'Add child — appends to queue tail' },
+  place: { heading: 'Place in another workspace', submit: 'Place — appends to queue tail' },
+};
 interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
-  /** 子追加モード —— 未設定ならルート登録。 */
+  /** 子の追加か別の workspace に置く操作の元の task —— 未設定ならルート登録。 */
   parentTask?: { id: string; title: string } | null;
-  /** parentTask を分解元に、子でなく別の workspace の根を置く(ADR 0384 決定3)—— workspace を必須で選ぶ。 */
-  place?: boolean;
-  /** 子追加のときだけ呼ばれる —— ルート登録は画面に留まるので渡されない。 */
+  /** parentTask があるときの操作(既定は子の追加)。 */
+  mode?: Exclude<RegisterScreenMode, 'root'>;
+  /** parentTask があるときだけ呼ばれる —— ルート登録は画面に留まるので渡されない。 */
   onClose?: () => void;
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
-function RegisterScreen({ onRegister, parentTask, place = false, onClose }: RegisterScreenProps) {
+function RegisterScreen({ onRegister, parentTask, mode: modeUnderTask = 'child', onClose }: RegisterScreenProps) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
-  const childMode = !!parentTask;
-  const placeMode = childMode && place;
+  const mode: RegisterScreenMode = parentTask ? modeUnderTask : 'root';
   const [source, setSource] = React.useState<'manual' | 'github issue'>('manual');
   const [type, setType] = React.useState<'work' | 'review' | 'interview'>('work');
   const [title, setTitle] = React.useState('');
@@ -172,8 +180,8 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
   React.useEffect(() => {
     api('GET /api/settings/execution').then((d) => { setTiers(d.tiers); setProviders(d.providers.map((p) => p.value)); }).catch(() => {});
   }, []);
-  const issueMode = !childMode && source === 'github issue';
-  // the parent_id/decompose_reason pair every childMode request (draft and
+  const issueMode = mode === 'root' && source === 'github issue';
+  // the parent_id/decompose_reason pair every request under a parent task (draft and
   // submit alike) carries — one shared shape so the two call sites can't
   // drift apart
   const childExtras = () =>
@@ -231,14 +239,14 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
     : issues;
   const issueNumberReason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(issueNumber));
   // Interview は root だけ(ADR 0273 決定2)—— 子追加は常に work なので出ない
-  const interview = !childMode && type === 'interview';
+  const interview = mode === 'root' && type === 'interview';
   const ok = issueMode
     ? !TidepoolRules.whyBlank(workspace) && !issueNumberReason
     : interview
       ? ![title, hypothesis, tier].some((value) => TidepoolRules.whyBlank(value)) && targets.length > 0
-      : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason)) && (!placeMode || !TidepoolRules.whyBlank(workspace));
+      : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (mode === 'root' || !TidepoolRules.whyBlank(reason)) && (mode !== 'place' || !TidepoolRules.whyBlank(workspace));
   // 欄はサーバーと同じ規則で出す(ADR 0209)。issue 経路は常に work(type state は手入力側で review に切り替えたまま残りうる)
-  const ruleSubject = { type: issueMode ? 'work' : type, parent_id: placeMode ? undefined : parentTask?.id, assignee, review_flag: review, risk_flag: risk };
+  const ruleSubject = { type: issueMode ? 'work' : type, parent_id: mode === 'child' ? parentTask?.id : undefined, assignee, review_flag: review, risk_flag: risk };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.reviewDesignationCarriesMeaning(ruleSubject);
   // 隠れた欄の値は送らない、誰も選んでいなければキーごと送らない
@@ -257,8 +265,8 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
         }
       : {
           // a decompose child is always type work (decomposeTask's own
-          // ChildSpec has no type field) — the type picker is dropped in
-          // childMode below, so `type` state never leaves its 'work' default
+          // ChildSpec has no type field) — the type picker is dropped under a
+          // parent task below, so `type` state never leaves its 'work' default
           type, title: TidepoolRules.normalizeText(title),
           // an Interview's purpose and criteria are the board's to compose (ADR 0273 決定9)
           ...(interview
@@ -275,16 +283,16 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
           // execution time (GLOSSARY.md) — omit rather than send '' so an
           // unknown-workspace 400 never fires on a field the human left blank
           ...(assignee ? { assignee } : {}),
-          // a child takes no workspace (ADR 0384 決定1) — never send it, even when a draft filled the state
-          ...((!childMode || placeMode) && workspace.trim() ? { workspace: workspace.trim() } : {}),
+          // a child takes no workspace (ADR 0384 決定1) — never send one for it, even when a draft filled the state; a placed root names its own (決定3)
+          ...(mode !== 'child' && workspace.trim() ? { workspace: workspace.trim() } : {}),
           ...(tier ? (type === 'review' ? { review_tier: tier } : { tier }) : {}),
           ...reviewTierField,
           ...reviewByField,
           ...childExtras(),
         };
   // the decompose reason is left alone: it sits outside the dump / plain form
-  // pair and is required in childMode, so a toggle must not wipe it (#1515).
-  // A child add unmounts the whole screen on close, which clears it there
+  // pair and is required under a parent task, so a toggle must not wipe it (#1515).
+  // A child add or a placement unmounts the whole screen on close, which clears it there
   const resetContent = () => {
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
@@ -310,7 +318,7 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
       resetContent();
       // a root registration stays on the screen for the next dump; a child
       // add is a one-shot dialog action — close it once it lands
-      if (childMode) onClose?.();
+      if (mode !== 'root') onClose?.();
     } catch (rawErr) {
       // a gate rejection carries the fix; anything else the toast reported.
       // The inspected request itself is burned into the gate state so a
@@ -379,23 +387,24 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
   const riskCheckbox = <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />;
   // manual content's workspace is optional (unset → the board's default at
   // execution time); an issue reference's workspace is required — it fixes
-  // *which* issue the reference means (GLOSSARY.md), so its placeholder reads
+  // *which* issue the reference means (GLOSSARY.md) — and so is a placed
+  // root's (the place is the point of the action), so their placeholder reads
   // as a prompt to choose, never as an implicit default
   const workspaceOptions = withPlaceholder('', '(default workspace)', candidates.workspaces);
-  const issueWorkspaceOptions = withPlaceholder('', 'select workspace…', candidates.workspaces);
+  const requiredWorkspaceOptions = withPlaceholder('', 'select workspace…', candidates.workspaces);
   const primaryAction = issueMode || plainFormActive || drafted
     ? {
-        label: placeMode ? 'Place — appends to queue tail' : childMode ? 'Add child — appends to queue tail' : 'Register — appends to queue tail',
+        label: REGISTER_SCREEN_COPY[mode].submit,
         disabled: !ok || busy,
         onClick: submit,
       }
     : { label: draftBusy ? 'Drafting…' : 'Draft fields', disabled: !!TidepoolRules.whyBlank(dump) || draftBusy, onClick: draftFields };
   return (
     <div style={{ padding: '20px 16px' }}>
-      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>{placeMode ? 'Place in another workspace' : childMode ? 'Add child' : 'Register'}</h1>
+      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>{REGISTER_SCREEN_COPY[mode].heading}</h1>
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
-        {placeMode
-          ? `splitting "${parentTask!.title}" — appears as its own root in the workspace you pick, and lands there`
+        {parentTask && mode === 'place'
+          ? `splitting "${parentTask.title}" — appears as its own root in the workspace you pick, and lands there`
           : parentTask
           ? `splitting "${parentTask.title}" — appears as a child, same dump → draft → edit flow`
           : issueMode
@@ -404,7 +413,7 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
               ? 'the LLM is unreachable — fill the fields yourself'
               : 'dump it — the LLM drafts the fields, you confirm'}
       </p>
-      {childMode && (
+      {mode !== 'root' && (
         <Card style={{ marginBottom: 14 }}>
           <Input
             label="Reason for splitting this"
@@ -414,7 +423,7 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
           />
         </Card>
       )}
-      {!issueMode && !childMode && pendingDumps.length > 0 && (
+      {!issueMode && mode === 'root' && pendingDumps.length > 0 && (
         <Card style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--tide-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
             pending dump{pendingDumps.length > 1 ? 's' : ''} — sent here from scratchpad triage, awaiting writeup
@@ -432,7 +441,7 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
         </Card>
       )}
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {!childMode && (
+        {mode === 'root' && (
           <Select label="Source" options={['manual', 'github issue']} value={source} onChange={(e) => {
             const nextSource = e.target.value === 'github issue' ? 'github issue' : 'manual';
             setSource(nextSource); setGate(null);
@@ -450,7 +459,7 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
         )}
         {issueMode && (
           <React.Fragment>
-            <Select label="Workspace" options={issueWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+            <Select label="Workspace" options={requiredWorkspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
             {assigneeSelect}
             <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
             {riskCheckbox}
@@ -503,7 +512,7 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
               </React.Fragment>
             )}
             {/* a decompose child is always type work (decomposeTask's own ChildSpec has no type field) */}
-            {!childMode && (
+            {mode === 'root' && (
               <Select label="Type" options={['work', 'review', 'interview']} value={type} onChange={(e) => {
                 const next = e.target.value === 'review' || e.target.value === 'interview' ? e.target.value : 'work';
                 setType(next);
@@ -512,10 +521,10 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
               }} />
             )}
             {/* a child runs in its parent's workspace and has no workspace field (ADR 0384 決定1); a placed root names one (決定3) */}
-            {childMode && !placeMode ? assigneeSelect : (
+            {mode === 'child' ? assigneeSelect : (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 {assigneeSelect}
-                <Select label={interview ? '実環境(root が読む workspace)' : 'Workspace'} options={placeMode ? issueWorkspaceOptions : workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+                <Select label={interview ? '実環境(root が読む workspace)' : 'Workspace'} options={mode === 'place' ? requiredWorkspaceOptions : workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
               </div>
             )}
             {interview && <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>受験者は面接室で解く</span>}
@@ -531,7 +540,7 @@ function RegisterScreen({ onRegister, parentTask, place = false, onClose }: Regi
           </React.Fragment>
         )}
         <Button variant="primary" size="lg" full disabled={primaryAction.disabled} onClick={primaryAction.onClick}>{primaryAction.label}</Button>
-        {childMode && (
+        {mode !== 'root' && (
           <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Cancel</Button>
         )}
       </Card>

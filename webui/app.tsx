@@ -1096,8 +1096,8 @@ function App() {
   // human decompose (issue #129): the board task an "Add child" dialog is
   // open for, or null when closed — set from a board task-card tap
   const [addChildParent, setAddChildParent] = React.useState<BoardScreenTask | null>(null);
-  // ADR 0384 決定3: 「別の workspace に置く」を開いている分解元
-  const [placeOrigin, setPlaceOrigin] = React.useState<BoardScreenTask | null>(null);
+  // ADR 0384 決定3: 「別の workspace に置く」を開いている分解元の task
+  const [placeFrom, setPlaceFrom] = React.useState<BoardScreenTask | null>(null);
   // issue #130: a board task-card tap opens an action chooser (add child /
   // edit / cancel) for a plausibly-eligible task; the edit and cancel dialogs
   // each track their own open task
@@ -1523,7 +1523,14 @@ function App() {
     const settled = TidepoolRules.isSettled(t.status);
     if (settled) {
       const review = completionReviewLine(t);
-      say('info', t.title, <>{t.id} · {t.type}{review && <><br />{review}</>}</>);
+      const show = (placement?: React.ReactNode) => say('info', t.title, <>{t.id} · {t.type}{review && <><br />{review}</>}{placement}</>);
+      // ADR 0384 決定3: 決着した task にも分解元と置いた根の行を —— 詳細だけが運ぶので、読めなければ行なしで出す
+      api('GET /api/tasks/:id', { params: { id: t.id } })
+        .then((full) => show(<>
+          {full.origin_task_id && <><br />placed from {full.origin_task_id}</>}
+          {full.placed_roots.map((root) => <React.Fragment key={root.id}><br />placed in another workspace · {root.id} {root.title} · {root.status}</React.Fragment>)}
+        </>))
+        .catch(() => show());
       return;
     }
     setActionsTask(t);
@@ -1551,10 +1558,10 @@ function App() {
 
   // ADR 0384 決定3: 子の form の欄を、分解元の id の下の根の登録へ —— 理由は分解の理由と同じ欄
   const placeRoot = async (fields: RegisterScreenFields) => {
-    if (!placeOrigin || !('title' in fields)) return;
+    if (!placeFrom || !('title' in fields)) return;
     const { type: _type, parent_id: _parent, decompose_reason, review_flag: _review, ...root } = fields;
     try {
-      const t = await api('POST /api/tasks/:id/place', { params: { id: placeOrigin.id }, body: { ...root, reason: decompose_reason } });
+      const t = await api('POST /api/tasks/:id/place', { params: { id: placeFrom.id }, body: { ...root, reason: decompose_reason } });
       say('info', 'placed in another workspace — appended to queue tail', t.id);
       await refreshFull();
     } catch (err) {
@@ -1660,9 +1667,9 @@ function App() {
           <RegisterScreen parentTask={addChildParent} onRegister={addChild} onClose={() => setAddChildParent(null)} />
         )}
       </PortalDialog>
-      <PortalDialog open={!!placeOrigin} onClose={() => setPlaceOrigin(null)}>
-        {placeOrigin && (
-          <RegisterScreen parentTask={placeOrigin} place onRegister={placeRoot} onClose={() => setPlaceOrigin(null)} />
+      <PortalDialog open={!!placeFrom} onClose={() => setPlaceFrom(null)}>
+        {placeFrom && (
+          <RegisterScreen parentTask={placeFrom} mode="place" onRegister={placeRoot} onClose={() => setPlaceFrom(null)} />
         )}
       </PortalDialog>
 
@@ -1675,7 +1682,7 @@ function App() {
           <TaskActionsDialog
             task={actionsTask}
             onAddChild={() => { setAddChildParent(actionsTask); setActionsTask(null); }}
-            onPlace={() => { setPlaceOrigin(actionsTask); setActionsTask(null); }}
+            onPlace={() => { setPlaceFrom(actionsTask); setActionsTask(null); }}
             onEdit={() => { setEditTaskCard(actionsTask); setActionsTask(null); }}
             onCancel={() => { setCancelTaskCard(actionsTask); setActionsTask(null); }}
             onStop={() => { setStopTaskCard(actionsTask); setActionsTask(null); }}

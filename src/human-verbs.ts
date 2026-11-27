@@ -297,13 +297,13 @@ export function placeThroughHumanDoor(
   origin: EventOrigin,
 ): HumanVerbResult<BoardTask> {
   try {
-    const parent = getTask(deps.db, taskId);
-    if (!parent) return { ok: false, failure: { kind: "not_found", error: "origin task not found" } };
+    const originTask = getTask(deps.db, taskId);
+    if (!originTask) return { ok: false, failure: { kind: "not_found", error: "origin task not found" } };
     if (whyBlank(input.reason)) throw new DomainError("placing work in another workspace requires a reason");
     assertWorkspaceKnown(input.root.workspace, deps.resolveWorkspace, deps.workspace);
     assertAssigneeCanTake(deps, input.root.assignee, "work");
     assertReviewersKnown(deps.agentRegistered, input.root.review_by);
-    const root = placeInAnotherWorkspace(deps.db, parent, input, now(), origin);
+    const root = placeInAnotherWorkspace(deps.db, originTask, input, now(), origin);
     deps.pollNow();
     return { ok: true, value: presentTask(deps.db, root, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {

@@ -268,8 +268,8 @@ export interface WireContract {
   "GET /api/tasks/:id": BoardTask & {
     /** Human stop entries, resolved by the shared task history read. cause / evidence only when the stop is attributed (ADR 0310). */
     human_stops: Array<{ id: number; reason: string; cause?: Cause; evidence?: string }>;
-    /** この task を分解元に持つ根(ADR 0384 決定3)。根の側の分解元は `origin_task_id`。 */
-    placed_roots: Array<{ id: string; title: string; status: "todo" | "in_progress" | "done" | "cancelled" }>;
+    /** この task を分解元に持つ根(ADR 0384 決定3)、status は盤面に見えるもの。根の側の分解元は `origin_task_id`。 */
+    placed_roots: Array<Pick<QueueTask, "id" | "title" | "status">>;
     /** 保存された assignee(編集フォームが読む素の値)。`assignee` は一覧と同じ解決後の値(issue #1208)。 */
     raw_assignee: string | null;
     landing?: LandingAnnotation | null;

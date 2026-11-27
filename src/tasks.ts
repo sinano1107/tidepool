@@ -3722,10 +3722,11 @@ export function decomposeTask(
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
-  assertSplittable(db, parent);
+  assertDecomposable(db, parent);
   // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2 / ADR 0301 決定3)—— 別の workspace を明示した子はその系譜でも(ADR 0380 決定5)
   for (const child of input.children) assertReturnDestination(db, { type: "work", parent_id: parent.id, workspace: child.workspace });
-  const defaultToHuman = repairsGoToHuman(db, parent);
+  // ADR 0374 Status 追記(決定16): 人間担当の完了時レビューの修理子は、省略すると元の実行者へ戻す。
+  const defaultToHuman = parent.type === "review" && isIntegrationReview(db, parent.id) && reviewedTaskExecutor(db, parent) === HUMAN_ACTOR_ID;
   input = {
     ...input,
     children: input.children.map((child) => {
@@ -3835,13 +3836,8 @@ export function decomposeTask(
   return children;
 }
 
-/** ADR 0374 Status 追記(決定16): 人間担当の完了時レビューが分けた修理は、assignee を省略すると元の実行者(人間)へ戻す。 */
-function repairsGoToHuman(db: Db, parent: Task): boolean {
-  return parent.type === "review" && isIntegrationReview(db, parent.id) && reviewedTaskExecutor(db, parent) === HUMAN_ACTOR_ID;
-}
-
 /** 分解の判断を書ける task か —— agent・人間の分解と人間の「別の workspace に置く」が共有する(ADR 0384 決定3)。 */
-function assertSplittable(db: Db, parent: Task): void {
+function assertDecomposable(db: Db, parent: Task): void {
   // ADR 0245 決定1: 受験者は分けない(人間の扉も redecompose もここを通る)
   if (parent.interview_target_id !== null) {
     throw new DomainError("this task is not split: complete it as one task and state in its handoff what remains");
@@ -4008,19 +4004,27 @@ export function humanDecomposeTask(
  *  分解元が根を待つのは #3424 の委譲の読み手。 */
 export function placeInAnotherWorkspace(
   db: Db,
-  parent: Task,
+  originTask: Task,
   input: { reason: string; root: ChildSpec & { workspace: string } },
   now: Date,
   origin: EventOrigin,
 ): Task {
-  assertHumanDecomposable(db, parent);
-  assertSplittable(db, parent);
-  const root: RegisterTaskInput = { type: "work", ...input.root };
-  if (repairsGoToHuman(db, parent)) root.assignee ??= HUMAN_ACTOR_ID;
+  assertHumanDecomposable(db, originTask);
+  assertDecomposable(db, originTask);
+  // assignee は根の登録と同じく省略で既定へ —— ADR 0374 決定16 の人間への既定は修理子だけのもの
   return db.transaction(() => {
-    const decision = logDecision(db, parent, input.reason, HUMAN_ACTOR_ID, now, origin);
-    return registerTask(db, { ...root, origin_task_id: parent.id, origin_decision: decision }, now, HUMAN_ACTOR_ID, origin);
+    const decision = logDecision(db, originTask, input.reason, HUMAN_ACTOR_ID, now, origin);
+    return registerTask(db, { type: "work", ...input.root, origin_task_id: originTask.id, origin_decision: decision }, now, HUMAN_ACTOR_ID, origin);
   })();
+}
+
+/** 文脈の読み手(ADR 0321 の凍結する文面・`get_current_task` の parent・文面の書き手)が親として読む task と分解判断: 子なら親と
+ *  その分解判断、分解元つきの根なら分解元とその判断(ADR 0384 決定4・5 —— 分解元が計画の work でも付帯子でも同じ)。無い側は null。
+ *  分解元は親・分解判断と同居しない(registerTask)ので、両方の欄を順に読めば足りる。 */
+export function parentOrOrigin(
+  task: Pick<Task, "parent_id" | "based_on_decision" | "origin_task_id" | "origin_decision">,
+): { taskId: string | null; decision: number | null } {
+  return { taskId: task.parent_id ?? task.origin_task_id, decision: task.based_on_decision ?? task.origin_decision };
 }
 
 /** The fields a human may overwrite on a registered task (issue #130,
@@ -4689,8 +4693,7 @@ export function getRegistrant(db: Db, taskId: string): string {
 /** 文面の書き手(GLOSSARY.md の Registrant / ADR 0197): 分解判断に乗る task —— 子か分解元つきの根(ADR 0384 決定4・5)—— ならその
  *  分解判断の書き手、無ければ登録者。承認で実体化した子は登録者が human でも、書き手は分解した agent。 */
 export function getTextAuthor(db: Db, taskId: string): string {
-  const task = getTask(db, taskId)!;
-  const decision = task.based_on_decision ?? task.origin_decision;
+  const { decision } = parentOrOrigin(getTask(db, taskId)!);
   return decision === null ? getRegistrant(db, taskId) : getEvent(db, decision)!.actor_id;
 }
 
@@ -5246,12 +5249,10 @@ export function listChildren(db: Db, parentId: string): Task[] {
   return rows.map(rowToTask);
 }
 
-/** この task を分解元に持つ根(ADR 0384 決定3)の id・title・status を盤面の順に —— task 詳細が分解元の側から並べる。 */
-export function placedRoots(db: Db, originId: string): Array<Pick<Task, "id" | "title" | "status">> {
-  const rows = db
-    .prepare(`SELECT *, ${taskTierNamesSql("tasks")} FROM tasks WHERE origin_task_id = ? ORDER BY sort_key`)
-    .all(originId) as TaskRow[];
-  return rows.map(rowToTask).map(({ id, title, status }) => ({ id, title, status }));
+/** この task を分解元に持つ根(ADR 0384 決定3)の id・title・盤面に見える status を盤面の順に —— task 詳細が分解元の側から並べる。 */
+export function placedRoots(db: Db, originId: string): Array<Pick<BoardTask, "id" | "title" | "status">> {
+  const ids = db.prepare("SELECT id FROM tasks WHERE origin_task_id = ? ORDER BY sort_key").pluck().all(originId) as string[];
+  return ids.map((id) => presentTask(db, { id })).map(({ id, title, status }) => ({ id, title, status }));
 }
 
 /** Interview の root の答案の task(受験者)全部を、対象 → root の結びで盤面の順に(ADR 0267 決定1)。 */
