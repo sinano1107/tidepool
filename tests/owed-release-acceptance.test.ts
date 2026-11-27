@@ -27,10 +27,10 @@ async function sessionWithWork(name: string, { parent = false, wip = true, type 
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const ws = await makeWorkspace(name);
-  const spec = { purpose: "why", completion_criteria: "done", workspace: ws.name } as const;
-  const parentId = parent ? registerTask(db, { ...spec, type: "work", title: "parent" }, clock.now(), ...HUMAN_WEBUI).id : undefined;
+  const spec = { purpose: "why", completion_criteria: "done" };
+  const parentId = parent ? registerTask(db, { ...spec, type: "work", title: "parent", workspace: ws.name }, clock.now(), ...HUMAN_WEBUI).id : undefined;
   if (parentId) seedTaskBranch(db, ws, parentId, "main");
-  const registered = registerTask(db, { ...spec, type, title: "owed", parent_id: parentId }, clock.now(), ...HUMAN_WEBUI);
+  const registered = registerTask(db, { ...spec, type, title: "owed", parent_id: parentId, workspace: parentId ? undefined : ws.name }, clock.now(), ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   const place = await prepareAtPickup(db, ws, task, { now: clock.now() });
   appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: clock.now() });

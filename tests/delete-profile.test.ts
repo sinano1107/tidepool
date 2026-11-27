@@ -20,7 +20,7 @@ async function makeMainRegistry(): Promise<string> {
   // どの agent も authority で指していない profile を1つ足す —— fixture 既定の
   // `standard` は deckhand が参照しており、参照中の profile は消せない(ADR 0087 決定2)
   const dir = await makeRegistry({
-    "authority/unused.yaml": "guidance: nobody points here\nassignable_to: []\nallowed_workspaces: []\nmerge: escalate\n",
+    "authority/unused.yaml": "guidance: nobody points here\nassignable_to: []\nmerge: escalate\n",
   });
   git(dir, "branch", "-M", "main");
   return dir;

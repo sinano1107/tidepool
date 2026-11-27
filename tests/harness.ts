@@ -2099,11 +2099,12 @@ export function settleReview(db: Db, review: Task, actorId: string, now: Date): 
 export function completedWork(db: Db, now: Date, assignee: string, parentId?: string, workspace?: string): Task {
   const task = registerTask(
     db,
-    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee, parent_id: parentId, workspace },
+    { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee, parent_id: parentId, workspace: parentId === undefined ? workspace : undefined },
     now,
     ...HUMAN_WEBUI,
   );
-  return completeTask(db, task, FULL_HANDOFF, assignee, now, "worker");
+  if (parentId !== undefined && workspace !== undefined) fillEmptyWorkspace(db, task.id, workspace);
+  return completeTask(db, getTask(db, task.id)!, FULL_HANDOFF, assignee, now, "worker");
 }
 
 /** agent `assignee` の auto_if_ci_green で無人 merge キューに入った PR #7 を持つ完了タスク(着地待ち)。 */
@@ -2262,13 +2263,11 @@ export async function objectedForDraft(
   return { t, attributionClient, behaviorDraftClient, task, entry, objection };
 }
 
-/** `decomposer` の分解判断に乗る `parent` の子(workspace は parent のもの)。agent の分解は allowed_workspaces の外の子を
- *  承認 question に変え、人間が approve して実体化させる —— 子の登録者は human、文面の書き手は分解した agent(ADR 0197)。
- *  人間の分解は子を直接登録する。 */
+/** ADR 0197: agent の子は assignee の承認で実体化させる —— 登録者は human、文面の書き手は分解した agent。 */
 export function decomposedChild(db: Db, parent: Task, title: string, decomposer: string, now: Date, tier?: string): Task {
   const viaApproval = decomposer !== HUMAN_ACTOR_ID;
-  const child = { title, purpose: "p", completion_criteria: "c", workspace: parent.workspace ?? undefined, tier };
-  const authority = viaApproval ? { allowed_workspaces: [] } : undefined;
+  const child = { title, purpose: "p", completion_criteria: "c", tier, assignee: viaApproval ? "deckhand" : undefined };
+  const authority = viaApproval ? { assignable_to: [] } : undefined;
   decomposeTask(db, parent, { reason: "split it", children: [child] }, decomposer, now, authority, undefined, viaApproval ? "worker" : "webui");
   if (viaApproval) {
     const question = listChildren(db, parent.id).find((x) => x.type === "question")!;

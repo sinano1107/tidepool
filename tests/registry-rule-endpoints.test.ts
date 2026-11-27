@@ -16,7 +16,7 @@ const agent = { authority: "standard", provider: "anthropic", description: "Gene
 it.each([
   ["workspace", "POST", "/api/workspaces", { mode: "create", name: ".." }, whyInvalidRegistryName("..")],
   ["agent", "POST", "/api/agents", { ...agent, name: "." }, whyInvalidRegistryName(".")],
-  ["profile", "POST", "/api/profiles", { name: "a/b", guidance: "", assignable_to: [], allowed_workspaces: [], merge: "external" }, whyInvalidRegistryName("a/b")],
+  ["profile", "POST", "/api/profiles", { name: "a/b", guidance: "", assignable_to: [], merge: "external" }, whyInvalidRegistryName("a/b")],
   ["agent skills creation", "POST", "/api/agents", { ...agent, name: "new-agent", skills: ["foo*"] }, whyInvalidSkillAllowlist(["foo*"])],
   ["agent skills update", "PATCH", "/api/agents/deckhand", { ...agent, skills: ["foo*"] }, whyInvalidSkillAllowlist(["foo*"])],
 ] as const)("%s HTTP refusal includes the shared leaf reason", async (_name, method, path, body, reason) => {

@@ -88,17 +88,15 @@ Registration, a worker session's teardown freeing the slot, and boot completion 
 ZodError: [...] path: ["assignable_to"], message: "Invalid input: expected array, received undefined" ...
 ```
 
-`tidepool-registry`'s `authority/*.yaml` is out of date relative to `authorityProfileSchema` in this repo's `src/registry.ts`. `assignable_to`/`allowed_workspaces` became required fields (issue #41 — "unrestricted" must be spelled out with the literal string `"*"` in the array, never omitted), and `merge` joined them (issue #341 / ADR 0079 — the dial is a required three-valued declaration; the same ZodError appears with `path: ["merge"]`). Fix by editing the registry repo (separate git history from this one), not this repo:
+Match each `authority/*.yaml` in the separate registry repo to `authorityProfileSchema` in `src/registry.ts`. Supply the required `guidance`, `assignable_to`, and `merge` fields. If Zod reports `allowed_workspaces` as an unrecognized key, remove it. Agent proposals to place work in another workspace require approval (ADR 0384 decision 3).
 
 ```yaml
-assignable_to: ["<agent-name>"]      # or ["*"] only if genuinely unrestricted
-allowed_workspaces: ["<workspace-name>"]  # or ["*"]
-merge: escalate                      # or auto_if_ci_green / external
+guidance: ""
+assignable_to: ["<agent-name>"]
+merge: escalate
 ```
 
-Note the deploy order this implies (ADR 0079 決定6): the registry edit must land on the registry's **remote** main *before* the board that requires the field is deployed — otherwise every profile missing it fails to resolve and its agents fall to quarantine.
-
-Prefer scoping to the actual current agent/workspace names over `"*"` — `"*"` grants the agent authority to self-assign decompose children to *any* future agent/workspace name without a code change, which is a real authority-widening decision, not a neutral default. `outsideAuthority` (`src/tasks.ts`) only enforces this check when a `decompose` call explicitly names an assignee/workspace for a child — self-assignment to the agent's own name works fine under a scoped list, it does not require `"*"`.
+Use `["*"]` only for intentionally unrestricted delegation. It authorizes explicitly assigning work to any agent, including future agents. Keep the deployed board and the registry revision on matching profile schemas. Older board revisions require the removed key, so coordinate the registry revision and board update when moving between versions.
 
 After editing: `git pull` the registry clone on the Pi, then `sudo systemctl restart tidepool.service` (the board reads its own default workspace from the registry once at boot).
 

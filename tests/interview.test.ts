@@ -603,7 +603,7 @@ it("停止の門は受験者も実環境と面接室で止め、root と配下�
   for (const review of [audit, nested]) expect(names(review)).toEqual(["reef", root.id, evidence.id].sort());
   expect(names(plain)).toEqual(["sandbox"]);
   // review の鎖は review でない祖先で切れる(`taskRunPlace` と同じ辿り方)
-  const repairUnderAudit = registerTask(db, { type: "memory_repair", ...PLAIN, workspace: "reef", parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
+  const repairUnderAudit = registerTask(db, { type: "memory_repair", ...PLAIN, parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
   logDecision(db, repairUnderAudit, "drop entry 3", "tako", new Date(0), "worker");
   const reviewUnderRepair = rcaOf(db, repairUnderAudit.id, new Date(0));
   for (const task of [repairUnderAudit, reviewUnderRepair]) expect(names(task)).toEqual(["reef"]);

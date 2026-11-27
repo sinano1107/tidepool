@@ -233,7 +233,7 @@ function writeRepairTask(db: ReturnType<typeof openDb>) {
 function routingRepairTask(db: ReturnType<typeof openDb>) {
   const at = new Date("2026-08-24T00:00:00.000Z");
   const objected = task(db, "judged the routing table");
-  return registerTask(db, { type: "routing_repair", assignee: "codex-agent", workspace: "work", title: "routing repair", purpose: "p", completion_criteria: "c", parent_id: objected.id }, at, ...HUMAN_WEBUI);
+  return registerTask(db, { type: "routing_repair", assignee: "codex-agent", title: "routing repair", purpose: "p", completion_criteria: "c", parent_id: objected.id }, at, ...HUMAN_WEBUI);
 }
 
 /** 祖先の cancel の下の RCA(self)—— 成果が捨てられた task は分解の verb を伏せる(ADR 0271 決定2)。 */
@@ -1626,7 +1626,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("authority guidance が空文字なら `## Authority` 見出しごと省き、空でなければ置く(issue #488 / ADR 0157 決定1)", async () => {
     const empty = await fixture(undefined, undefined, undefined, undefined, {
       registryFiles: {
-        "authority/standard.yaml": `guidance: ""\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+        "authority/standard.yaml": `guidance: ""\nassignable_to:\n  - "*"\nmerge: external\n`,
       },
     });
     await empty.start(task(empty.db, "codex-empty-guidance"));
@@ -1650,7 +1650,7 @@ describe("CodexWorker (ADR 0098)", () => {
     await f.start(task(f.db, "codex-roster-work"));
     await f.start(registerTask(
       f.db,
-      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: reviewed.id, title: "codex-roster-review", purpose: "read it", completion_criteria: "reviewed" },
+      { type: "review", assignee: "codex-agent", parent_id: reviewed.id, title: "codex-roster-review", purpose: "read it", completion_criteria: "reviewed" },
       at,
       ...HUMAN_WEBUI,
     ));
@@ -1712,7 +1712,7 @@ describe("CodexWorker (ADR 0098)", () => {
     );
     const rca = registerTask(
       f.db,
-      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca", purpose: "why X", completion_criteria: "explained", opened_on_event_ids: [objection] },
+      { type: "review", assignee: "codex-agent", parent_id: objected.id, title: "codex-rca", purpose: "why X", completion_criteria: "explained", opened_on_event_ids: [objection] },
       at,
       ...HUMAN_WEBUI,
     );
@@ -1769,7 +1769,7 @@ describe("CodexWorker (ADR 0098)", () => {
     });
     await f.start(registerTask(
       f.db,
-      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca-1741", purpose: "why X", completion_criteria: "explained", opened_on_event_ids: [objection] },
+      { type: "review", assignee: "codex-agent", parent_id: objected.id, title: "codex-rca-1741", purpose: "why X", completion_criteria: "explained", opened_on_event_ids: [objection] },
       at,
       ...HUMAN_WEBUI,
     ));

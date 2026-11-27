@@ -82,8 +82,6 @@ const AUTHORITY_YAML = `guidance: |
   Prefer reversible actions. Anything irreversible is outside your authority.
 assignable_to:
   - "${AUTHORITY_WILDCARD}"
-allowed_workspaces:
-  - "${AUTHORITY_WILDCARD}"
 merge: external
 `;
 
@@ -167,28 +165,17 @@ assignable_to:
   - navigator
   - shipwright
   - lookout
-allowed_workspaces:
-  - harbor
-  - lighthouse
-  - tidepool
 merge: escalate
 `,
   "authority/builder.yaml": `guidance: |
   Make narrow, reversible changes and explain the verification performed.
 assignable_to:
   - lookout
-allowed_workspaces:
-  - harbor
-  - lighthouse
 merge: escalate
 `,
   "authority/reviewer.yaml": `guidance: |
   Review independently and leave concrete, actionable findings.
 assignable_to: []
-allowed_workspaces:
-  - harbor
-  - lighthouse
-  - tidepool
 merge: escalate
 `,
   "workspaces.yaml": `harbor:

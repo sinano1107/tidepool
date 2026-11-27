@@ -198,10 +198,10 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
   it("profile の assignable_to に列挙されているだけの agent は消せる(ADR 0087 決定2)", async () => {
     const registryDir = await makeRegistry({
       "authority/standard.yaml":
-        "guidance: pointed at by nobody's authority\nassignable_to:\n  - deckhand\nallowed_workspaces: []\nmerge: escalate\n",
+        "guidance: pointed at by nobody's authority\nassignable_to:\n  - deckhand\nmerge: escalate\n",
       // standard を authority に持つ agent が居ると参照で弾かれるので、fixture の
       // deckhand は別 profile を指す
-      "authority/solo.yaml": "guidance: solo\nassignable_to: []\nallowed_workspaces: []\nmerge: escalate\n",
+      "authority/solo.yaml": "guidance: solo\nassignable_to: []\nmerge: escalate\n",
       "agents/deckhand.md":
         '---\nversion: "1"\nauthority: solo\ndescription: General work agent\nprovider: anthropic\nskills: []\n---\nYou are Deckhand.\n',
     });

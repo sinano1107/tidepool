@@ -10,7 +10,7 @@ const NAVIGATOR_AUTHORITY: AuthorityProfile = {
   name: "navigator-authority",
   guidance: "chart the course",
   assignable_to: ["navigator"],
-  allowed_workspaces: ["*"],
+
 };
 
 it("list_agents は委譲できる agent を返し、assignable_to の内外を direct/needs_approval でマークする(issue #43 / ADR 0014)", async () => {
@@ -54,7 +54,7 @@ it("list_agents は registry に定義の無い human も、direct/needs_approva
       name: "human-only",
       guidance: "ask a human",
       assignable_to: ["human"],
-      allowed_workspaces: ["*"],
+
     }),
   });
   const task = (

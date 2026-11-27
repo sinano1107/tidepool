@@ -11,7 +11,7 @@ let t: Tidepool;
 afterEach(() => t?.stop());
 
 const agent = { authority: "standard", provider: "anthropic", description: "General work", skills: [], systemPrompt: "" };
-const profile = { guidance: "", assignable_to: [], allowed_workspaces: [], merge: "external" };
+const profile = { guidance: "", assignable_to: [], merge: "external" };
 
 // ADR 0403 決定5: 読めない registry に当たった人間の要求は、外部の一手の失敗(502)ではなく止まりの理由(503)を返す
 it.each([
@@ -42,7 +42,7 @@ it.each([
 it.each([
   ["workspace", { "workspaces.yaml": "Bad Name:\n  path: /nonexistent/bad\n" }, "/api/workspaces", { mode: "create", name: "lagoon" }],
   ["agent", { "agents/Bad Name.md": "---\ndescription: d\nversion: \"1\"\nauthority: standard\nprovider: anthropic\nskills: []\n---\nYou are bad.\n" }, "/api/agents", { ...agent, name: "tako" }],
-  ["authority profile", { "authority/Bad Name.yaml": "guidance: g\nassignable_to: []\nallowed_workspaces: []\nmerge: external\n" }, "/api/profiles", { ...profile, name: "risky" }],
+  ["authority profile", { "authority/Bad Name.yaml": "guidance: g\nassignable_to: []\nmerge: external\n" }, "/api/profiles", { ...profile, name: "risky" }],
 ] as const)("registry に不正な %s の名前があると、作成の要求は 503 を返す", async (_kind, files, path, body) => {
   const registry = { dir: await makeRegistry(files), mode: "purely-local" as const };
   const workspacesBaseDir = await tempDir("tidepool-unreadable-");

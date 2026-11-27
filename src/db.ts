@@ -225,9 +225,8 @@ function initializeDb(db: Db): void {
       -- system-internal only (ADR 0251): the reason an Interview root gave when it reported its
       -- probe broken. A retry answer shows it to the new root.
       question_broken_probe_reason TEXT,
-      -- system-internal only (issue #11): a pending-child approval question's
-      -- would-be child, JSON-encoded, materialized only if the human answers
-      -- "approve". Never set via MCP or the JSON API — only decomposeTask sets this.
+      -- Approval payload (issue #11, ADR 0384 決定2・3): the work or issue reference
+      -- materialized when the human answers "approve". The domain sets this field.
       question_pending_child  TEXT,
       -- system-internal only (issue #11): the PR number a merge-decision
       -- question stands in for. Only the board sets this via registerMergeQuestion.
@@ -269,9 +268,8 @@ function initializeDb(db: Db): void {
       -- ADR 0305: independent root asking why this task was stopped.
       question_stop_reason_task_id TEXT,
       -- issue-backed task reference (issue #49, ADR 0016): the GitHub issue
-      -- number this task is a live reference to, or null for an ordinary
-      -- task. workspace (already above) doubles as the repo half of the
-      -- reference for such a task.
+      -- number of the live reference, or null for an ordinary task. Its workspace
+      -- names the repo, derived from the fixed tree for a child (ADR 0384 決定2).
       github_issue_number INTEGER,
       -- the task's execution request (ADR 0110 決定2, GLOSSARY.md「要求」): the
       -- required quality tier and the priority that orders that tier's candidates (ADR 0114),

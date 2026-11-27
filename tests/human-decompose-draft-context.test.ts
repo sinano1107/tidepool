@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { FakeDraftClient } from "./fakes.js";
-import { api, bootTidepool, queueWork, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, defaultingTo, markPickedUp, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -93,4 +93,30 @@ it("存在しない parent_id へのドラフト依頼は 404", async () => {
     parent_id: "no-such-task",
   });
   expect(res.status).toBe(404);
+});
+
+it("reads the fixed tree's GitHub issue when drafting under an unpicked issue-backed child", async () => {
+  const draftClient = new FakeDraftClient();
+  const home = { name: "home", path: "/fake/home" };
+  const project = { name: "project", path: "/fake/project" };
+  t = await bootTidepool({ draftClient, workspace: home, resolveWorkspace: defaultingTo(home, project) });
+  const root = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work", title: "root", purpose: "p", completion_criteria: "c", assignee: "human", workspace: project.name,
+  });
+  expect(root.status).toBe(201);
+  markPickedUp(t.db, root.json.id, t.clock.now());
+  t.github.scriptIssue(49, { title: "project issue", body: "project details", comments: [] });
+  const parent = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work", github_issue_number: 49, workspace: project.name, parent_id: root.json.id, assignee: "human",
+    decompose_reason: "track the project issue separately",
+  });
+  expect(parent.status).toBe(201);
+  expect(parent.json).toMatchObject({ parent_id: root.json.id, workspace: project.name, has_task_branch: false });
+  const beforeDraft = t.github.issueFetches.length;
+
+  const draft = await api(t.baseUrl, "POST", "/api/tasks/draft", { parent_id: parent.json.id, dump: "fix the project issue" });
+
+  expect(draft.status).toBe(200);
+  expect(t.github.issueFetches.slice(beforeDraft)).toEqual([{ path: project.path, number: 49 }]);
+  expect(draftClient.contexts[0]?.parentPurpose).toBe("project details");
 });

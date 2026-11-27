@@ -10,7 +10,7 @@ import { blockingRootOf, contentLeftBehindLocally, createLanding, type Landing, 
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, countUnsettledTasksReferencing, editTask, fillEmptyWorkspace, getTask, listBoard, listChildren, type RegisterTaskInput, recordPrOpened, registerTask, type Task, taskBranchLostInForce, whyNoReturnDestination } from "../src/tasks.js";
+import { completeTask, countUnsettledTasksReferencing, editTask, fillEmptyWorkspace, getTask, listBoard, listChildren, placeInAnotherWorkspace, type RegisterTaskInput, recordPrOpened, registerTask, type Task, taskBranchLostInForce, whyNoReturnDestination } from "../src/tasks.js";
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
 import { boardRefWriter, quarantineWorkspace, RefsMovedError, recordDeclaredRepo, recordTaskCheckoutTip, releaseWorkspace, removeReleasedTaskCheckoutsOn, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
@@ -278,30 +278,34 @@ it("別の workspace に固定された子孫は死んだ祖先を数えず、�
   expect(elsewhere.status).toBe("todo");
 });
 
-it("登録の床は親の系譜で問い、子が親と違う workspace を明示すれば子の系譜でも問う —— 無事な親の下でも死んだ祖先の workspace を明示した子は拒み、帰り先の無い親の下の別 workspace の子も拒み、列が空の task は導出で読む(ADR 0380 決定5、ADR 0301 決定7、pin H9・H15)", async () => {
-  const { b, dead, healthy, child } = await deadTaskUnderLivingRoot("dead-ancestor-floor", elsewhereUnder);
+it("登録の床は親の系譜で問い、列が空の子は導出で読む(ADR 0380 決定5、pin H9・H15)", async () => {
+  const { b, dead, healthy } = await deadTaskUnderLivingRoot("dead-ancestor-floor", elsewhereUnder);
   const elsewhere = titled(b, "elsewhere");
   const refusal = `no work task grows here: the work of "dead" (${dead.id}) was lost with its task branch`;
 
   expect(whyNoReturnDestination(b.db, elsewhere)).toBeUndefined();
   expect(humanTask(b, { type: "work", title: "stays elsewhere", parent_id: elsewhere }).status).toBe("todo");
-  expect(() => humanTask(b, { type: "work", title: "names the dead's workspace", parent_id: elsewhere, workspace: b.ws.name })).toThrow(refusal);
-  expect(() => humanTask(b, { type: "work", title: "names another workspace", parent_id: child.id, workspace: "elsewhere" })).toThrow(refusal);
-  // healthy の列は pickup の固定が埋め(ADR 0372 決定3)、その下の子は列が空のまま導出で healthy の workspace を読む(ADR 0372 決定1)
   expect(getTask(b.db, healthy.id)!.workspace).toBe(b.ws.name);
   expect(() => humanTask(b, { type: "work", title: "empty column", parent_id: healthy.id })).toThrow(refusal);
 });
 
-it("agent の分解の床は、子が明示した別の workspace の系譜でも承認 question に包む前に問う —— 死んだ祖先の workspace を明示した子は question にもならずに拒む(ADR 0380 決定5、ADR 0271 決定2、ADR 0301 決定3)", async () => {
-  const { b, dead } = await deadTaskUnderLivingRoot("dead-ancestor-decompose", elsewhereUnder);
-  const parent = getTask(b.db, titled(b, "elsewhere"))!;
-  const child = { title: "names the dead's workspace", purpose: "p", completion_criteria: "c", workspace: b.ws.name };
-  const authority = { name: "standard", guidance: "", allowed_workspaces: ["elsewhere"] };
+it("a no-return lineage refuses the agent placement approval but allows a human placement", async () => {
+  const { b, dead } = await deadTaskUnderLivingRoot("dead-ancestor-decompose");
+  const at = b.clock.now();
+  const rca = registerTask(b.db, {
+    type: "review", title: "RCA", purpose: "p", completion_criteria: "c",
+    parent_id: dead.id, opened_on_event_ids: [latestEventOfTask(b.db, dead.id, "task_branch_lost")!.id],
+  }, at, BOARD_ACTOR_ID, "board");
+  const edit = { title: "edit elsewhere", purpose: "p", completion_criteria: "c" };
 
-  expect(() => decomposeTaskViaWorker(b.db, parent, { reason: "split", children: [child] }, "deckhand", b.clock.now(), { authority })).toThrow(
-    `no work task grows here: the work of "dead" (${dead.id}) was lost with its task branch`,
-  );
-  expect(listChildren(b.db, parent.id)).toEqual([]);
+  expect(() => decomposeTaskViaWorker(b.db, rca, {
+    reason: "split", children: [{ ...edit, place_in_workspace: "elsewhere" }],
+  }, "deckhand", at)).toThrow(`no question task grows here: the work of "dead" (${dead.id}) was lost with its task branch`);
+  expect(listChildren(b.db, rca.id)).toEqual([]);
+  expect(listEvents(b.db, rca.id).some(({ kind }) => kind === "decision_logged")).toBe(false);
+
+  expect(placeInAnotherWorkspace(b.db, rca, { reason: "split", root: { ...edit, workspace: "elsewhere" } }, at, "webui"))
+    .toMatchObject({ parent_id: null, origin_task_id: rca.id, workspace: "elsewhere" });
 });
 
 it("give-up は人間の値で残る done の子の失われたブランチを keep-around へ移して消し、merge back の数え直しは帰り先へ運ばない(ADR 0380 決定3、ADR 0392 決定1)", async () => {
@@ -1488,7 +1492,7 @@ it.each([
   const root = work(b, "root", { workspace: undefined });
   const parent = work(b, "parent", { parent_id: root.id });
   const lower = work(b, "lower", { parent_id: parent.id });
-  const child = work(b, "child", { parent_id: lower.id, workspace: b.ws.name });
+  const child = work(b, "child", { parent_id: lower.id });
   const members = { root, parent, lower, child };
   // The task itself already has a branch in force on repeat pickup.
   const main = git(b.ws.path, "rev-parse", "main");

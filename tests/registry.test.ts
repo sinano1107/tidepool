@@ -116,7 +116,7 @@ describe("loadRegistry", () => {
   // issue #1367: registry は作成の門を通らずにも変わる(手書きの commit・registry-edit PR の
   // merge —— ADR 0061)。読み込みでも作成の門と同じ名前の規則を当て、違反は読み込み全体を倒す
   const VALID_AGENT_MD = `---\nversion: 0.1.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: An agent\n---\nBody.\n`;
-  const VALID_AUTHORITY_YAML = "guidance: x\nassignable_to: []\nallowed_workspaces: []\nmerge: external\n";
+  const VALID_AUTHORITY_YAML = "guidance: x\nassignable_to: []\nmerge: external\n";
 
   it("盤面の予約 worker id(human / tidepool)と同名の agent ファイルを含む commit は読み込みを倒す", async () => {
     for (const name of ["human", "tidepool"]) {
@@ -347,28 +347,28 @@ describe("loadRegistry", () => {
 
   it("assignable_to を省略した authority profile は registry ロード時にエラーになる(issue #41: 省略=無制限のフットガンを潰す)", async () => {
     const dir = await makeRegistry({
-      "authority/standard.yaml": `guidance: be careful\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+      "authority/standard.yaml": `guidance: be careful\nmerge: external\n`,
     });
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/assignable_to/i);
   });
 
-  it("allowed_workspaces を省略した authority profile は registry ロード時にエラーになる(issue #41: 省略=無制限のフットガンを潰す)", async () => {
+  it("rejects an authority profile that still declares allowed_workspaces (ADR 0384)", async () => {
     const dir = await makeRegistry({
-      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - "*"\nmerge: external\n`,
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - "*"\nallowed_workspaces: []\nmerge: external\n`,
     });
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/allowed_workspaces/i);
   });
 
   it("merge を省略した authority profile は registry ロード時にエラーになる(ADR 0079 決定1: ダイヤルは必須の3値)", async () => {
     const dir = await makeRegistry({
-      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\n`,
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - "*"\n`,
     });
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/merge/i);
   });
 
   it("merge: external を宣言した authority profile は読み込める(ADR 0079: 盤面の外の merge 面の宣言)", async () => {
     const dir = await makeRegistry({
-      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - "*"\nmerge: external\n`,
     });
     expect(loadRegistry(dir, "purely-local").authority.standard!.merge).toBe("external");
   });

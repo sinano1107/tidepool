@@ -181,7 +181,7 @@ export interface McpDeps {
    *  Absent → watchdog を持たない盤面(梯子そのものが無い)。 */
   heldForContainment?: (taskId: string) => boolean;
   /** This board's one configured worker's authority profile (issue #11).
-   *  Absent → assignable_to and allowed_workspaces are both unrestricted.
+   *  Absent → assignable_to is unrestricted.
    *  Superseded by `resolveAuthority` below when both are given. */
   authority?: AuthorityProfile;
   /** Resolves the executing task's own agent's authority profile (ADR 0012 /
@@ -206,7 +206,7 @@ export interface McpDeps {
   /** Whether an agent name is currently registered (ADR 0012 / issue #36),
    *  read fresh against the registry — used to reject a decompose child's
    *  unknown assignee outright (the registering agent's own mistake, same
-   *  treatment as an unknown child workspace). Absent → no registry
+   *  treatment as an unknown placement workspace). Absent → no registry
    *  configured, so any assignee name is accepted, same as the workspace
    *  check's fallback. */
   agentRegistered?: (name: string) => boolean;
@@ -214,12 +214,9 @@ export interface McpDeps {
    *  decompose child assigned to it is rejected outright like an unknown name.
    *  Absent → no registry configured. */
   resolvesToBuiltIn?: (name: string) => boolean;
-  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
-   *  protected workspace / ADR 0013), read fresh against the registry — a
-   *  decompose child naming a protected workspace converts to an approval
-   *  question unconditionally, regardless of the registering worker's
-   *  authority profile (v1's use is a clone of the registry's repository —
-   *  ADR 0377 決定5). Absent → no workspace is protected. */
+  /** Whether a root placement targets a protected workspace, read fresh
+   *  against the registry so its approval question names that protection
+   *  (ADR 0377 決定5 / ADR 0384 決定3). */
   isProtectedWorkspace?: (name: string) => boolean;
   /** The pull half of the roster (issue #43 / ADR 0014): every registry
    *  agent's name + description, read fresh against the registry every call
@@ -575,7 +572,7 @@ const next = z.string().optional().describe("The next string from a previous res
 
 /** decompose と redecompose が共有する。 */
 function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof decomposeChildrenSchema>>): void {
-  // an explicitly named child workspace must exist in the registry
+  // an explicitly named placement workspace must exist in the registry
   // (issue #26) — this is the registering agent's own mistake, not an
   // authority question, so it's rejected outright before anything
   // registers rather than converted into an approval question (ADR
@@ -584,12 +581,12 @@ function assertChildrenKnown(deps: McpDeps, children: z.infer<ReturnType<typeof 
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (resolve) {
     for (const child of children) {
-      if (child.workspace === undefined) continue;
+      if (child.place_in_workspace === undefined) continue;
       try {
-        resolve(child.workspace);
+        resolve(child.place_in_workspace);
       } catch (err) {
         if (!(err instanceof UnknownWorkspaceError)) throw err;
-        throw new DomainError(`unknown workspace: ${child.workspace}`);
+        throw new DomainError(`unknown workspace: ${child.place_in_workspace}`);
       }
     }
   }
@@ -638,7 +635,7 @@ export const JUDGED_AFTER_THE_EDIT =
 function decomposeChildrenSchema(db: Db) {
   const tierDescriptions = tierFieldDescriptions(db);
   return z.array(
-    z.object({
+    z.strictObject({
       title: requiredTextSchema,
       purpose: requiredTextSchema,
       completion_criteria: requiredTextSchema,
@@ -650,20 +647,27 @@ function decomposeChildrenSchema(db: Db) {
           "Who to delegate to. Your own system prompt's Roster section lists who " +
             "you can assign directly; call list_agents for the full board.",
         ),
-      workspace: z.string().optional(),
+      place_in_workspace: requiredTextSchema.optional().describe(
+        "Place this work as a separate root in the named workspace. A human must approve it before the root is registered.",
+      ),
       review_flag: z
         .boolean()
         .optional()
         .describe(
-          "Opt this child into an independent review of its deliverable on completion. " +
-            "No authority check applies — declaring it is never out of scope. " +
-            "Refused on a child assigned to human, whose completion raises no review.",
+          "Opt a child into an independent review of its deliverable on completion. " +
+            "Use for a child assigned to an agent. A piece with place_in_workspace already has its own completion review.",
         ),
       tier: z.string().optional().describe(tierDescriptions.tier),
       review_by: z.array(requiredTextSchema).optional()
-        .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_REVIEW_FIRES}`),
-      review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_REVIEW_FIRES}`),
+        .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
+      review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
       priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
+    }, {
+      error: (issue) => {
+        if (issue.code === "unrecognized_keys" && issue.keys.includes("workspace")) {
+          return `Unrecognized keys: ${issue.keys.join(", ")} — use place_in_workspace to propose a root in another workspace.`;
+        }
+      },
     }),
   );
 }
@@ -868,14 +872,15 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         description:
           "Split the remaining work into child tasks in one decision: records the " +
           "reason in the decision log, queues the children at the tail, blocks the " +
-          "current task until they all finish, and frees the slot. Once every child " +
+          "current task until they all finish, and frees the slot. Set place_in_workspace on a piece " +
+          "that should run as a separate root in another workspace after human approval. Once every child " +
           "settles, the task becomes pickable again in normal queue order to " +
           "integrate and complete for real. " +
           BOARD_WRITE_LANGUAGE_RULE,
-        inputSchema: {
+        inputSchema: z.strictObject({
           reason: requiredTextSchema,
           children: decomposeChildrenSchema(deps.db),
-        },
+        }),
       },
       async (input) =>
         runReleasingVerb(deps, attributedTaskId, (task) => {
@@ -1241,7 +1246,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "decomposes the remaining work exactly as decompose does, and frees the slot. Only " +
           "while a child of this task has an open premise breach. " +
           BOARD_WRITE_LANGUAGE_RULE,
-        inputSchema: { reason: requiredTextSchema, children: decomposeChildrenSchema(deps.db) },
+        inputSchema: z.strictObject({ reason: requiredTextSchema, children: decomposeChildrenSchema(deps.db) }),
       },
       async (input) =>
         runReleasingVerb(deps, attributedTaskId, (task) => {
