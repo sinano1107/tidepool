@@ -27,7 +27,7 @@ import {
 } from "../src/workspace.js";
 import { openWorkspaceWorkbench } from "../src/workspace-create.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeShallowWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, WORKER_SPAWNED, withHistoryOnlyBlob, withLooseSub, withPushDuringWrap } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeShallowWorkspace, makeWorkspace, prepareAtPickup, seedTaskBranch, seedZeroPaddedTree, shimGit, WORKER_SPAWNED, withHistoryOnlyBlob, withLooseSub, withPushDuringWrap } from "./harness.js";
 import { completeThroughTaskCheckout, convergeOn } from "./landing-fixture.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -549,6 +549,30 @@ it("拒否の後の `board/*` の引き直しが strict な検査で落ちれば
   expect(b.question().status).toBe("todo");
 
   await expectNamedPlaceRefusal(b.open(), b.ws, git(b.ws.path, "rev-parse", "side:sub"));
+});
+
+/** 名前の場所から作業台へ `board/*` を引き直す fetch(段A)だけが持つ refspec。 */
+const REPOINT_REFSPEC = "+refs/heads/*:refs/tidepool-incoming/*";
+
+it("取り込みの後の `board/*` の引き直しが disk の満杯で落ちれば、応答は host の失敗を言い、`board/main` への fast-forward を誘わない(ADR 0433 決定5)", async () => {
+  const b = await board("intake-repoint-disk-full");
+  await b.open();
+  commitWork(b.workbench(), "notes.txt", "the human's\n");
+  const tip = git(b.workbench(), "rev-parse", "main");
+  await shimGit({ fails: [REPOINT_REFSPEC, "error: unable to write file: No space left on device"] });
+
+  const answered = await b.answer("take in");
+
+  expect(answered.notice).toMatch(new RegExp(`^took ${tip} in as ${git(b.ws.path, "rev-parse", "main")} on main\\. the host is out of space: `));
+  expect(answered.notice).not.toContain("fast-forward");
+});
+
+it("拒否の後の `board/*` の引き直しが disk の満杯で落ちれば、拒否の文に host の失敗を足す(ADR 0433 決定5)", async () => {
+  const b = await board("intake-refused-repoint-disk-full");
+  await b.open();
+  await shimGit({ fails: [REPOINT_REFSPEC, "error: unable to write file: No space left on device"] });
+
+  await expect(b.answer("take in")).rejects.toThrow(`nothing to take in: main in the workbench at ${b.workbench()} is the value the board already has. the host is out of space: `);
 });
 
 it.each(["misnamed", "missing"] as const)("作業台の中だけの故障(%s の object)は作業台の故障として取り込みを拒み、名前の場所を名指さない(ADR 0411 決定2・3)", async (fault) => {

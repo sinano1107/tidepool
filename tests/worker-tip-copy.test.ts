@@ -422,6 +422,27 @@ it("名前の場所の objects に書けない未決着の解放は名前の場�
   expect(listChildren(db, task.id)).toEqual([]);
 });
 
+it.each([
+  // 運んだ後の確かめが名前の場所の objects の在り処を読む手(`ensureCarriedWhole` の失敗)
+  ["the carried check", "objects"],
+  // 他の task のブランチを数える手
+  ["the other-task count", "refs/heads/task/"],
+])("tip の記録で %s の git が disk の満杯に落ちれば、名前の場所の側の失敗でなく host の失敗で投げる(ADR 0433 決定5)", async (_, argument) => {
+  const { db, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  await shimGit({ fails: [argument, "error: unable to write file: No space left on device"] });
+
+  let failure: unknown;
+  try {
+    recordTaskCheckoutTip(db, place, task.id);
+  } catch (err) {
+    failure = err;
+  }
+
+  expect(failure).toBeInstanceOf(CheckoutHostError);
+  expect(failure).not.toBeInstanceOf(NamedPlaceFetchError);
+});
+
 it("名前の場所の objects に書けない tip の記録は fetch の失敗で投げ、それは名前の場所の側の失敗の子である(ADR 0433 決定4)", async () => {
   const { db, named, task, place } = await pickedUp();
   commitWork(place.path, "work.txt", "work\n");

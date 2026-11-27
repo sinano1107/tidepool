@@ -595,6 +595,24 @@ it("pickup の門の fetch が名前の場所へ運ぶ段で disk の満杯に�
   expect(listEvents(db, task.id).find((e) => e.kind === "spawn_failed")?.payload).toMatchObject({ message: expect.stringContaining("No space left on device") });
 });
 
+it.each(["fast-forward", "checkout"] as const)("pickup の休止の %s が worktree を動かす read-tree で disk の満杯に落ちれば、名前の場所の Quarantine でなく spawn_failed になる(ADR 0433 決定5)", async (step) => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace(`pickup-park-${step}-disk-full`);
+  // checkout: 保護ブランチが origin にしか無く HEAD がその外に居る —— 休止は origin の値で保護ブランチを作って HEAD を載せる
+  if (step === "checkout") {
+    git(workspace.path, "checkout", "--quiet", "--detach");
+    git(workspace.path, "branch", "-D", "main");
+  }
+  publish("landed.txt", "landed on the remote\n", "remote landing");
+  db = openDb(":memory:");
+  const task = register();
+  // 休止の fast-forward は worktree を `read-tree -u -m` で動かす —— pickup の準備でこの引数を持つのはそれだけ
+  await shimGit({ fails: ["-m", "error: unable to write file: No space left on device"] });
+
+  expect(await scheduledPickup(workspace, await tempDir("tidepool-task-checkouts-"))).toEqual([task.id]);
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  expect(listEvents(db, task.id).find((e) => e.kind === "spawn_failed")?.payload).toMatchObject({ message: expect.stringContaining("read-tree") });
+});
+
 // ADR 0411 決定5: 複製を作る fetch は閉包を全部読む —— 触らない履歴の欠けでも pickup は名前の場所の側で止まる
 it("古い履歴にだけある blob が欠けた名前の場所の pickup は、その blob を名指す名前の場所の Quarantine で止まり、task は失敗にならない(ADR 0411 決定5)", async () => {
   const named = await makeWorkspace("task-checkout-old-history-missing");
