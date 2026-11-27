@@ -1866,6 +1866,33 @@ export const OPUS_ROW = { provider: "anthropic" as const, model: "claude-opus-5-
 /** registry の agent deckhand(組み込みでない)。`deckhandOnTier` が盤面の既定ティアを書く。 */
 export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, skills: ["*"], unknownFields: [], systemPrompt: "p" };
 
+const registryAgent = (name: string, provider: string, extra: Partial<AgentView> = {}): AgentView => ({
+  name,
+  version: "1",
+  authority: "standard",
+  description: `${name} agent`,
+  provider,
+  advisor: false,
+  skills: ["*"],
+  unknownFields: [],
+  systemPrompt: "p",
+  ...extra,
+});
+
+/** registry の agent 一覧の fake(可変 —— 人間が registry から agent を消した、を表す)。`unreadable` を立てると読めない。 */
+export function fakeRegistry() {
+  const agents = new Map<string, AgentView>([
+    ["deckhand", registryAgent("deckhand", "openai")],
+    ["fugu", registryAgent("fugu", "anthropic", { builtin: true })],
+  ]);
+  const state = { unreadable: false };
+  const list = () => {
+    if (state.unreadable) throw new Error("registry clone is broken");
+    return [...agents.values()];
+  };
+  return { agents, state, agentAdmin: { list } };
+}
+
 /** setup のみ: deckhand の既定ティアを盤面に書く(既定 standard —— agent_tier で1段下げられる、ADR 0410 決定1)。設定の event は
  *  「材料の記録の後に対象を変えた event」に載る(ADR 0410 決定8 / ADR 0278 追記4)ので、routing meta-review の材料を注入する前に呼ぶ。 */
 export function deckhandOnTier(db: Db, at: Date, tier = "standard"): void {
