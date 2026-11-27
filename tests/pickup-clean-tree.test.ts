@@ -8,6 +8,7 @@ import { registerTask } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
 import { commitRoomCopy, NamedPlaceFetchError, NamedPlaceSideError, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, verifyWorkspaceClean, type WorkspaceConfig } from "../src/workspace.js";
 import { addSubmodule, breakCheckoutStaging, commitWork, fixGitDates, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, STAGING_FAILURES, submoduleSource } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 const NOW = new Date("2026-11-06T00:00:00.000Z");
@@ -255,6 +256,11 @@ it.each([
   expect(git(room.path, "cat-file", "-p", `${head}:notes.txt`)).toBe("not committed");
   git(room.path, "cat-file", "-p", tree);
   expect(damagedLooseIn(room.path)).toEqual(damage === "corrupt" ? [tree] : []);
+  // 受験者は面接室から写しの head を fetch する(ADR 0276 決定1)—— 面接室が写しを読ませられる
+  const examinee = await tempDir("tidepool-examinee-");
+  git(examinee, "init", "--quiet");
+  git(examinee, "fetch", "--quiet", room.path, `refs/keep-around/${head}`);
+  expect(git(examinee, "cat-file", "-p", `${head}:notes.txt`)).toBe("not committed");
 });
 
 // ADR 0412 決定2 / ADR 0388 決定2(#3814): stage が自前で書いた blob は運んだ後の確かめの集合に入る —— 面接室にしか無い同じ中身の blob が

@@ -1465,24 +1465,32 @@ it.each(["missing", "corrupt"] as const)("worker の tip が名前の場所の�
   }
 });
 
-// ADR 0425 決定4: 損傷と関係の無い fetch の失敗は今どおり運ぶ段の失敗。名前の場所の pack を書けなければ入れ直しも落ち、pack は増えない
-it("名前の場所の objects/pack に書けず fetch が落ちれば、完了の門は今どおり拒み、名前の場所に pack を足さない(ADR 0425 決定4)", async () => {
+// ADR 0425 決定4: 損傷と関係の無い fetch の失敗は今どおり運ぶ段の失敗 —— 運ぶはずの新しい object の欠けは損傷に数えず、worker の object を
+// 名前の場所に書かない
+it("名前の場所への fetch が損傷と関係なく落ちれば、完了の門は今どおり拒み、名前の場所に pack も tip も足さない(ADR 0425 決定4)", async () => {
   const { db, task, ws, place } = await pickedUpSession();
   const pack = join(ws.path, ".git", "objects", "pack");
   try {
     commitWork(place.path, "work.txt", "work\n");
+    const tip = git(place.path, "rev-parse", "HEAD");
     const before = git(ws.path, "rev-parse", `task/${task.id}`);
-    // fetch も loose に解かず pack を書く
-    git(ws.path, "config", "fetch.unpackLimit", "1");
     const packs = readdirSync(pack);
-    chmodSync(pack, 0o555);
+    await shimGit({ fails: ["fetch", "fatal: the named place refused the fetch"] });
 
-    expect(() => gateFetch(db, place, task)).toThrow(NamedPlaceFetchError);
+    const failure = (() => {
+      try {
+        gateFetch(db, place, task);
+      } catch (err) {
+        return err;
+      }
+    })();
 
+    expect(failure).toBeInstanceOf(NamedPlaceFetchError);
+    expect((failure as Error).message).not.toContain("reinsert");
     expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
     expect(readdirSync(pack)).toEqual(packs);
+    expect(() => git(ws.path, "cat-file", "-e", tip)).toThrow();
   } finally {
-    chmodSync(pack, 0o755);
     db.close();
   }
 });
@@ -1557,20 +1565,19 @@ function expectReleased(db: Db, task: Task, ws: WorkspaceConfig, place: RunPlace
 
 // ADR 0425 決定3: 退避の tip の取り込みも同じ1つの段を通る
 it.each([
-  ["tree を再現し、名前の場所のその tree が missing", "missing"],
-  ["tree を再現し、名前の場所のその tree が corrupt", "corrupt"],
-  ["一度運ばれ、名前の場所のその tree が corrupt", "carried"],
-  ["祖先の commit が名前の場所で missing", "ancestor missing"],
-  ["祖先の commit が名前の場所で corrupt", "ancestor"],
-] as const)("worker が commit した tip が%sなら、未決着の解放は入れ直して tip を運び、checkout を消す(ADR 0425 決定1〜3)", async (_, shape) => {
+  ["名前の場所の履歴から再現した tree", "missing"],
+  ["名前の場所の履歴から再現した tree", "corrupt"],
+  ["門が一度運んだ tip の tree", "corrupt"],
+  ["祖先の commit", "missing"],
+  ["祖先の commit", "corrupt"],
+] as const)("worker が commit した tip の%sが名前の場所で %s なら、未決着の解放は入れ直して tip を運び、checkout を消す(ADR 0425 決定1〜3)", async (target, damage) => {
   const { db, task, ws, place } = await pickedUpSession("work", withHistoryOnlyBlob);
   try {
-    const damage = shape === "missing" || shape === "ancestor missing" ? "missing" : "corrupt";
-    const ancestor = shape.startsWith("ancestor") ? damageNamedLoose(ws, "HEAD", damage) : undefined;
+    const ancestor = target === "祖先の commit" ? damageNamedLoose(ws, "HEAD", damage) : undefined;
     commitWork(place.path, "old.txt", "only in the history\n");
-    if (shape === "carried") gateFetch(db, place, task);
+    if (target === "門が一度運んだ tip の tree") gateFetch(db, place, task);
     const tip = git(place.path, "rev-parse", "HEAD");
-    const damaged = ancestor ?? damageNamedLoose(ws, shape === "carried" ? `${tip}^{tree}` : "HEAD~1^{tree}", damage);
+    const damaged = ancestor ?? damageNamedLoose(ws, target === "門が一度運んだ tip の tree" ? `${tip}^{tree}` : "HEAD~1^{tree}", damage);
 
     releaseWorkspace(db, place, task, NOW);
 

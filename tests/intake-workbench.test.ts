@@ -443,22 +443,20 @@ it("入れ直しが落ちれば取り込みは拒まれ、書く先の ref も w
 // ADR 0425 決定1〜3: 作業台の取り込みも同じ1つの運ぶ段 —— 閉包の中の名前の場所の損傷は、運ぶ手が読む tree・commit でも、運ぶ tip が名前の場所に
 // 既にあっても、fetch で落ちる前に入れ直す
 it.each([
-  ["名前の場所の履歴の tree を再現し、名前の場所のその tree が missing", "missing"],
-  ["名前の場所の履歴の tree を再現し、名前の場所のその tree が corrupt", "corrupt"],
-  ["名前の場所に既にあり、その tree が名前の場所で corrupt", "present"],
-  ["祖先の commit を名前の場所で missing に持つ", "ancestor missing"],
-  ["祖先の commit を名前の場所で corrupt に持つ", "ancestor"],
-] as const)("作業台の tip が%sなら、取り込みは入れ直して通り、その object が名前の場所で読める(ADR 0425 決定1〜3)", async (_, shape) => {
+  ["名前の場所の履歴から再現した tree", "missing"],
+  ["名前の場所の履歴から再現した tree", "corrupt"],
+  ["名前の場所に既にある tip の tree", "corrupt"],
+  ["祖先の commit", "missing"],
+  ["祖先の commit", "corrupt"],
+] as const)("作業台の tip の%sが名前の場所で %s なら、取り込みは入れ直して通り、その object が名前の場所で読める(ADR 0425 決定1〜3)", async (target, damage) => {
   const b = await board("intake-damaged-closure", withHistoryOnlyBlob);
   await b.open();
   const before = git(b.ws.path, "rev-parse", "main");
-  const damage = shape === "missing" || shape === "ancestor missing" ? "missing" : "corrupt";
-  const ancestor = shape.startsWith("ancestor") ? git(b.ws.path, "rev-parse", "main") : undefined;
   commitWork(b.workbench(), "old.txt", "only in the history\n");
   const tip = git(b.workbench(), "rev-parse", "main");
   // 前の取り込みが運んだ形 —— 名前の場所の ref は動かさず object だけを持たせる
-  if (shape === "present") git(b.ws.path, "fetch", "--quiet", b.workbench(), "main");
-  const id = ancestor ?? git(b.ws.path, "rev-parse", shape === "present" ? `${tip}^{tree}` : "main~1^{tree}");
+  if (target === "名前の場所に既にある tip の tree") git(b.ws.path, "fetch", "--quiet", b.workbench(), "main");
+  const id = git(b.ws.path, "rev-parse", { "名前の場所の履歴から再現した tree": "main~1^{tree}", "名前の場所に既にある tip の tree": `${tip}^{tree}`, "祖先の commit": before }[target]);
   const loose = join(b.ws.path, ".git", "objects", id.slice(0, 2), id.slice(2));
   rmSync(loose);
   if (damage === "corrupt") writeFileSync(loose, "not zlib");

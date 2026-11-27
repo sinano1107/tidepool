@@ -1196,10 +1196,10 @@ export interface GitCall {
 /** PATH の本物の git の前に置く shim。呼び出しごとに argv と env を記録し、`route` の URL を書き換え(盤面の網に出る git は
  *  checkout の insteadOf を読まない、ADR 0339 決定5 —— 盤面が組んだ URL の往復を local の bare へ回す)、`fake` の verb は本物へ
  *  渡さず exit 0 で答える(`ls-remote` には `lsRemote` の行を返す)。`fails` の引数を持つ呼び出しは本物へ渡さず、その stderr を出して
- *  exit 128 で落ちる(相手の答えや網の失敗を作る)。3番目に cwd を渡すとその場所だけで落ちる。それ以外は本物へ渡す。
- *  テスト自身の git の呼び出しも通るので、URL を引数に渡すテストの git の**後に**入れる。テストの終わりに PATH を戻す。 */
+ *  exit 128 で落ちる(相手の答えや網の失敗を作る)。3番目に cwd を渡すとその場所だけで落ちる。それ以外は本物へ渡す —— `env` は渡す前に
+ *  export する(盤面の git の env が通さない値を足す)。テスト自身の git の呼び出しも通るので、URL を引数に渡すテストの git の**後に**入れる。テストの終わりに PATH を戻す。 */
 export async function shimGit(
-  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string; fails?: [argument: string, stderr: string, cwd?: string] } = {},
+  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string; fails?: [argument: string, stderr: string, cwd?: string]; env?: Record<string, string> } = {},
 ): Promise<() => GitCall[]> {
   const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
   const dir = await tempDir("tidepool-git-shim-");
@@ -1219,6 +1219,7 @@ export async function shimGit(
       `echo "env.GIT_OBJECT_DIRECTORY=\${GIT_OBJECT_DIRECTORY-}"; } >> "${log}"\n` +
       (options.fails ? `case " $* " in *" ${options.fails[0]} "*) if ${inFailCwd}; then printf '%s\\n' '${options.fails[1]}' >&2; exit 128; fi;; esac\n` : "") +
       (fake ? `case " $* " in ${fake}) case " $* " in *" ls-remote "*) printf '%s' '${options.lsRemote ?? ""}';; esac; exit 0;; esac\n` : "") +
+      Object.entries(options.env ?? {}).map(([key, value]) => `export ${key}='${value}'\n`).join("") +
       `exec "${real}" "$@"\n`,
     { mode: 0o755 },
   );
@@ -1246,17 +1247,10 @@ export async function shimGit(
       });
 }
 
-/** PATH の本物の git の前に、author と committer の日付を固定する shim を置く —— 盤面の git の env は日付を通さないので、同じ秒に書く
- *  commit を待たずに作る。テストの終わりに PATH を戻す。 */
-export async function fixGitDates(date = "@1767225600 +0000"): Promise<void> {
-  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
-  const dir = await tempDir("tidepool-git-date-");
-  writeFileSync(join(dir, "git"), `#!/bin/sh\nexport GIT_AUTHOR_DATE='${date}' GIT_COMMITTER_DATE='${date}'\nexec "${real}" "$@"\n`, { mode: 0o755 });
-  const path = process.env.PATH;
-  process.env.PATH = `${dir}:${path}`;
-  onTestFinished(() => {
-    process.env.PATH = path;
-  });
+/** author と committer の日付を固定する git の shim —— 盤面の git の env は日付を通さないので、同じ秒に書く commit を待たずに作る。 */
+export async function fixGitDates(): Promise<void> {
+  const date = "@1767225600 +0000";
+  await shimGit({ env: { GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } });
 }
 
 /** `makeWorkspace` の remote 正本つきの姿(ADR 0052 / issue #211): bare な origin を
