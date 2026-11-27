@@ -63,7 +63,8 @@ it("GET /api/tasks/:id は assignee 未指定のタスクを一覧と同じ解�
     expect(single).toMatchObject({ assignee: resolved });
     // 直接 cancel の discards は HTTP では単体の読みだけが運ぶ(ADR 0271 決定4)—— 一覧の行との一致はそれ以外で言う
     // タスクブランチの有無と着手済みは単体の読みだけが運ぶ(ADR 0374 決定2)—— どの行もタスクブランチを持たない
-    expect(single).toEqual({ ...list.find((x: any) => x.id === id), discards: single.discards, human_stops: [], has_task_branch: false, started: false });
+    // 分解元から置いた根の一覧も単体の読みだけが運ぶ(ADR 0384 決定3)—— どの行も分解元でない
+    expect(single).toEqual({ ...list.find((x: any) => x.id === id), discards: single.discards, human_stops: [], placed_roots: [], has_task_branch: false, started: false });
   }
 
   // 一覧の絞り込みは単体に持ち込まない —— 取り消したタスクも返り、同じ解決を通る
