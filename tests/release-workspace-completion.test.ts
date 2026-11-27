@@ -6,7 +6,7 @@ import { expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { CheckoutUnreadableError } from "../src/git.js";
+import { git as boardGit, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, finishTask, getTask, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import {
   boardRefWriter,
@@ -26,6 +26,7 @@ import {
   commitWork,
   completionTreePaths,
   FULL_HANDOFF,
+  fixGitDates,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HUMAN_WEBUI,
@@ -36,6 +37,7 @@ import {
   quarantineQuestion,
   STAGING_FAILURES,
   seedTaskBranch,
+  shimGit,
   withHistoryOnlyBlob,
   withLooseSub,
 } from "./harness.js";
@@ -1427,6 +1429,209 @@ it.each([
     expect(git(ws.path, "rev-parse", `${ref}^`)).toBe(moved);
     expect(git(ws.path, "ls-tree", "-r", ref)).toBe(tree.join("\n"));
     expect(existsSync(place.path)).toBe(false);
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0425 決定1・3: 運ぶ手は、閉包の中の名前の場所の損傷で落ちる前に入れ直しへ届く —— 運ぶ手が読む tree・commit の壊れた loose でも
+/** 名前の場所の `rev` の loose を消す(`missing`)か zlib でない byte に置き換える(`corrupt`)。id を返す。 */
+function damageNamedLoose(ws: WorkspaceConfig, rev: string, damage: "missing" | "corrupt"): string {
+  const id = git(ws.path, "rev-parse", rev);
+  rmSync(looseObject(ws.path, id));
+  if (damage === "corrupt") writeFileSync(looseObject(ws.path, id), "not zlib");
+  return id;
+}
+
+/** 損傷した `id` が名前の場所で読め、壊れた loose は消さずに残す dir にある。 */
+function expectReinserted(ws: WorkspaceConfig, id: string, damage: "missing" | "corrupt"): void {
+  git(ws.path, "cat-file", "-p", id);
+  expect(damagedLoose(ws).map((path) => path.endsWith(`/${id}`))).toEqual(damage === "missing" ? [] : [true]);
+}
+
+it.each(["missing", "corrupt"] as const)("worker の tip が名前の場所の履歴の tree を再現し、名前の場所のその tree が %s なら、完了の門は入れ直して通る(ADR 0425 決定1)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession("work", withHistoryOnlyBlob);
+  try {
+    const tree = damageNamedLoose(ws, "HEAD~1^{tree}", damage);
+    commitWork(place.path, "old.txt", "only in the history\n");
+
+    const tip = gateFetch(db, place, task);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expectReinserted(ws, tree, damage);
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0425 決定4: 損傷と関係の無い fetch の失敗は今どおり運ぶ段の失敗 —— 運ぶはずの新しい object の欠けは損傷に数えず、worker の object を
+// 名前の場所に書かない
+it("名前の場所への fetch が損傷と関係なく落ちれば、完了の門は今どおり拒み、名前の場所に pack も tip も足さない(ADR 0425 決定4)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  const pack = join(ws.path, ".git", "objects", "pack");
+  try {
+    commitWork(place.path, "work.txt", "work\n");
+    const tip = git(place.path, "rev-parse", "HEAD");
+    const before = git(ws.path, "rev-parse", `task/${task.id}`);
+    const packs = readdirSync(pack);
+    await shimGit({ fails: ["fetch", "fatal: the named place refused the fetch"] });
+
+    const failure = (() => {
+      try {
+        gateFetch(db, place, task);
+      } catch (err) {
+        return err;
+      }
+    })();
+
+    expect(failure).toBeInstanceOf(NamedPlaceFetchError);
+    expect((failure as Error).message).not.toContain("reinsert");
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
+    expect(readdirSync(pack)).toEqual(packs);
+    expect(() => git(ws.path, "cat-file", "-e", tip)).toThrow();
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0425 決定4(spec #3909 の user story 16・17): 撃ち直しは1度だけ —— 入れ直した後も fetch が落ちれば、今どおり運ぶ段の失敗で、最初の失敗も文に残る
+it("入れ直した後の fetch も落ちれば、完了の門は1度目の失敗を添えて拒み、task/<id> を書かない(ADR 0425 決定4)", async () => {
+  const { db, task, ws, place } = await pickedUpSession("work", withHistoryOnlyBlob);
+  try {
+    const tree = damageNamedLoose(ws, "HEAD~1^{tree}", "corrupt");
+    commitWork(place.path, "old.txt", "only in the history\n");
+    const before = git(ws.path, "rev-parse", `task/${task.id}`);
+    await shimGit({ fails: ["fetch", "fatal: the named place refused the fetch"] });
+
+    const failure = (() => {
+      try {
+        gateFetch(db, place, task);
+      } catch (err) {
+        return err;
+      }
+    })();
+
+    expect(failure).toBeInstanceOf(NamedPlaceFetchError);
+    expect((failure as Error).message).toMatch(/refused the fetch[\s\S]*Before the board reinserted[\s\S]*refused the fetch/);
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(before);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expectReinserted(ws, tree, "corrupt");
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0425 決定2: 運ぶ tip が名前の場所に既にあっても(門の撃ち直し)、閉包の中の損傷を入れ直す
+it("一度運んだ tip の tree が名前の場所で壊れていれば、同じ tip の完了の門は入れ直して通る(ADR 0425 決定2)", async () => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    commitWork(place.path, "work.txt", "work\n");
+    const tip = gateFetch(db, place, task);
+    const tree = damageNamedLoose(ws, `${tip}^{tree}`, "corrupt");
+
+    expect(gateFetch(db, place, task)).toBe(tip);
+
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expectReinserted(ws, tree, "corrupt");
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0425 決定1: 複製の集合は閉包の全部(ADR 0411 決定4)—— 祖先の commit も運ぶ手が読む
+it.each(["missing", "corrupt"] as const)("worker の tip の祖先の commit が名前の場所で %s なら、完了の門は入れ直して通り、その commit が名前の場所で読める(ADR 0425 決定1)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession();
+  try {
+    const ancestor = damageNamedLoose(ws, "HEAD", damage);
+    commitWork(place.path, "work.txt", "work\n");
+
+    const tip = gateFetch(db, place, task);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+    expectReinserted(ws, ancestor, damage);
+  } finally {
+    db.close();
+  }
+});
+
+/** 未決着の解放が運び終え、checkout を消し、名前の場所を quarantine していない。 */
+function expectReleased(db: Db, task: Task, ws: WorkspaceConfig, place: RunPlace): void {
+  expect(listEvents(db, task.id).some(({ kind }) => kind === "task_checkout_release_failed")).toBe(false);
+  expect(workspaceNeedsHuman(db, ws.name)).toBe(false);
+  expect(existsSync(place.path)).toBe(false);
+}
+
+// ADR 0425 決定3: 退避の tip の取り込みも同じ1つの段を通る
+it.each([
+  ["名前の場所の履歴から再現した tree", "missing"],
+  ["名前の場所の履歴から再現した tree", "corrupt"],
+  ["門が一度運んだ tip の tree", "corrupt"],
+  ["祖先の commit", "missing"],
+  ["祖先の commit", "corrupt"],
+] as const)("worker が commit した tip の%sが名前の場所で %s なら、未決着の解放は入れ直して tip を運び、checkout を消す(ADR 0425 決定1〜3)", async (target, damage) => {
+  const { db, task, ws, place } = await pickedUpSession("work", withHistoryOnlyBlob);
+  try {
+    const ancestor = target === "祖先の commit" ? damageNamedLoose(ws, "HEAD", damage) : undefined;
+    commitWork(place.path, "old.txt", "only in the history\n");
+    if (target === "門が一度運んだ tip の tree") gateFetch(db, place, task);
+    const tip = git(place.path, "rev-parse", "HEAD");
+    const damaged = ancestor ?? damageNamedLoose(ws, target === "門が一度運んだ tip の tree" ? `${tip}^{tree}` : "HEAD~1^{tree}", damage);
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(tip);
+    expectReleased(db, task, ws, place);
+    expectReinserted(ws, damaged, damage);
+  } finally {
+    db.close();
+  }
+});
+
+/** 名前の場所の `side` に `named.txt` を1 commit 置く —— その tree は task の checkout(保護ブランチの閉包の複製)の外にある。 */
+function withSideTree(named: WorkspaceConfig): void {
+  git(named.path, "checkout", "--quiet", "-b", "side");
+  commitWork(named.path, "named.txt", "only in the named place\n");
+  git(named.path, "checkout", "--quiet", "main");
+}
+
+// ADR 0425 決定1・3: 退避の WIP も同じ段 —— WIP の tree が、worker の tip の閉包の外にある名前の場所の tree を再現する形
+it.each(["missing", "corrupt"] as const)("退避の WIP の tree が名前の場所にだけある tree を再現し、その tree が %s なら、未決着の解放は入れ直して WIP を運ぶ(ADR 0425 決定1)", async (damage) => {
+  const { db, task, ws, place } = await pickedUpSession("work", withSideTree);
+  try {
+    const tip = git(ws.path, "rev-parse", `task/${task.id}`);
+    writeFileSync(join(place.path, "named.txt"), "only in the named place\n");
+    const tree = damageNamedLoose(ws, "side^{tree}", damage);
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}^`)).toBe(tip);
+    expect(git(ws.path, "rev-parse", `task/${task.id}^{tree}`)).toBe(tree);
+    expectReleased(db, task, ws, place);
+    expectReinserted(ws, tree, damage);
+  } finally {
+    db.close();
+  }
+});
+
+// ADR 0425 決定2: 同じ秒・同じ tree・同じ親の WIP は名前の場所に既にある commit になる —— その tree の損傷も入れ直す
+it("退避の WIP が名前の場所に既にある commit と同じで、その tree が名前の場所で壊れていれば、未決着の解放は入れ直して運ぶ(ADR 0425 決定2)", async () => {
+  await fixGitDates();
+  const { db, task, ws, place } = await pickedUpSession("work", withSideTree);
+  try {
+    const tip = git(ws.path, "rev-parse", `task/${task.id}`);
+    writeFileSync(join(place.path, "named.txt"), "only in the named place\n");
+    const tree = git(ws.path, "rev-parse", "side^{tree}");
+    // 前に同じ秒で運んだ WIP —— 盤面と同じ名義・日付・件名で書く
+    const wip = boardGit(ws.path, "commit-tree", tree, "-p", tip, "-m", `WIP: task ${task.id} — ${task.title}`);
+    damageNamedLoose(ws, tree, "corrupt");
+
+    releaseWorkspace(db, place, task, NOW);
+
+    expect(git(ws.path, "rev-parse", `task/${task.id}`)).toBe(wip);
+    expectReleased(db, task, ws, place);
+    expectReinserted(ws, tree, "corrupt");
   } finally {
     db.close();
   }

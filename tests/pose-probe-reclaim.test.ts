@@ -70,19 +70,19 @@ async function pickedRoot(name: string) {
 
 it("面接室の object が壊れていれば、pose_probe は自分で quarantine せずに failure question を登録して回収し、後始末が面接室を quarantine する —— question は2枚(ADR 0424 決定2・3 の前提)", async () => {
   const { board, root, session, room, checkout } = await pickedRoot("pose-reclaim-damaged-room");
-  // 前の出題の写しを面接室に置き、worktree がその tree を再現したまま、面接室の側のその tree を壊す(#3814 の形)
+  // 前の出題の写しを面接室に置き、面接室の側のその commit を壊す —— 次の写しの閉包の外なので、運ぶ段は入れ直さない(ADR 0425 決定1)。
+  // 写しの閉包の中の損傷(#3814 の形)は運ぶ段が直す —— tests/pickup-clean-tree.test.ts
   writeFileSync(join(checkout, "notes.txt"), "not committed\n");
   const first = commitRoomCopy(board.db, taskRunPlaceForBoard(board.db, getTask(board.db, root.id)!, undefined)!, root.id);
-  // commit の日付は秒の粒度 —— 同じ秒だと出題し直しは1回目と同じ commit を借りて運ぶものが無い
+  // commit の日付は秒の粒度 —— 次の秒の出題し直しは別の commit を運ぶ
   await new Promise((resolve) => setTimeout(resolve, 1050 - (Date.now() % 1000)));
-  const tree = git(room, "rev-parse", `${first}^{tree}`);
-  const loose = join(room, ".git", "objects", tree.slice(0, 2), tree.slice(2));
+  const loose = join(room, ".git", "objects", first.slice(0, 2), first.slice(2));
   rmSync(loose);
   writeFileSync(loose, "not zlib");
 
   const res = await callAsTask(board, root.id, "pose_probe", POSE);
 
-  await expectPoseReclaimed(board, root.id, session, res, tree);
+  await expectPoseReclaimed(board, root.id, session, res, first);
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeDefined();
   expect((await questions(board)).filter((question) => question.status === "todo")).toHaveLength(2);
 });
