@@ -1,5 +1,7 @@
 # 人間面は credential で守る: worker のネットワーク到達を塞ぐ設計をアプリ層の認証に置き換える
 
+**Status 追記: Worker MCP のアクセス制御の節(「`?task=` が slot の現在タスクと一致すること」)は [ADR 0439](0439-a-worker-mcp-call-is-the-workers-only-with-its-spawns-tally-and-the-tally-never-reaches-the-workers-tools.md) が覆す(2026-11-27、issue #3978)** —— ADR 0437 で出所 `worker` が worker の判断の判定になり、門は書き手を証明しなければならなくなった。根拠は spawn ごとの合札で、task id の一致ではない。人間面を credential で守る決定は変わらない。
+
 issue #140 の再グリリング(2026-07-29)で決定。**ADR 0034 を supersede する** — 不変条件の枠組みは受け継ぐが、執行の主機構・極性・二段構造のすべてが実機実験の結果で置き換わった。0034 は却下オプションの記録として無傷で残す。ただし却下理由が全部生き残るわけではない — pf / nftables と WebFetch 丸ごと deny の却下理由は今も有効だが、**netns の却下理由(「macOS に無く dev/prod 乖離原則に正面衝突」)は実測が逆を示した**。Linux backend の netns は本番 Pi の不変条件を追加設定ゼロで支えている当のものであり、本 ADR の canary 節もその事実に依存している。生き残るのは「tidepool が**自前で** netns 層を足す手は採らない」という狭い主張だけである。
 
 **不変条件は 0034 のまま宛先で定義する** — 「worker セッションからは、ツール・経路を問わず人間面(WebUI / /api / 管理MCP)に到達できない」。**ただし 0034 が割った二段(操作 = 完全閉鎖 / 読取 = 監査つき受容)を一段に戻す**。読取も閉じる。credential は経路を問わないので、WebFetch 経由の読取残余も同じ一枚で消える — 0034 が読取を受容したのは「Bash はフィルタで塞げるが WebFetch はサンドボックスの外を通る」という機構の非対称が理由であり、認証にはその非対称が無い。
