@@ -1,24 +1,24 @@
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { cpSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
+import { listEvents } from "../src/events.js";
 import { GhCliClient, type GitHubClient, type IssueRef } from "../src/github.js";
 import { type GitHubAuth, workspaceNetworkDestination } from "../src/github-auth.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { checkoutPickupPredicates } from "../src/pickup-predicates.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { questionKindOf } from "../src/question-kind.js";
-import { repositoryLabel } from "../src/repo-access.js";
 import { startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { getTask, listChildren, pickupTask, registerFailureQuestion, registerTask, type Task } from "../src/tasks.js";
+import { getTask, listChildren, pickupTask, poseProbe, registerFailureQuestion, registerTask, type Task } from "../src/tasks.js";
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
-import { DeclaredRepoMismatchError, fireBeforeOpenPredicates, firePickupPredicates, PickupGateError, pickupRepoCheck, releaseWorkspace, type WorkspaceConfig, WorkspaceRepoMismatchError, withRememberedRepoCheck } from "../src/workspace.js";
+import { commitRoomCopy, DeclaredRepoMismatchError, declaredRepoDisagreement, fireBeforeOpenPredicates, firePickupPredicates, holdsBaseline, openInterviewRoom, PickupGateError, pickupEntrance, pickupGate, pickupRepoCheck, releaseWorkspace, type WorkspaceConfig, WorkspaceRepoMismatchError, withRememberedRepoCheck } from "../src/workspace.js";
 import { awaitWindow, FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, MATCHING_GH, makeRemoteBackedWorkspace, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
-import { commitThroughTaskCheckout, fetchHeldAtToken, landingWork, openBoard, type RegisteredReef, registeredReef, reRegister } from "./landing-fixture.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, MATCHING_GH, makeRemoteBackedWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, restedInterviewRoom, shimGit } from "./harness.js";
+import { commitThroughTaskCheckout, fetchHeldAtToken, landingWork, openBoard, type RegisteredReef, reDeclareOutsideDoor, registeredReef, reRegister } from "./landing-fixture.js";
 import { setWorkspaceEntry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -45,6 +45,7 @@ function schedulerOn(db: Db, clock: FakeClock, workspace: WorkspaceConfig, resol
 }
 
 const openQuestions = (db: Db, task: Task) => listChildren(db, task.id).filter(({ type, status }) => type === "question" && status === "todo");
+const networkTo = (calls: () => Array<{ args: string[] }>, repo: string) => calls().filter(({ args }) => (args.includes("ls-remote") || args.includes("fetch")) && args.includes(repo));
 
 // ADR 0419 決定1・5: every path stops with the same one question, whose only exit is cancel, and leaves the task as it was.
 function expectRepoFailure(db: Db, task: Task, recorded: string, declared: string, worker: ScriptedWorker) {
@@ -58,9 +59,11 @@ function expectRepoFailure(db: Db, task: Task, recorded: string, declared: strin
   expect(questionKindOf(question!)).toMatchObject({ kind: "failure", cancel_option: "abandon" });
   expect(question!.question_items?.[0]?.options).toEqual(["abandon"]);
   expect(getTask(db, task.id)!.status).toBe("todo");
-  const declaredRepo = db.prepare("SELECT declared_repo FROM tasks WHERE id = ?").pluck().get(task.id) as string;
-  expect(repositoryLabel(JSON.parse(declaredRepo) as string)).toBe(recorded);
-  expect(db.prepare("SELECT COUNT(*) FROM events WHERE task_id = ? AND kind = 'spawn_failed'").pluck().get(task.id)).toBe(0);
+  // the record still names the recorded repo against the new declaration: not rewritten
+  expect(declaredRepoDisagreement(db, task.id, { name: "reef", path: "/", repo: declared })).toContain(`recorded repo ${recorded}`);
+  expect(listEvents(db, task.id).filter(({ kind }) => kind === "spawn_failed")).toEqual([]);
+  // ADR 0399 決定5: the stopped task leaves the new registration no first baseline
+  expect(holdsBaseline(db, "reef")).toBe(false);
   expect(worker.started).toEqual([]);
   expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
   return question!;
@@ -92,7 +95,7 @@ it("別の repo で登録し直した名前へ再 pickup すると、その task
   await scheduler.rerunPoll();
 
   const question = expectRepoFailure(db, task, old.repo!, moved.repo!, worker);
-  expect(calls().filter(({ args }) => (args.includes("ls-remote") || args.includes("fetch")) && args.includes(moved.repo!))).toEqual([]);
+  expect(networkTo(calls, moved.repo!)).toEqual([]);
   const answers = { db, landing: unusedLanding, pollNow: scheduler.pollNow };
   await expect(submitAnswer(answers, question, ["retry"], undefined, () => clock.now(), "webui")).rejects.toThrow();
 
@@ -127,7 +130,7 @@ it("token を待つ間に扉で別の repo へ登録し直しても、その rep
   await picking;
 
   expectRepoFailure(db, task, old.repo!, moved.repo!, worker);
-  expect(calls().filter(({ args }) => (args.includes("ls-remote") || args.includes("fetch")) && args.includes(moved.repo!))).toEqual([]);
+  expect(networkTo(calls, moved.repo!)).toEqual([]);
 });
 
 class DestinationCheckingGitHub extends FakeGitHubClient {
@@ -215,9 +218,10 @@ it("登録し直した後に旧い repo の closed が届いても、issue の�
   expectRepoFailure(db, task, old.repo!, moved.repo!, worker);
 });
 
-/** 同じ checkout を origin を向け直して別の repo で登録し直す。`between` は登録の前に checkout を崩す。 */
 type Checkouts = { old: WorkspaceConfig; moved: WorkspaceConfig; publishOld: Publish; publishMoved: Publish };
 type Publish = Awaited<ReturnType<typeof makeRemoteBackedWorkspace>>["publish"];
+
+/** 同じ checkout を origin を向け直して別の repo で登録し直す。`between` は登録の前に checkout を崩す。 */
 
 async function movedInPlace(name: string, { issue = false, between = (_checkouts: Checkouts) => {} } = {}) {
   const { db, clock } = await openBoard();
@@ -233,7 +237,6 @@ async function movedInPlace(name: string, { issue = false, between = (_checkouts
   return { db, clock, old, moved, reef, task };
 }
 
-const networkTo = (calls: () => Array<{ args: string[] }>, repo: string) => calls().filter(({ args }) => (args.includes("ls-remote") || args.includes("fetch")) && args.includes(repo));
 
 it.each(["preparation", "issue"] as const)("残った head-repo remote があれば、%s の経路でも workspace の Quarantine が先に立ち、食い違いの question は出ない (ADR 0419 決定1、#3922)", async (path) => {
   const { db, clock, moved, reef, task } = await movedInPlace(`leftover-${path}`, {
@@ -253,6 +256,35 @@ it.each(["preparation", "issue"] as const)("残った head-repo remote があれ
   expect(github.issueFetches).toEqual([]);
   expect(networkTo(calls, moved.repo!)).toEqual([]);
   expect(worker.started).toEqual([]);
+});
+
+it("issue を読む await の間に path だけを手で書き換えても、準備は今の場所で入口の比較を使い、workspace の Quarantine を立てずに走る (ADR 0419 決定3、#3922)", async () => {
+  const { db, clock } = await openBoard();
+  const { workspace: old } = await makeRemoteBackedWorkspace("path-edit");
+  const reef = await registeredReef(old);
+  const task = registerTask(db, { type: "work", workspace: "reef", github_issue_number: 49 }, clock.now(), ...HUMAN_WEBUI);
+  await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), task, "work.txt", "from the first pickup\n");
+  const copy = `${old.path}-copy`;
+  const github = new DestinationCheckingGitHub();
+  const window = awaitWindow();
+  github.scriptIssueGate(window.hold());
+  github.scriptIssue(49, { title: "the issue", body: "the work", comments: [] });
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const { scheduler, worker } = schedulerOn(db, clock, reef.resolve("reef"), reef.resolve, reef.admin.workspacesBaseDir, { github });
+
+  const picking = scheduler.rerunPoll();
+  try {
+    await vi.waitFor(() => expect(github.issueFetches).toEqual([{ path: old.path, number: 49 }]));
+    cpSync(old.path, copy, { recursive: true });
+    setWorkspaceEntry(reef.registryDir, "reef", "path", copy);
+  } finally {
+    window.open();
+  }
+  await picking;
+
+  expect(openQuarantineQuestion(db, "workspace", "reef")).toBeUndefined();
+  expect(openQuestions(db, task)).toEqual([]);
+  await vi.waitFor(() => expect(worker.started.map(({ id }) => id)).toEqual([task.id]));
 });
 
 it("`.git` がディレクトリでない名前の場所も、食い違いより先に workspace の Quarantine が立つ (ADR 0419 決定1、#3922)", async () => {
@@ -291,9 +323,10 @@ it("分岐した main は網に出ないと測れないので、食い違いの 
 
 it.each(["entrance", "parent read"] as const)("親の issue が別の workspace にある子の再 pickup は、%s で食い違いを読んでも同じ question で止まる (ADR 0419 決定1・2、#3922)", async (when) => {
   const { db, clock } = await openBoard();
-  const { workspace: old } = await makeRemoteBackedWorkspace(`cross-${when}-old`.replace(" ", "-"));
-  const { workspace: moved } = await makeRemoteBackedWorkspace(`cross-${when}-moved`.replace(" ", "-"));
-  const { workspace: lagoon } = await makeRemoteBackedWorkspace(`cross-${when}-lagoon`.replace(" ", "-"));
+  const name = `cross-${when.replace(" ", "-")}`;
+  const { workspace: old } = await makeRemoteBackedWorkspace(`${name}-old`);
+  const { workspace: moved } = await makeRemoteBackedWorkspace(`${name}-moved`);
+  const { workspace: lagoon } = await makeRemoteBackedWorkspace(`${name}-lagoon`);
   const reef = await registeredReef(old);
   setWorkspaceEntry(reef.registryDir, "lagoon", "path", lagoon.path);
   setWorkspaceEntry(reef.registryDir, "lagoon", "repo", lagoon.repo!);
@@ -307,7 +340,7 @@ it.each(["entrance", "parent read"] as const)("親の issue が別の workspace 
   else await reRegisterBeforeRequeue(db, reef, moved, [parent, task]);
   vi.spyOn(console, "error").mockImplementation(() => {});
   const { scheduler, worker } = schedulerOn(db, clock, reef.resolve("reef"), reef.resolve, reef.admin.workspacesBaseDir, { github });
-  const pickups = () => db.prepare("SELECT COUNT(*) FROM events WHERE task_id = ? AND kind = 'task_picked_up'").pluck().get(task.id);
+  const pickups = () => listEvents(db, task.id).filter(({ kind }) => kind === "task_picked_up").length;
   const pickedBefore = pickups();
 
   const picking = scheduler.rerunPoll();
@@ -325,6 +358,39 @@ it.each(["entrance", "parent read"] as const)("親の issue が別の workspace 
   // the parent's issue read stops it before pickupTask, not the preparation's floor
   expect(pickups()).toBe(pickedBefore);
   expectRepoFailure(db, task, old.repo!, moved.repo!, worker);
+});
+
+it.each(["broken", "intact"] as const)("root 配下の監査 review は比べられ、読む面接室が %s なら、壊れた面接室の止まりが食い違いより先に立つ (ADR 0419 決定1、#3922)", async (roomIs) => {
+  const { db, clock } = await openBoard();
+  const { workspace: old } = await makeRemoteBackedWorkspace("audit-room-old");
+  const { workspace: moved } = await makeRemoteBackedWorkspace("audit-room-moved");
+  const reef = await registeredReef(old);
+  const real = reef.resolve("reef");
+  const base = await tempDir("audit-room-rooms-");
+  const root = registerTask(db, {
+    type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: "reef",
+    interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }],
+  }, clock.now(), ...HUMAN_WEBUI);
+  const rootReads = await pickupGate(db, real, root, base, () => clock.now());
+  openInterviewRoom(db, root, base, clock.now());
+  const { room, place: rootPlace } = await pickUpInterviewRoot(db, root, real, { reads: rootReads });
+  const audit = poseProbe(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", clock.now(), "worker", commitRoomCopy(db, rootPlace, root.id));
+  releaseWorkspace(db, rootPlace, root, clock.now());
+  const auditPlace = await prepareAtPickup(db, real, audit, { reads: await pickupGate(db, real, audit, base, () => clock.now()), workspacesBaseDir: base });
+  releaseWorkspace(db, auditPlace, getTask(db, audit.id)!, clock.now());
+  await reDeclareOutsideDoor(db, reef, moved);
+  if (roomIs === "broken") rmSync(room.path, { recursive: true, force: true });
+
+  const entering = pickupEntrance(db, getTask(db, audit.id)!, reef.resolve, base, () => clock.now());
+
+  if (roomIs === "broken") {
+    await expect(entering).rejects.toBeInstanceOf(PickupGateError);
+    await expect(entering).rejects.toMatchObject({ place: { name: root.id } });
+    expect(openQuestions(db, audit)).toEqual([]);
+  } else {
+    await expect(entering).resolves.toEqual({ outcome: "stopped" });
+    expect(openQuestions(db, audit).map(({ purpose }) => purpose)).toEqual([expect.stringContaining(`now declares repo ${moved.repo}`)]);
+  }
 });
 
 it("面接室の受験者は宣言の repo の記録を持たなくても、失敗の question の retry で再開する (ADR 0399 決定3)", async () => {

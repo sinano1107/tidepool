@@ -73,9 +73,9 @@ import {
   type PickupStopped,
   parentOrOrigin,
   pickupTask,
-  registerRepoDisagreementQuestion,
   resolveTaskAgent,
   settleQuestionAsObserved,
+  stopForRepoDisagreement,
   type Task,
   type TaskContent,
   unrowedExaminees,
@@ -98,6 +98,8 @@ import {
   buildWorkspaceResolver,
   CheckoutHostError,
   DeclaredRepoMismatchError,
+  type EnteredPlace,
+  enteredAt,
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
   NoReturnLineageError,
@@ -115,6 +117,7 @@ import {
   UnknownWorkspaceError,
   type WorkspaceConfig,
   WorkspaceRepoMismatchError,
+  type WorkspaceResolver,
 } from "./workspace.js";
 
 export const HOURLY = 60 * 60 * 1000;
@@ -307,10 +310,11 @@ export interface Scheduler {
 }
 
 /** task の性質の門の答え(ADR 0328 決定6): 通す / この head を外す / GitHub が読めなかった —— 外す・計測・log は heads ループが行う。
- *  drift と Gone は門が記録し、task の repo の食い違いは head の確認と合わせて loop で記録する。 */
+ *  drift と Gone は門が記録する。task の repo の食い違いは入口の読みが記録し、`repo` は入口の後の await で読んだ食い違いの中断だけ ——
+ *  loop がそれを入口と同じ止まり(`stopForRepoDisagreement`)にする(ADR 0419 決定1・2)。 */
 type GateVerdict<T> = { pass: T } | { skip: "head" } | { skip: "gitHub"; ref: IssueRef; error: unknown } | { skip: "repo"; error: DeclaredRepoMismatchError };
 /** 門を通った head が spawn へ運ぶもの。 */
-type TaskGated = { content: Partial<TaskContent>; parentBriefing: ParentBriefing | undefined; entered: WorkspaceConfig | undefined };
+type TaskGated = { content: Partial<TaskContent>; parentBriefing: ParentBriefing | undefined; entered: EnteredPlace | undefined };
 
 /** poll 1回の結末: 本体に入って投げずに終わった / 投げた / 門で返った(その理由)。 */
 export type PollOutcome = { outcome: "succeeded" } | { outcome: "threw"; message: string } | { outcome: "blocked"; reason: string };
@@ -556,13 +560,14 @@ export function startScheduler(deps: {
     if (unreclaimed !== undefined) return `${unreclaimed} has not been observed empty — pickup waits`;
   }
 
-  /** ADR 0419 決定1・3: the head's pickup entrance, before its issue reads and `pickupTask`. Passes the compared place (undefined: not compared). */
-  async function pickupEntranceOf(head: Task): Promise<GateVerdict<WorkspaceConfig | undefined>> {
+  /** ADR 0419 決定1・3: the head's pickup entrance, before its issue reads and `pickupTask`. Passes the entrance's comparison (undefined: not compared). */
+  async function pickupEntranceOf(head: Task): Promise<GateVerdict<EnteredPlace | undefined>> {
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     if (!resolve) return { pass: undefined };
     try {
-      const entered = pickupEntrance(db, head, resolve, () => clock.now(), boardState);
-      return entered ? { pass: entered.place } : { skip: "head" };
+      const entrance = await pickupEntrance(db, head, resolve, resolveWorkspacesBaseDir(workspacesDir), () => clock.now(), boardState);
+      if (entrance.outcome === "stopped") return { skip: "head" };
+      return { pass: entrance.outcome === "compared" ? entrance.entered : undefined };
     } catch (err) {
       if (!(err instanceof PickupGateError)) throw err;
       await quarantineWithRepoAccessGuidance(err.place, err, () => true);
@@ -570,14 +575,18 @@ export function startScheduler(deps: {
     }
   }
 
-  /** ADR 0399 決定3・5: a parent's issue in another workspace is read there, and the read also compares the head's own place. */
-  function issueWorkspaceAtPickup(entered: WorkspaceConfig | undefined, issueWorkspace: WorkspaceConfig): WorkspaceConfig {
+  /** ADR 0399 決定3・5: the issue read's place, looked up now, compares the head with the entrance's comparison —— a parent's issue in
+   *  another workspace is read there, and the read also compares the head's own place. undefined: the head's name drifted. */
+  function issueWorkspaceAtPickup(entered: EnteredPlace | undefined, issueWorkspace: WorkspaceConfig, resolve: WorkspaceResolver): WorkspaceConfig | undefined {
     if (!entered) return issueWorkspace;
-    if (entered.name === issueWorkspace.name) return entered;
+    if (entered.name === issueWorkspace.name) return enteredAt(entered, issueWorkspace);
+    const own = resolveOrQuarantine(db, resolve, entered.name, clock.now());
+    if (!own) return undefined;
+    const checked = enteredAt(entered, own);
     return {
       ...issueWorkspace,
       checkDeclaredRepo: (current) => {
-        workspaceNetworkDestination(entered);
+        workspaceNetworkDestination(checked);
         issueWorkspace.checkDeclaredRepo?.(current);
       },
     };
@@ -602,7 +611,7 @@ export function startScheduler(deps: {
     setting: ExecutionSetting,
     content: Partial<TaskContent>,
     parentBriefing: ParentBriefing | undefined,
-    entered: WorkspaceConfig | undefined,
+    entered: EnteredPlace | undefined,
     onPicked: (pickupEventId: number) => void,
   ): Promise<(() => void) | void> {
     // resolveTaskAgent is the three-value read GLOSSARY.md's Assignee
@@ -679,7 +688,7 @@ export function startScheduler(deps: {
           return stopped(quarantineWorkspace(db, interviewRootIdOf(db, picked)!, err, clock.now()));
         }
         try {
-          await prepareWorkspaceAtPickup(db, entered ?? place, picked, {
+          await prepareWorkspaceAtPickup(db, entered ? enteredAt(entered, place) : place, picked, {
             githubAuth, live, reads: checks, realEnvironment: picked.type === "interview" ? resolved : undefined,
             workspacesBaseDir: base, now: () => clock.now(), resolveRegistered: resolveWorkspace, defaultWorkspaceName: workspace?.name,
           });
@@ -761,7 +770,7 @@ export function startScheduler(deps: {
    *  worker or its memory injection). The gone-branch skips the head after
    *  registering the failure question, unless a human door changed the head
    *  meanwhile. */
-  async function issuePickupGate(head: Task, entered: WorkspaceConfig | undefined): Promise<GateVerdict<Partial<TaskContent>>> {
+  async function issuePickupGate(head: Task, entered: EnteredPlace | undefined): Promise<GateVerdict<Partial<TaskContent>>> {
     if (head.github_issue_number == null || !github) return { pass: {} };
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     // resolver が無ければ GitHub は読まれず保存済みの文面が返る —— 答えた会計に数えない
@@ -769,7 +778,7 @@ export function startScheduler(deps: {
     // board-driven async workspace use: registry drift quarantines the name
     // (ADR 0009) and the loop re-reads the stops before the next head
     const resolved = resolveOrQuarantine(db, resolve, head.workspace, clock.now());
-    const checked = resolved && issueWorkspaceAtPickup(entered, resolved);
+    const checked = resolved && issueWorkspaceAtPickup(entered, resolved, resolve);
     if (!checked) return { skip: "head" };
     const ref = { workspace: checked, number: head.github_issue_number };
     const read = await readGitHub(contentSourceFor(head, github, () => ref.workspace).expand(), checked);
@@ -834,7 +843,7 @@ export function startScheduler(deps: {
 
   /** 親の issue の死は子の失敗ではない。文面を読める closed は保持し、not_found だけ空にする(ADR 0321 決定3・5)。
    *  分解元つきの根は分解元を親として読む(ADR 0384 決定4・5)。 */
-  async function parentBriefingAtPickup(head: Task, entered: WorkspaceConfig | undefined): Promise<GateVerdict<ParentBriefing | undefined>> {
+  async function parentBriefingAtPickup(head: Task, entered: EnteredPlace | undefined): Promise<GateVerdict<ParentBriefing | undefined>> {
     const parentId = parentOrOrigin(head).taskId;
     const parent = parentId && getTask(db, parentId);
     if (!parent) return { pass: undefined };
@@ -862,7 +871,7 @@ export function startScheduler(deps: {
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     if (!resolve) return { pass: stored };
     const resolved = resolveOrQuarantine(db, resolve, parent.workspace, clock.now());
-    const checked = resolved && issueWorkspaceAtPickup(entered, resolved);
+    const checked = resolved && issueWorkspaceAtPickup(entered, resolved, resolve);
     if (!checked) return { skip: "head" };
     const ref = { workspace: checked, number: parent.github_issue_number };
     const read = await readGitHub(github.getIssueWithState(ref), checked);
@@ -1175,13 +1184,7 @@ export function startScheduler(deps: {
           // ADR 0402 決定4: 版の不一致は天候ではない —— 展開失敗の streak に数えず、question は「gh の版」が持つ
           if (!(verdict.error instanceof GhVersionError)) issueExpansionFailed(head.id, verdict.ref, verdict.error);
         } else if (verdict.skip === "repo") {
-          const candidate = head;
-          db.transaction(() => {
-            const current = getTask(db, candidate.id);
-            if (current?.status !== "todo" || current.assignee !== candidate.assignee || workspaceNameOf(current) !== selectedWorkspaceName) return;
-            if (candidate.workspace !== null && current.workspace !== candidate.workspace) return;
-            registerRepoDisagreementQuestion(db, current, verdict.error.message, clock.now());
-          })();
+          stopForRepoDisagreement(db, head, selectedWorkspaceName, verdict.error.message, clock.now());
         } else stopped = quarantineStops(db);
         head = nextHead();
       }

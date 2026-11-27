@@ -158,13 +158,13 @@ import {
   openLocalMergeQuestionIds,
   readableInterviewRooms,
   registerFailureQuestion,
-  registerRepoDisagreementQuestion,
   registerTask,
   releaseOwedBy,
   retireLandingDecisions,
   sessionReadCheckouts,
   sessionRealEnvironmentCheckout,
   settledNoReturnAncestorOfReview,
+  stopForRepoDisagreement,
   subtreeSql,
   type Task,
   type TaskType,
@@ -3672,38 +3672,47 @@ export function pickupRepoCheck(db: Db, task: Task, now: () => Date, resolveRegi
   return (workspace: WorkspaceConfig) => withDeclaredRepoCheck(db, withRememberedRepoCheck(db, workspace, now, resolveRegistered), task.id);
 }
 
-/** ADR 0419 決定1・3: the pickup entrance. A compared task (`pickupRepoCheck`) gets the place its issue reads and its preparation use —— it
- *  compares again at every destination read (ADR 0399 決定3) —— or, when its record disagrees with the declaration, the entrance writes
- *  its one stop and returns undefined: no network, no record, no workspace Quarantine. The before-open predicates run first, so a
- *  workspace measured broken without the network stops as the workspace (`PickupGateError`); a diverged main needs the fetch and is
- *  measured by a later pickup (#3922). Any other task gets `{}` and is not resolved here. undefined: stopped, a drifted name included. */
-export function pickupEntrance(
+/** The pickup entrance's outcome: the task is not compared (Interview tasks, a task without a task branch —— the first cut is #3924), it
+ *  is compared (`entered` holds the comparison), or it stopped —— its disagreement question was written, or its name drifted. */
+export type PickupEntrance = { outcome: "not compared" } | { outcome: "compared"; entered: EnteredPlace } | { outcome: "stopped" };
+/** The entrance's comparison, carried to each place a pickup uses (`enteredAt`). */
+export type EnteredPlace = Pick<WorkspaceConfig, "name"> & Required<Pick<WorkspaceConfig, "checkRememberedRepo" | "checkDeclaredRepo">>;
+
+/** ADR 0419 決定1・3: the pickup entrance. A compared task (`pickupRepoCheck`) gets the comparison its issue reads and its preparation
+ *  use —— it compares again at every destination read (ADR 0399 決定3) —— or, when its record disagrees with the declaration, the entrance
+ *  writes its one stop: no network, no record, no workspace Quarantine. The before-open predicates of every place the pickup gate opens
+ *  run first, so a place measured broken without the network stops as that place (`PickupGateError`); a diverged main needs the fetch
+ *  and is measured by a later pickup (#3922). A task not compared is not resolved here. */
+export async function pickupEntrance(
   db: Db,
   task: Task,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
+  workspacesBaseDir: string,
   now: () => Date,
   fixedPoints?: BoardStatePath[],
-): { place?: WorkspaceConfig } | undefined {
+): Promise<PickupEntrance> {
   const guard = pickupRepoCheck(db, task, now, resolve);
-  if (!guard) return {};
+  if (!guard) return { outcome: "not compared" };
   const place = resolveOrQuarantine(db, resolve, derivedWorkspace(db, task), now());
-  if (!place) return undefined;
-  // the failed place carries no comparison, so the Quarantine's repair guidance cannot turn into the task's stop
-  const remembered = withRememberedRepoCheck(db, place, now, resolve);
-  fireBeforeOpenPredicates(remembered, checkoutPickupPredicates(remembered, fixedPoints));
-  const checked = guard(place);
-  const disagreement = declaredRepoDisagreement(db, task.id, { ...checked.checkRememberedRepo!(checked), name: checked.name });
-  if (disagreement === undefined) return { place: checked };
-  db.transaction(() => {
-    const row = getTask(db, task.id);
-    if (row?.status === "todo" && row.assignee === task.assignee) registerRepoDisagreementQuestion(db, row, disagreement, now());
-  })();
+  if (!place) return { outcome: "stopped" };
+  // ADR 0419 決定1 / #3922: the gate's places carry no comparison, so a Quarantine's repair guidance cannot turn into the task's stop
+  await pickupGate(db, withRememberedRepoCheck(db, place, now, resolve), task, workspacesBaseDir, now, fixedPoints);
+  const entered = guard(place);
+  const disagreement = declaredRepoDisagreement(db, task.id, { ...entered.checkRememberedRepo(entered), name: entered.name });
+  if (disagreement === undefined) return { outcome: "compared", entered };
+  stopForRepoDisagreement(db, task, place.name, disagreement, now());
+  return { outcome: "stopped" };
+}
+
+/** `place`, looked up where it is used, with the entrance's comparison —— the comparison comes only from the entrance. */
+export function enteredAt(entered: EnteredPlace, place: WorkspaceConfig): WorkspaceConfig {
+  return { ...place, checkRememberedRepo: entered.checkRememberedRepo, checkDeclaredRepo: entered.checkDeclaredRepo };
 }
 
 /** ADR 0399 決定3 / ADR 0378 決定7: every destination read for `taskId` compares its declared repo and head repo records with the
  *  rechecked declaration, in the same synchronous section as the read and before the network. It runs after the remembered-repo
  *  check, so a hand-edited `repo:` stays the workspace's stop (ADR 0378 決定6・8). */
-export function withDeclaredRepoCheck<T extends WorkspaceConfig>(db: Db, workspace: T, taskId: string): T {
+export function withDeclaredRepoCheck<T extends WorkspaceConfig>(db: Db, workspace: T, taskId: string): T & Required<Pick<WorkspaceConfig, "checkDeclaredRepo">> {
   return {
     ...workspace,
     checkDeclaredRepo: (current) => {

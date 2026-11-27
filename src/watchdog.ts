@@ -232,7 +232,11 @@ export function recordContainerHaltHandler(
  *  上限到達による中断と違い、記録(failure question)を回収済み観測の**前**に置く ——
  *  escalate verb と同じ順で、後始末中の status は `todo` になり、経路は `spawn_failed` の event から
  *  process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)。process を1つも持たない session
- *  なので、容器は空のまま強制回収を撃つ。 */
+ *  なので、容器は空のまま強制回収を撃つ。
+ *
+ *  4つ目の利用者は spawn の失敗ではない: scheduler が `start` の前に捕まえる、入口の後の await での repo の食い違い
+ *  (`kind: "repo-disagreement"`、ADR 0419 決定1・2)。`spawn_failed` は書かず、process の無い証拠には
+ *  `pickup_stopped_by_repo_disagreement` を書き、question は入口と同じ食い違いの question にする。 */
 export function spawnFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
@@ -243,6 +247,7 @@ export function spawnFailureHandler(
 
 function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure, now: Date): void {
   if (failure.kind === "repo-disagreement") {
+    appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pickup_stopped_by_repo_disagreement" }, at: now });
     registerRepoDisagreementQuestion(db, task, failure.message, now);
     return;
   }
