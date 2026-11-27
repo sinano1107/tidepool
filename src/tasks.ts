@@ -2086,6 +2086,23 @@ export function registerFailureQuestion(
   );
 }
 
+/** ADR 0419 決定1・5: the one stop of a task whose recorded repo disagrees with the declaration, on every pickup path. Abandon is the
+ *  only exit —— a retry reads the same records, and undoing the re-registration needs the delete door, which refuses this unsettled task. */
+export function registerRepoDisagreementQuestion(db: Db, task: Task, disagreement: string, now: Date): void {
+  registerFailureQuestion(db, task, `the workspace's repo changed under this task: ${task.title}`, disagreement, now, null);
+}
+
+/** The pickup's stop for `candidate`, read for workspace `workspaceName` before `pickupTask` (the entrance, or an issue read after it).
+ *  An await separated the read from this write, so a human door that changed the head meanwhile —— its status, assignee, or the
+ *  workspace it runs in —— leaves nothing written and the next poll reads it again (issue #973). */
+export function stopForRepoDisagreement(db: Db, candidate: Task, workspaceName: string | undefined, disagreement: string, now: Date): void {
+  db.transaction(() => {
+    const row = getTask(db, candidate.id);
+    if (row?.status !== "todo" || row.assignee !== candidate.assignee || derivedWorkspace(db, row) !== workspaceName) return;
+    registerRepoDisagreementQuestion(db, row, disagreement, now);
+  })();
+}
+
 /** The unfinished-descendants sweep shared by both cancel paths (ADR 0006 /
  *  issue #130): collect the target and every one of its unfinished descendants
  *  and mark each cancelled, appending `payload` (built by the caller to name

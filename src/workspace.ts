@@ -136,6 +136,7 @@ import {
   ancestorsSql,
   carriesReadOnly,
   countedAncestors,
+  derivedWorkspace,
   derivedWorkspaceSql,
   fellLostBranchAttachments,
   fillEmptyWorkspace,
@@ -163,6 +164,7 @@ import {
   sessionReadCheckouts,
   sessionRealEnvironmentCheckout,
   settledNoReturnAncestorOfReview,
+  stopForRepoDisagreement,
   subtreeSql,
   type Task,
   type TaskType,
@@ -3273,12 +3275,6 @@ type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
  *  ADR 0351 決定2: 基準は切れない —— 行が無いか NULL なら最初の撮り、あれば盤面が書く前に除外無しで比べる。以後の書き込みは口が畳む。
  *  比較は読む場所の後半(`reads`、ADR 0329 決定10・11)より前 —— 走る場所の違反は読む場所を書く前に止まる。 */
 export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfig, task: Task, board: PickupPreparation): Promise<void> {
-  const checkRepo = pickupRepoCheck(db, task, board.now, board.resolveRegistered);
-  if (checkRepo) {
-    workspace = checkRepo(workspace);
-    // ADR 0399 決定5: a stopped task should not leave the new registration's first baseline behind.
-    if (!holdsBaseline(db, workspace.name)) workspaceNetworkDestination(workspace);
-  }
   // ADR 0411 決定5: task の checkout は閉包を全部持つ複製 —— shallow な名前の場所は、基準の比較か最初の撮り・origin の fetch・タスクブランチの
   // 作成・checkout の作成より前に止める
   assertNotShallow(workspace.path);
@@ -3755,10 +3751,47 @@ export function pickupRepoCheck(db: Db, task: Task, now: () => Date, resolveRegi
   return (workspace: WorkspaceConfig) => withDeclaredRepoCheck(db, withRememberedRepoCheck(db, workspace, now, resolveRegistered), task.id);
 }
 
+/** The pickup entrance's outcome: the task is not compared (Interview tasks, a task without a task branch —— the first cut is #3924), it
+ *  is compared (`entered` holds the comparison), or it stopped —— its disagreement question was written, or its name drifted. */
+export type PickupEntrance = { outcome: "not compared" } | { outcome: "compared"; entered: EnteredPlace } | { outcome: "stopped" };
+/** The entrance's comparison, carried to each place a pickup uses (`enteredAt`). */
+export type EnteredPlace = Pick<WorkspaceConfig, "name"> & Required<Pick<WorkspaceConfig, "checkRememberedRepo" | "checkDeclaredRepo">>;
+
+/** ADR 0419 決定1・3: the pickup entrance. A compared task (`pickupRepoCheck`) gets the comparison its issue reads and its preparation
+ *  use —— it compares again at every destination read (ADR 0399 決定3) —— or, when its record disagrees with the declaration, the entrance
+ *  writes its one stop: no network, no record, no workspace Quarantine. The before-open predicates of every place the pickup gate opens
+ *  run first, so a place measured broken without the network stops as that place (`PickupGateError`); a diverged main needs the fetch
+ *  and is measured by a later pickup (#3922). A task not compared is not resolved here. */
+export async function pickupEntrance(
+  db: Db,
+  task: Task,
+  resolve: (taskWorkspace: string | null) => WorkspaceConfig,
+  workspacesBaseDir: string,
+  now: () => Date,
+  fixedPoints?: BoardStatePath[],
+): Promise<PickupEntrance> {
+  const guard = pickupRepoCheck(db, task, now, resolve);
+  if (!guard) return { outcome: "not compared" };
+  const place = resolveOrQuarantine(db, resolve, derivedWorkspace(db, task), now());
+  if (!place) return { outcome: "stopped" };
+  // ADR 0419 決定1 / #3922: the gate's places carry no comparison, so a Quarantine's repair guidance cannot turn into the task's stop
+  await pickupGate(db, withRememberedRepoCheck(db, place, now, resolve), task, workspacesBaseDir, now, fixedPoints);
+  const entered = guard(place);
+  const disagreement = declaredRepoDisagreement(db, task.id, { ...entered.checkRememberedRepo(entered), name: entered.name });
+  if (disagreement === undefined) return { outcome: "compared", entered };
+  stopForRepoDisagreement(db, task, place.name, disagreement, now());
+  return { outcome: "stopped" };
+}
+
+/** `place`, looked up where it is used, with the entrance's comparison —— the comparison comes only from the entrance. */
+export function enteredAt(entered: EnteredPlace, place: WorkspaceConfig): WorkspaceConfig {
+  return { ...place, checkRememberedRepo: entered.checkRememberedRepo, checkDeclaredRepo: entered.checkDeclaredRepo };
+}
+
 /** ADR 0399 決定3 / ADR 0378 決定7: every destination read for `taskId` compares its declared repo and head repo records with the
  *  rechecked declaration, in the same synchronous section as the read and before the network. It runs after the remembered-repo
  *  check, so a hand-edited `repo:` stays the workspace's stop (ADR 0378 決定6・8). */
-export function withDeclaredRepoCheck<T extends WorkspaceConfig>(db: Db, workspace: T, taskId: string): T {
+export function withDeclaredRepoCheck<T extends WorkspaceConfig>(db: Db, workspace: T, taskId: string): T & Required<Pick<WorkspaceConfig, "checkDeclaredRepo">> {
   return {
     ...workspace,
     checkDeclaredRepo: (current) => {

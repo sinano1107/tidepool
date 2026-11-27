@@ -73,9 +73,9 @@ import {
   type PickupStopped,
   parentOrOrigin,
   pickupTask,
-  registerFailureQuestion,
   resolveTaskAgent,
   settleQuestionAsObserved,
+  stopForRepoDisagreement,
   type Task,
   type TaskContent,
   unrowedExaminees,
@@ -98,13 +98,15 @@ import {
   buildWorkspaceResolver,
   CheckoutHostError,
   DeclaredRepoMismatchError,
+  type EnteredPlace,
+  enteredAt,
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
   NoReturnLineageError,
   openInterviewRoom,
   PickupGateError,
+  pickupEntrance,
   pickupGate,
-  pickupRepoCheck,
   prepareWorkspaceAtPickup,
   quarantineWithRepoAccessGuidance as quarantineWithGuidance,
   quarantineWorkspace,
@@ -308,10 +310,11 @@ export interface Scheduler {
 }
 
 /** task の性質の門の答え(ADR 0328 決定6): 通す / この head を外す / GitHub が読めなかった —— 外す・計測・log は heads ループが行う。
- *  drift と Gone は門が記録し、task の repo の食い違いは head の確認と合わせて loop で記録する。 */
+ *  drift と Gone は門が記録する。task の repo の食い違いは入口の読みが記録し、`repo` は入口の後の await で読んだ食い違いの中断だけ ——
+ *  loop がそれを入口と同じ止まり(`stopForRepoDisagreement`)にする(ADR 0419 決定1・2)。 */
 type GateVerdict<T> = { pass: T } | { skip: "head" } | { skip: "gitHub"; ref: IssueRef; error: unknown } | { skip: "repo"; error: DeclaredRepoMismatchError };
 /** 門を通った head が spawn へ運ぶもの。 */
-type TaskGated = { content: Partial<TaskContent>; parentBriefing: ParentBriefing | undefined };
+type TaskGated = { content: Partial<TaskContent>; parentBriefing: ParentBriefing | undefined; entered: EnteredPlace | undefined };
 
 /** poll 1回の結末: 本体に入って投げずに終わった / 投げた / 門で返った(その理由)。 */
 export type PollOutcome = { outcome: "succeeded" } | { outcome: "threw"; message: string } | { outcome: "blocked"; reason: string };
@@ -557,15 +560,29 @@ export function startScheduler(deps: {
     if (unreclaimed !== undefined) return `${unreclaimed} has not been observed empty — pickup waits`;
   }
 
-  /** ADR 0399 決定3・5: check the selected task at the issue destination read, including when it is reading a parent's briefing. */
-  function issueWorkspaceAtPickup(head: Task, issueWorkspace: WorkspaceConfig, resolve: WorkspaceResolver): WorkspaceConfig | undefined {
-    const guard = pickupRepoCheck(db, head, () => clock.now(), resolve);
-    if (!guard) return issueWorkspace;
-    const name = derivedWorkspace(db, head) ?? workspace?.name ?? null;
-    const place = name === issueWorkspace.name ? issueWorkspace : resolveOrQuarantine(db, resolve, name, clock.now());
-    if (!place) return undefined;
-    const checked = guard(place);
-    if (place.name === issueWorkspace.name) return checked;
+  /** ADR 0419 決定1・3: the head's pickup entrance, before its issue reads and `pickupTask`. Passes the entrance's comparison (undefined: not compared). */
+  async function pickupEntranceOf(head: Task): Promise<GateVerdict<EnteredPlace | undefined>> {
+    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+    if (!resolve) return { pass: undefined };
+    try {
+      const entrance = await pickupEntrance(db, head, resolve, resolveWorkspacesBaseDir(workspacesDir), () => clock.now(), boardState);
+      if (entrance.outcome === "stopped") return { skip: "head" };
+      return { pass: entrance.outcome === "compared" ? entrance.entered : undefined };
+    } catch (err) {
+      if (!(err instanceof PickupGateError)) throw err;
+      await quarantineWithRepoAccessGuidance(err.place, err, () => true);
+      return { skip: "head" };
+    }
+  }
+
+  /** ADR 0399 決定3・5: the issue read's place, looked up now, compares the head with the entrance's comparison —— a parent's issue in
+   *  another workspace is read there, and the read also compares the head's own place. undefined: the head's name drifted. */
+  function issueWorkspaceAtPickup(entered: EnteredPlace | undefined, issueWorkspace: WorkspaceConfig, resolve: WorkspaceResolver): WorkspaceConfig | undefined {
+    if (!entered) return issueWorkspace;
+    if (entered.name === issueWorkspace.name) return enteredAt(entered, issueWorkspace);
+    const own = resolveOrQuarantine(db, resolve, entered.name, clock.now());
+    if (!own) return undefined;
+    const checked = enteredAt(entered, own);
     return {
       ...issueWorkspace,
       checkDeclaredRepo: (current) => {
@@ -594,6 +611,7 @@ export function startScheduler(deps: {
     setting: ExecutionSetting,
     content: Partial<TaskContent>,
     parentBriefing: ParentBriefing | undefined,
+    entered: EnteredPlace | undefined,
     onPicked: (pickupEventId: number) => void,
   ): Promise<(() => void) | void> {
     // resolveTaskAgent is the three-value read GLOSSARY.md's Assignee
@@ -670,7 +688,7 @@ export function startScheduler(deps: {
           return stopped(quarantineWorkspace(db, interviewRootIdOf(db, picked)!, err, clock.now()));
         }
         try {
-          await prepareWorkspaceAtPickup(db, place, picked, {
+          await prepareWorkspaceAtPickup(db, entered ? enteredAt(entered, place) : place, picked, {
             githubAuth, live, reads: checks, realEnvironment: picked.type === "interview" ? resolved : undefined,
             workspacesBaseDir: base, now: () => clock.now(), resolveRegistered: resolveWorkspace, defaultWorkspaceName: workspace?.name,
           });
@@ -683,7 +701,7 @@ export function startScheduler(deps: {
           if (err instanceof FirstCaptureRegistryReadError) throw err;
           // その task だけの失敗(`TASK_FAILURES`)—— 名前の場所を quarantine しない
           if (taskFailureKind(err) !== undefined) throw err;
-          // ADR 0399 決定5: a task's recorded repo disagreement goes to its normal failure question.
+          // ADR 0419 決定2: the task's stop, not the named place's —— the outer catch writes it
           if (err instanceof DeclaredRepoMismatchError) throw err;
           const failedPlace = err instanceof PickupGateError ? err.place : place;
           // ADR 0067 決定2: 修復案内は repo アクセスの失敗の瞬間だけのもの —— 基準の違反には付けず、落ちた場所の名前で止める(受験者は root id、ADR 0276 決定3)
@@ -702,6 +720,8 @@ export function startScheduler(deps: {
       if (!live()) return;
       // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止
       if (err instanceof RecordContainerError) return oneShot(() => onRecordContainerFailed(picked.id, sessionId, err));
+      // ADR 0419 決定1・2: a re-registration in an await after the entrance —— the entrance's stop, returned to todo, no spawn_failed event
+      if (err instanceof DeclaredRepoMismatchError) return oneShot(() => onSpawnFailed(picked.id, sessionId, { error_code: null, message: err.message, kind: "repo-disagreement" }));
       // ADR 0118 / ADR 0294 決定3: worker が1度も走らなかった pickup。観測点がこの event を書き、
       // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす。event の書き込みも一撃の step(#2036)
       const failure = { error_code: null, message: err instanceof Error ? err.message : String(err) };
@@ -750,7 +770,7 @@ export function startScheduler(deps: {
    *  worker or its memory injection). The gone-branch skips the head after
    *  registering the failure question, unless a human door changed the head
    *  meanwhile. */
-  async function issuePickupGate(head: Task): Promise<GateVerdict<Partial<TaskContent>>> {
+  async function issuePickupGate(head: Task, entered: EnteredPlace | undefined): Promise<GateVerdict<Partial<TaskContent>>> {
     if (head.github_issue_number == null || !github) return { pass: {} };
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     // resolver が無ければ GitHub は読まれず保存済みの文面が返る —— 答えた会計に数えない
@@ -758,7 +778,7 @@ export function startScheduler(deps: {
     // board-driven async workspace use: registry drift quarantines the name
     // (ADR 0009) and the loop re-reads the stops before the next head
     const resolved = resolveOrQuarantine(db, resolve, derivedWorkspace(db, head), clock.now());
-    const checked = resolved && issueWorkspaceAtPickup(head, resolved, resolve);
+    const checked = resolved && issueWorkspaceAtPickup(entered, resolved, resolve);
     if (!checked) return { skip: "head" };
     const ref = { workspace: checked, number: head.github_issue_number };
     const read = await readGitHub(contentSourceFor(head, github, () => ref.workspace).expand(), checked);
@@ -803,14 +823,18 @@ export function startScheduler(deps: {
     return { skip: "head" };
   }
 
-  /** task の性質の門を順に通す: issue の展開 → 親の文面。 */
+  /** task の性質の門を順に通す: 入口の読み → issue の展開 → 親の文面。 */
   async function taskGates(head: Task): Promise<GateVerdict<TaskGated>> {
     try {
-      const content = await issuePickupGate(head);
+      const entrance = await pickupEntranceOf(head);
+      if (!("pass" in entrance)) return entrance;
+      const entered = entrance.pass;
+      const content = await issuePickupGate(head, entered);
       if (!("pass" in content)) return content;
-      const parentBriefing = await parentBriefingAtPickup(head);
-      return "pass" in parentBriefing ? { pass: { content: content.pass, parentBriefing: parentBriefing.pass } } : parentBriefing;
+      const parentBriefing = await parentBriefingAtPickup(head, entered);
+      return "pass" in parentBriefing ? { pass: { content: content.pass, parentBriefing: parentBriefing.pass, entered } } : parentBriefing;
     } catch (err) {
+      // ADR 0419 決定2: a re-registration in an await after the entrance aborts the read; the loop writes the entrance's stop for it
       if (err instanceof DeclaredRepoMismatchError) return { skip: "repo", error: err };
       if (err instanceof WorkspaceRepoMismatchError) return { skip: "head" };
       throw err;
@@ -819,7 +843,7 @@ export function startScheduler(deps: {
 
   /** 親の issue の死は子の失敗ではない。文面を読める closed は保持し、not_found だけ空にする(ADR 0321 決定3・5)。
    *  分解元つきの根は分解元を親として読む(ADR 0384 決定4・5)。 */
-  async function parentBriefingAtPickup(head: Task): Promise<GateVerdict<ParentBriefing | undefined>> {
+  async function parentBriefingAtPickup(head: Task, entered: EnteredPlace | undefined): Promise<GateVerdict<ParentBriefing | undefined>> {
     const parentId = parentOrOrigin(head).taskId;
     const parent = parentId && getTask(db, parentId);
     if (!parent) return { pass: undefined };
@@ -847,7 +871,7 @@ export function startScheduler(deps: {
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     if (!resolve) return { pass: stored };
     const resolved = resolveOrQuarantine(db, resolve, derivedWorkspace(db, parent), clock.now());
-    const checked = resolved && issueWorkspaceAtPickup(head, resolved, resolve);
+    const checked = resolved && issueWorkspaceAtPickup(entered, resolved, resolve);
     if (!checked) return { skip: "head" };
     const ref = { workspace: checked, number: parent.github_issue_number };
     const read = await readGitHub(github.getIssueWithState(ref), checked);
@@ -1160,18 +1184,12 @@ export function startScheduler(deps: {
           // ADR 0402 決定4: 版の不一致は天候ではない —— 展開失敗の streak に数えず、question は「gh の版」が持つ
           if (!(verdict.error instanceof GhVersionError)) issueExpansionFailed(head.id, verdict.ref, verdict.error);
         } else if (verdict.skip === "repo") {
-          const candidate = head;
-          db.transaction(() => {
-            const current = getTask(db, candidate.id);
-            if (current?.status !== "todo" || current.assignee !== candidate.assignee || workspaceNameOf(current) !== selectedWorkspaceName) return;
-            if (candidate.workspace !== null && current.workspace !== candidate.workspace) return;
-            registerFailureQuestion(db, current, `repository changed before pickup: ${current.title}`, verdict.error.message, clock.now());
-          })();
+          stopForRepoDisagreement(db, head, selectedWorkspaceName, verdict.error.message, clock.now());
         } else stopped = quarantineStops(db);
         head = nextHead();
       }
       if (!head || !chosen || !gated) return SUCCEEDED;
-      const { content, parentBriefing } = gated;
+      const { content, parentBriefing, entered } = gated;
       // 学習器の shadow 行(ADR 0110 決定4 と Status 追記): work 側の task の pickup ごとに、走る設定の反対側(昇格前は学習器の
       // 推薦、昇格後は表の先頭)を並べて1行残す。判定者(review / interview)は学習器を参照しない(ADR 0111 決定3 / ADR 0272 決定4 の追記)。
       // 昇格前の記録は選択に介入しない —— 学習器が倒れても pickup は進む
@@ -1186,7 +1204,7 @@ export function startScheduler(deps: {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }
       };
-      afterPoll = await pickup(head, chosen, content, parentBriefing, recordShadowRow);
+      afterPoll = await pickup(head, chosen, content, parentBriefing, entered, recordShadowRow);
     } catch (err) {
       succeeded = false;
       pollFailed(err);

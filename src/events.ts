@@ -255,6 +255,9 @@ export type EventPayload =
   // ADR 0274: worker を起動する前に資源の Quarantine が pickup を止め、タスクが失敗にされず、位置を変えないまま `todo` へ戻された。
   // failure question は無い —— 資源の question がもう開いている
   | ({ kind: "pickup_stopped" } & ResourceStop)
+  // ADR 0419 決定1・2 / ADR 0118 決定5: 入口の後の await で登録し直され、worker を起動する前に止まった pickup —— process の無い証拠。
+  // question は入口と同じ食い違いの failure question で、spawn_failed は書かない(spawn の失敗ではない)
+  | { kind: "pickup_stopped_by_repo_disagreement" }
   // ADR 0331 決定2・9: process は起きたが0ターンで終わった session が資源の署名を持ち、止めた資源を先に登録して位置を変えずに
   // `todo` へ戻された。pickup_stopped は流用しない —— 後始末が「process を持たなかった」と読み、checkout を休止位置へ戻さなくなる
   | ({ kind: "session_stopped_by_resource"; worker_spawned_event_id: number } & ResourceStop)

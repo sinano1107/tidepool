@@ -67,8 +67,8 @@ type Settlement = "completed" | "released" | "interrupted" | "never_ran";
  *  持たなかった session の `todo` はエスカレーション・分解・人間の停止(failure question)と同じ値で、停止承認付き cancel と
  *  後始末の途中の直接 cancel は `cancelled` になる —— ので、process を持たない pickup の event(資源の停止・記録の器・
  *  spawn の失敗、ADR 0118 決定1)の有無で `never_ran` / `released` を分ける。最後の pickup に spawn があれば session の窓の
- *  never-ran(`sessionWindow`、exit が勝つ —— ADR 0316 決定4)を読み、無ければ pickup の後の決着 kind を見る(`pickup_stopped` は
- *  spawn より前にしか書かれない)。spawn の無い人間の停止もここで never-ran になる —— spawn は窓の停止に譲る(#1973)ので、
+ *  never-ran(`sessionWindow`、exit が勝つ —— ADR 0316 決定4)を読み、無ければ pickup の後の決着 kind を見る(`pickup_stopped` と
+ *  `pickup_stopped_by_repo_disagreement` は spawn より前にしか書かれない)。spawn の無い人間の停止もここで never-ran になる —— spawn は窓の停止に譲る(#1973)ので、
  *  停止の event が spawn より前にあることが process の無い証拠である。`NEVER_RAN_KINDS` には足さない(`sessionWindow` が spawn の
  *  後の停止まで never-ran に読む)。復旧・確認回答・回収済み観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す
  *  永続事実は持たないので、対応表がここ以外に増えたらそれは写しである。 */
@@ -82,7 +82,7 @@ function settlementOf(db: Db, task: Pick<Task, "id" | "status"> | undefined): Se
   const spawned = events.find((e) => e.kind === "worker_spawned");
   const neverRan = spawned
     ? sessionWindow(events, spawned).neverRan
-    : events.some((e) => e.kind === "pickup_stopped" || e.kind === "session_stopped_by_human" || NEVER_RAN_KINDS.includes(e.kind));
+    : events.some((e) => e.kind === "pickup_stopped" || e.kind === "pickup_stopped_by_repo_disagreement" || e.kind === "session_stopped_by_human" || NEVER_RAN_KINDS.includes(e.kind));
   return neverRan ? "never_ran" : "released";
 }
 

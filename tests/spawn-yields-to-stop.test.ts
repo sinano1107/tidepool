@@ -5,25 +5,28 @@ import type { BoardCall } from "../src/board-call.js";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import type { RepoSlug } from "../src/github.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { Provider } from "../src/provider.js";
 import { refireRetrospectiveCalls } from "../src/retrospective.js";
 import type { WorkerFactory } from "../src/server.js";
+import { Slot } from "../src/slot.js";
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
 import { liveSession, markTeardown, sessionInTeardown } from "../src/teardown.js";
-import { recordHumanStop } from "../src/watchdog.js";
+import { recordHumanStop, spawnFailureHandler } from "../src/watchdog.js";
 
 import type { WorkspaceConfig } from "../src/workspace.js";
 import {
   answerSkillsList,
   FakeAttributionClient,
+  FakeClock,
   FakeContainerRuntime,
   FakeGitHubClient,
   FakeTranslationClient,
   fakeAppServerCall,
+  fakeContainers,
   healthyOpenai,
   noRetrospectiveCalls,
   recordingSpawn,
@@ -68,6 +71,20 @@ describe("spawn の無い session の停止の決着(ADR 0118 決定1 / ADR 0274
     const { db, task } = picked();
     recordHumanStop(db, task.id, "wrong task", at, "webui");
     expect(sessionInTeardown(db)?.settlement).toBe("never_ran");
+  });
+
+  it("spawn の前に入口の後の登録し直しで止まった pickup も、spawn_failed を書かずに never-ran として後始末に入る (ADR 0118 決定5 / ADR 0419 決定1・2)", () => {
+    const { db, task } = picked();
+    const slot = new Slot();
+    slot.occupy(task.id, sessionId(db, task.id));
+    const clock = new FakeClock();
+    spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, fakeContainers())(
+      task.id,
+      sessionId(db, task.id),
+      { error_code: null, message: "task/x cannot be carried: the board recorded repo a, but workspace reef now declares repo b.", kind: "repo-disagreement" },
+    );
+    expect(sessionInTeardown(db)?.settlement).toBe("never_ran");
+    expect(listEvents(db, task.id).filter(({ kind }) => kind === "spawn_failed")).toEqual([]);
   });
 
   it("spawn の前の停止承認付き cancel も never-ran として後始末に入る", () => {
