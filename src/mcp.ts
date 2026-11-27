@@ -11,7 +11,7 @@ import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_VERDICTS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, rowKeySchema, tierFieldDescriptions } from "./execution-setting.js";
-import { CheckoutUnreadableError, displayWorktreePath, gitlinkChanges } from "./git.js";
+import { CheckoutUnreadableError, displayWorktreePath, gitlinkChanges, WorktreeStatusError } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -46,7 +46,6 @@ import {
   searchMemoryEntries,
 } from "./memory.js";
 import { type MetaReviewSubject, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
-import { taskBranch } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineAgent } from "./quarantine.js";
 import {
@@ -116,7 +115,6 @@ import {
   commitRoomCopy,
   completionTreeGateApplies,
   KEPT_TASK_CHECKOUT,
-  RefsMovedError,
   RoomCopyGitlinkError,
   type RunPlace,
   recordTaskCheckoutTip,
@@ -331,81 +329,72 @@ export async function runVerb<R>(
  *  —— セッション・slot・ツリーのどれも動かず、worker はコミットして呼び直せる。返すのは門が検査した走る場所(後始末が解放する)。 */
 function completionGatedPlace(deps: McpDeps, task: Task): TaskCheckoutPlace | undefined {
   if (!completionTreeGateApplies(task)) return undefined;
-  // 門が記録へ書く走る場所(task の checkout、ADR 0356 決定1)。workspace はタスク自身のもの(issue #26 / ADR 0009 —— 盤面の既定では
-  // ない)。受験者の名前の場所は面接室で、実環境の名前を解かない(ADR 0363 決定1〜3 の Status 追記)。ADR 0363 決定1・2・4: work の
-  // 名前が解けない(drift)のも門が記録を置けない1形で、資源の停止を登録せずに拒み —— 観測者は後始末 —— 残る task の checkout の
-  // 在り処と escalate を指す
+  // ADR 0424 決定1・2: worker に直せる失敗(拒否の domain error、読めない task の checkout)だけを拒み、ほかは failure question を登録して
+  // 回収する —— 分けるのはこの catch 1つ。資源の停止は登録しない(ADR 0424 決定3 —— 観測者は後始末)
   let workspace: TaskCheckoutPlace | undefined;
   try {
+    // 門が記録へ書く走る場所(task の checkout、ADR 0356 決定1)。workspace はタスク自身のもの(issue #26 / ADR 0009 —— 盤面の既定では
+    // ない)。受験者の名前の場所は面接室で、実環境の名前を解かない(ADR 0363 決定1〜3 の Status 追記)
     workspace = taskRunPlaceForBoard(deps.db, task, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
-  } catch (err) {
-    if (!(err instanceof UnknownWorkspaceError)) throw err;
-    const kept = taskCheckoutPath(deps.db, task.id);
-    throw new DomainError(
-      `this task's workspace "${err.workspaceName}" is not in the workspace registry, so the board cannot record the task branch tip${ESCALATE_UNFIXABLE}` +
-        (kept ? `. Your work stays in the task checkout at ${kept}` : ""),
+    if (!workspace) return undefined;
+    const paths = recordTaskCheckoutTip(deps.db, workspace, task.id, checkRecordedTip(deps, task, workspace));
+    if (paths.length === 0) return workspace;
+    throw refusalNamingPaths(
+      "the task workspace has uncommitted changes — commit them on the task branch first, " +
+        "with a message whose body says what changed and why in a few lines, readable from " +
+        "the git history alone",
+      paths,
     );
-  }
-  if (!workspace) return undefined;
-  // 記録した tip の検査と、同じ写しの view(ADR 0412 決定4)。名前の場所の検査が view より先
-  let checking = false;
-  const checkRecordedTip = (tip: string, changedPaths: () => string[]): string[] => {
-    checking = true;
-    // ADR 0360 決定4: worker の設定を隠せない tip は、記録した tree で判じて拒む
-    const { unhideable } = recordedSettingsDisposition(workspace.namedPlace.path, tip);
-    if (unhideable) {
-      const { path, type } = unhideable;
-      throw new DomainError(
-        `the task branch tip has ${path} as a ${type}, so the board cannot hide the Claude settings behind it — ` +
-          `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
-      );
-    }
-    // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。task の checkout は読まず、名前の場所の
-    // 盤面の git で記録だけを読む(ADR 0357 決定1 / ADR 0360 決定1)
-    const { namedPlace } = workspace;
-    const delta = treeDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task, () => deps.clock.now()), tip);
-    const humanOnly = humanOnlyPathChanges(delta);
-    if (humanOnly.length > 0) {
-      // spec #3273 text A11(ADR 0371 決定11 / ADR 0376 決定12): 人間が入れることだけを言い、その手順は言わない —— worker の出口は今の文のまま
-      throw refusalNamingPaths(
-        "the task branch tip changes a path from its fork source, and this path is written only by a human; " +
-          "take the change out of the task branch and commit",
-        humanOnly,
-        { after: " That change is put in by a human." },
-      );
-    }
-    // ADR 0365 決定2: 同じ delta で、記録が持てない entry(gitlink の参照先は別 repo の commit)を足した・進めた tip を拒む
-    const gitlinks = gitlinkChanges(delta);
-    if (gitlinks.length > 0) {
-      throw refusalNamingPaths(
-        "the task branch tip adds or advances a submodule (gitlink) from its fork source; the record carries only this repository and " +
-          "cannot hold a submodule's commits — reset the gitlink to the fork source's value or remove the submodule, and commit",
-        gitlinks,
-      );
-    }
-    return changedPaths();
-  };
-  // ADR 0359 決定1・4: 名前の場所に tip を書けないときは、資源を止めずに完了を拒む
-  let paths: string[];
-  try {
-    paths = recordTaskCheckoutTip(deps.db, workspace, task.id, checkRecordedTip);
   } catch (err) {
     if (err instanceof DomainError) throw err;
-    if (err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
-    if (checking) throw new DomainError("The board could not verify that the task checkout is clean. Retry complete_task or escalate.");
-    if (err instanceof CheckoutUnreadableError) throw new DomainError(`${err.message} — the task branch cannot be brought to the board, so the task cannot complete`);
-    // ADR 0373 決定12: 動いた ref は retry では直らない —— 人間へは session の終わりの解放の比較が知らせる
-    if (err instanceof RefsMovedError) throw new DomainError(`${taskBranch(task.id)} was moved outside the board. Retrying complete_task will not fix this — escalate.`);
-    throw new DomainError("The board could not record the task branch tip in the named workspace. Retry complete_task or escalate.");
+    if (workspace && err instanceof WorkerTreeGitTimeoutError) forceReclaimOnWorkerTreeTimeout(deps, task, workspace, err);
+    // worker の repo・worktree が読めないのは worker が直せる —— 拒んで session を続ける(pose_probe と同じ形)
+    if (err instanceof CheckoutUnreadableError || err instanceof WorktreeStatusError) {
+      const why = err instanceof WorktreeStatusError ? `the board cannot read the worktree of the task checkout at ${workspace!.path}: ${err.message}` : err.message;
+      throw new DomainError(`${why} — the board cannot check your task checkout, so the task cannot complete. Restore your task branch and call complete_task again, or escalate.`);
+    }
+    // ADR 0424 決定2: 名前の場所の側・写しの host・動いた task/<id>・registry から消えた workspace・開いていない走る場所は worker に直せない。
+    // 走る場所を解けなければ workspace は無く、解放する場所は後始末が自分で解く(drift の観測者、ADR 0363 決定2)
+    reclaimUnfixable(deps, task, "complete_task", err, workspace);
   }
-  if (paths.length === 0) return workspace;
-  throw refusalNamingPaths(
-    "the task workspace has uncommitted changes — commit them on the task branch first, " +
-      "with a message whose body says what changed and why in a few lines, readable from " +
-      "the git history alone",
-    paths,
-  );
 }
+
+/** 記録した tip の検査と、同じ写しの view(ADR 0412 決定4)。名前の場所の検査が view より先 */
+const checkRecordedTip = (deps: McpDeps, task: Task, workspace: TaskCheckoutPlace) => (tip: string, changedPaths: () => string[]): string[] => {
+  // ADR 0360 決定4: worker の設定を隠せない tip は、記録した tree で判じて拒む
+  const { unhideable } = recordedSettingsDisposition(workspace.namedPlace.path, tip);
+  if (unhideable) {
+    const { path, type } = unhideable;
+    throw new DomainError(
+      `the task branch tip has ${path} as a ${type}, so the board cannot hide the Claude settings behind it — ` +
+        `make ${path} a directory and commit the fix on the task branch, then call complete_task again`,
+    );
+  }
+  // ADR 0362 決定2: 人間しか書けない path の entry を fork 元との merge-base と比べる。task の checkout は読まず、名前の場所の
+  // 盤面の git で記録だけを読む(ADR 0357 決定1 / ADR 0360 決定1)
+  const { namedPlace } = workspace;
+  const delta = treeDeltaEntries(namedPlace.path, taskForkSource(deps.db, namedPlace, task, () => deps.clock.now()), tip);
+  const humanOnly = humanOnlyPathChanges(delta);
+  if (humanOnly.length > 0) {
+    // spec #3273 text A11(ADR 0371 決定11 / ADR 0376 決定12): 人間が入れることだけを言い、その手順は言わない —— worker の出口は今の文のまま
+    throw refusalNamingPaths(
+      "the task branch tip changes a path from its fork source, and this path is written only by a human; " +
+        "take the change out of the task branch and commit",
+      humanOnly,
+      { after: " That change is put in by a human." },
+    );
+  }
+  // ADR 0365 決定2: 同じ delta で、記録が持てない entry(gitlink の参照先は別 repo の commit)を足した・進めた tip を拒む
+  const gitlinks = gitlinkChanges(delta);
+  if (gitlinks.length > 0) {
+    throw refusalNamingPaths(
+      "the task branch tip adds or advances a submodule (gitlink) from its fork source; the record carries only this repository and " +
+        "cannot hold a submodule's commits — reset the gitlink to the fork source's value or remove the submodule, and commit",
+      gitlinks,
+    );
+  }
+  return changedPaths();
+};
 
 /** 「直して呼び直せ」の拒否: 直し方の文の後に path を1行ずつ名指す。既定の verb は完了の門の complete_task。`after` は呼び直しの文の後に足す文。 */
 const refusalNamingPaths = (fix: string, paths: string[], { verb = "complete_task", after = "" }: { verb?: string; after?: string } = {}) =>
@@ -545,9 +534,6 @@ function auditedProbeEnvelope(deps: McpDeps, task: Task) {
 
 /** 走れない対象の pose_probe の failure question に載せる直し方(人間の扉の retry の文と同じ形、tasks.ts の broken_probe)。 */
 const UNRUNNABLE_TARGET_REMEDY = ' — fix the default agent\'s entry and answer "retry", or answer "abandon"';
-
-/** 自分では直せない拒否の結び —— 人間に渡す出口を指す(complete_task の registry から消えた workspace。#3907 が回収に替える)。 */
-const ESCALATE_UNFIXABLE = " — this task cannot fix that: escalate so a human decides";
 
 /** 応答予算で読む読み口の続き(ADR 0195)。 */
 const next = z.string().optional().describe("The next string from a previous response of this verb; pass it alone.");

@@ -605,6 +605,23 @@ export async function callAsTask(t: Tidepool, taskId: string, name: string, args
   }
 }
 
+/** ADR 0424 決定2・3: complete_task の応答が session の終わりで、`fragment` を載せた failure question(retry / abandon)が立ち、task は done でなく、
+ *  workspace `workspace` の資源の停止が無い。verb の前に `t.containers.hold(taskId)` して後始末を回収済み観測の後ろに止めておけば、ここまでの
+ *  停止の無さは verb が登録しないことを言う。最後に容器を空けて後始末を待つ。 */
+export async function expectCompletionReclaimed(t: Tidepool, taskId: string, session: string, res: any, fragment: string, workspace: string): Promise<void> {
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toContain("this session is over");
+  expect(t.containers.forceReclaims).toEqual([session]);
+  const failure = (await questions(t)).find((question) => question.parent_id === taskId && question.question_cancel_option === "abandon" && question.status === "todo");
+  expect(failure.title).toContain("complete_task");
+  expect(failure.purpose).toContain(fragment);
+  expect(failure.question_items.map((item: any) => item.options)).toEqual([["retry", "abandon"]]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${taskId}`)).json.status).not.toBe("done");
+  expect(await servedQuarantineQuestion(t, "workspace", workspace)).toBeUndefined();
+  t.containers.fireEmpty(session);
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
+}
+
 /** 応答予算(ADR 0195)。読み口の応答は、盤面が返す CallToolResult を丸ごとシリアライズした UTF-8 バイト数でこれ以下に収まる。 */
 export const RESPONSE_BUDGET_BYTES = 40_000;
 
