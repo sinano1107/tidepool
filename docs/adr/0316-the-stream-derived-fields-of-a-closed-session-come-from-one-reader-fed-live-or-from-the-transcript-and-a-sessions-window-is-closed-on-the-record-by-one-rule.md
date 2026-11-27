@@ -1,5 +1,7 @@
 # 閉じた session の stream 由来の欄は1つの読み手から作り、出所は live の pipe か記録済みの transcript、session の窓を記録の上で閉じる位置は1つの規則で読む
 
+**Status 追記: 決定4 の never-ran の決着は生きている盤面が書いたものだけで、盤面が `worker_spawned` の後・spawn の前に落ちた session は決着を持たず、起動時の復旧が走った session と同じに閉じる(2026-11-27、issue #3934)** —— 記録の上で process が起きたか分からない session を never-ran と読むと、起きていたときに exit・Episode・一時領域の削除・後始末を飛ばす。今の読みは外れても記録と後始末が残る。
+
 **Status 追記: 決定2 の「transcript が無い・読めない session は欠測のまま閉じる」の欠測は、`worker_exited` の印 `stream_read: false` で記録に残す([ADR 0432](0432-recovery-that-could-not-read-a-transcript-marks-the-exit-and-a-board-call-input-drops-what-cannot-be-observed-and-explains-only-what-it-holds.md) 決定1、2026-11-27、issue #3898)** —— 配列の欄は欠測を表せず `[]` が書かれていた。
 
 **Status 追記: 決定4 の窓と never-ran の決着は、同じ task の次の pickup を越えない(2026-11-02、issue #2932)** —— #2880 の「次の spawn を越えない」を締める。pickup は spawn より必ず先なので、後の pickup が spawn の前に落ちた `spawn_failed` を前の session の決着と読まず、後の pickup の event を前の窓へ入れない。理由は #2880 と同じく、遅れた観測で次の session の判断を前の窓へ入れないため。自分の spawn を指す exit は窓の外でも元の session に残る。
