@@ -697,6 +697,11 @@ export function sessionReadCheckoutOf(db: Db, taskId: string, rootId: string): s
   return sessionReadCheckouts(db, taskId).find((read) => read.name === rootId)?.path;
 }
 
+/** ADR 0426 決定3: この session の実環境を読む checkout。面接室の名前(root id)とは別に引く。 */
+export function sessionRealEnvironmentCheckout(db: Db, taskId: string): ReadCheckout | undefined {
+  return sessionCheckoutOpened(db, taskId)?.real_environment;
+}
+
 function sessionCheckoutOpened(db: Db, taskId: string) {
   const pickup = latestEventOfTask(db, taskId, "task_picked_up");
   const opened = latestEventOfTask(db, taskId, "task_checkout_opened");

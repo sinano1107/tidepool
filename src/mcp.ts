@@ -46,7 +46,7 @@ import {
   searchMemoryEntries,
 } from "./memory.js";
 import { type MetaReviewSubject, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
-import { safeRealpath, taskBranch } from "./pickup-predicates.js";
+import { taskBranch } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineAgent } from "./quarantine.js";
 import {
@@ -98,6 +98,7 @@ import {
   reportBrokenProbe,
   resolveTaskAgent,
   sessionReadCheckoutOf,
+  sessionRealEnvironmentCheckout,
   type Task,
   type TaskType,
   taskCheckoutPath,
@@ -510,16 +511,15 @@ function runReleasingVerb(
   });
 }
 
-/** interview の root の envelope の構造欄(ADR 0273 決定2・9): 登録の欄、測る段の名前と説明、実環境の在り処(cwd の面接室の外で
- *  読みに開いている)と、その宣言のうち受験者に効く部分。 */
-function interviewEnvelope(deps: McpDeps, task: Task) {
+/** interview の envelope の構造欄(ADR 0273 決定2・9): 登録の欄、測る段の名前と説明、実環境の在り処と受験者に効く宣言。 */
+function interviewEnvelope(deps: McpDeps, task: Task, realEnvironment: string | undefined) {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-  // ADR 0363 決定2: 読む verb も drift を登録しない —— 解けなければ実環境を載せないだけ
+  // ADR 0426 決定3 / ADR 0363 決定2: drift でも記録の在り処を載せ、許可ドメインだけを空にする。
   const workspace = resolve && resolveUnlessDrifted(resolve, task.workspace);
   return {
     ...interviewFields(deps.db, task.id),
     measured_tier: readTiers(deps.db).find((tier) => tier.name === task.tier),
-    ...(workspace && { real_environment: safeRealpath(workspace.path) }),
+    ...(realEnvironment !== undefined && { real_environment: realEnvironment }),
     allowed_domains: workspace?.allowed_domains ?? [],
   };
 }
@@ -539,7 +539,7 @@ function auditedProbeEnvelope(deps: McpDeps, task: Task) {
   const posedId = auditedPosedEventId(deps.db, task.id);
   if (posedId === undefined) return undefined;
   const { head, root_id } = posedProbe(deps.db, posedId);
-  return { interview_audit: { head, interview_room: sessionReadCheckoutOf(deps.db, task.id, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
+  return { interview_audit: { head, interview_room: sessionReadCheckoutOf(deps.db, task.id, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!, taskCheckoutPath(deps.db, task.id)) } };
 }
 
 /** 走れない対象の pose_probe の failure question に載せる直し方(人間の扉の retry の文と同じ形、tasks.ts の broken_probe)。 */
@@ -710,7 +710,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...deps.slot.content!,
             type: task.type,
             ...(targets && { interview_targets: targets }),
-            ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),
+            ...(task.type === "interview" && { interview: interviewEnvelope(deps, task, sessionRealEnvironmentCheckout(deps.db, task.id)?.path) }),
             ...auditedProbeEnvelope(deps, task),
             // ADR 0310 決定4: 材料が停止の RCA には止められた session の行動列(無条件に読むので注入、ADR 0180)
             ...stopMaterialActions(deps.db, task.id),

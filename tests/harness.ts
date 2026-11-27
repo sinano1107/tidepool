@@ -1009,7 +1009,7 @@ export async function prepareAtPickup(
   fillEmptyWorkspace(db, task.id, workspace.name);
   const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
   // 既定は registry の無い盤面(最初の撮りの確認は掛からない、ADR 0373 決定13)
-  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now: () => now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
+  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, realEnvironment: board.real, workspacesBaseDir, now: () => now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
   return taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, board.real ?? workspace) : { ...workspace, reads: [] };
 }
 
@@ -1047,7 +1047,7 @@ export function recordCheckoutAtWorkspace(
   const rootId = interviewRootIdOf(db, task);
   if (rootId !== undefined) {
     // Interview の場所は面接室から開く(ADR 0356 決定1)—— 面接室を開いていない adapter の盤面では何もしない
-    if (interviewRoomPath(db, rootId) !== undefined) openTestInterviewCheckout(db, task);
+    if (interviewRoomPath(db, rootId) !== undefined) openTestInterviewCheckout(db, task, defaultWorkspace);
     return;
   }
   let place: WorkspaceConfig;
@@ -1065,12 +1065,13 @@ export function recordCheckoutAtWorkspace(
  *  記録された面接室ごとに、空の dir を開いた event の `reads` に置く。 */
 function standInReadCheckouts(db: Db, task: Task): { reads?: ReadCheckout[] } {
   const rooms = openedPlaceNames(db, task.id, undefined).filter((name) => name !== interviewRootIdOf(db, task) && interviewRoomPath(db, name) !== undefined);
-  const reads = rooms.map((name) => {
-    const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-read-checkout-")));
-    onTestFinished(() => rm(path, { recursive: true, force: true }));
-    return { name, path };
-  });
-  return reads.length > 0 ? { reads } : {};
+  return rooms.length > 0 ? { reads: rooms.map(standInReadCheckout) } : {};
+}
+
+function standInReadCheckout(name: string): ReadCheckout {
+  const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-read-checkout-")));
+  onTestFinished(() => rm(path, { recursive: true, force: true }));
+  return { name, path };
 }
 
 /** 行の無い場所で準備が撮る最初の撮り(ADR 0351 決定2)の代わり —— 行があれば何もしない。行は基準と同じ綴り(HEAD は指し先、refname 順)で書く。 */
@@ -1464,7 +1465,7 @@ export async function pickedInterviewRoot(db: Db, name: string, at: Date, target
 
 /** setup のみ: Interview の root・受験者の pickup が面接室から開く task の checkout の代わりに、空コミットだけの repo を在り処として
  *  残す(ADR 0356 決定1・2)—— 盤面の pickup を通らずに root や受験者を adapter で走らせるテストが置く。面接室は先に開いておく。 */
-export function openTestInterviewCheckout(db: Db, task: Task): string {
+export function openTestInterviewCheckout(db: Db, task: Task, defaultWorkspace?: string): string {
   const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-interview-checkout-")));
   onTestFinished(() => rm(path, { recursive: true, force: true }));
   git(path, "init", "--quiet", "--initial-branch=main");
@@ -1476,7 +1477,10 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
     standInFirstCapture(db, room);
     standInTaskBranch(db, room, task.id);
   }
-  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task) }, at: new Date(0) });
+  const real = task.type === "interview" && (task.workspace ?? defaultWorkspace);
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: {
+    kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task), ...(real && { real_environment: standInReadCheckout(real) }),
+  }, at: new Date(0) });
   return path;
 }
 

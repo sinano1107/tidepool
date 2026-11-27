@@ -158,6 +158,7 @@ import {
   releaseOwedBy,
   retireLandingDecisions,
   sessionReadCheckouts,
+  sessionRealEnvironmentCheckout,
   settledNoReturnAncestorOfReview,
   subtreeSql,
   type Task,
@@ -458,9 +459,9 @@ function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_
  *  `pickupGate`、それが通った後に走る場所が開くので、ここは開いた後しか返せない。 */
 export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id" | "workspace">, workspace: WorkspaceConfig): TaskCheckoutPlace {
   const place = taskRunPlaceForBoard(db, task, () => workspace);
-  // interview type は root(ADR 0273 決定1)。root が実環境を読みだけ開くのは spawn の sandbox の読みのため —— 門も解放も読まない
-  // (ADR 0363 決定1〜3 の Status 追記)
-  return task.type === "interview" ? { ...place, reads: [inRealSpelling(workspace), ...place.reads] } : place;
+  // ADR 0426 決定2: root の sandbox は実環境の読み専用の checkout を開く。
+  const real = task.type === "interview" && sessionRealEnvironmentCheckout(db, task.id);
+  return real ? { ...place, reads: [real, ...place.reads] } : place;
 }
 
 /** 盤面の門(完了の門・`pose_probe`)と後始末が当たる走る場所(ADR 0363 決定1〜3 の Status 追記): 実環境を解くのは名前の場所が
@@ -523,6 +524,8 @@ const CHECKOUT_LAYOUT = {
   task: { at: (base: string, key: string, pickup: number) => join(conventionCheckoutPath(key, base), String(pickup)), parents: 1, base: (checkout: string) => dirname(dirname(checkout)) },
   /** 基点 / `<task id>.reads` / pickup の event id / 読む面接室の名前(root id) */
   read: { at: (base: string, taskId: string, pickup: number, rootId: string) => join(conventionCheckoutPath(`${taskId}.reads`, base), String(pickup), rootId), parents: 2 },
+  /** ADR 0426 決定2: 実環境の名前は面接室の root id と別の名前空間。 */
+  realEnvironment: { at: (base: string, taskId: string, pickup: number) => join(conventionCheckoutPath(`${taskId}.real-environment`, base), String(pickup)), parents: 1 },
   /** 基点 / `@workbench` / (書く先, 運ばれる側) の葉(ADR 0382 決定1、番地の不変条件は `workbenchPath`)。保護ブランチの葉は workspace を持つ。
    *  運ばれる側の無い鍵は人間自身の内容の作業台(ADR 0382 決定4) */
   workbench: {
@@ -636,7 +639,7 @@ function openTaskCheckout(
   task: Task,
   workspacesBaseDir: string,
   now: Date,
-  fixing: { fix: (forkSource: string | undefined) => void; defaultWorkspaceName: string | undefined },
+  fixing: { fix: (forkSource: string | undefined) => void; defaultWorkspaceName: string | undefined; realEnvironment: WorkspaceConfig | undefined },
 ): void {
   const pickup = latestEventOfTask(db, task.id, "task_picked_up");
   if (!pickup) throw new Error(`task ${task.id} has no pickup to key its task checkout`);
@@ -652,9 +655,13 @@ function openTaskCheckout(
   // checkout が受け取った commit。解けない切る元は番地を作る前に `roomForkSource` の文のまま投げる(決定7)
   const { source, forkSource } = role === undefined ? copySourceBeforeFixing(db, named, task, () => now, fixing.defaultWorkspaceName) : roomCopySource(db, named, task);
   const readCopies = roomsReadBy(db, task).map((room) => ({ room, at: CHECKOUT_LAYOUT.read.at(workspacesBaseDir, task.id, pickup.id, room.name) }));
+  const real = fixing.realEnvironment;
+  const realAt = real && CHECKOUT_LAYOUT.realEnvironment.at(workspacesBaseDir, task.id, pickup.id);
   const copies = [{ at, parents: CHECKOUT_LAYOUT.task.parents }, ...readCopies.map((copy) => ({ at: copy.at, parents: CHECKOUT_LAYOUT.read.parents }))];
+  if (realAt) copies.push({ at: realAt, parents: CHECKOUT_LAYOUT.realEnvironment.parents });
   let path: string;
   let reads: ReadCheckout[];
+  let realEnvironment: ReadCheckout | undefined;
   try {
     try {
       path = makeCheckout({ at, named, source, branch, description });
@@ -667,8 +674,12 @@ function openTaskCheckout(
     // 読み手の出題の head も面接室が提供する答え(ADR 0386 決定1)—— 出題前は無い
     reads = readCopies.map(({ room, at: readAt }) => {
       const read = roomProvisionOf(db, task, room.name);
-      return openReadCheckout(readAt, room, read && providedRev(room, read), task.id, itemOf(room));
+      return openReadCheckout(readAt, room, read && providedRev(room, read), task.id, "interview room", itemOf(room));
     });
+    if (real && realAt) {
+      realEnvironment = openReadCheckout(realAt, real, exactProtectedBranchRef(real), task.id, "real environment",
+        `the protected branch \`${protectedBranch(real)}\` and its whole history can be fetched and checked out from the resting workspace.`);
+    }
     fixing.fix(forkSource);
   } catch (err) {
     // 作りかけも番地で消す(読み専用の checkout は fetch の前に番地を作る)
@@ -687,32 +698,35 @@ function openTaskCheckout(
       kind: "task_checkout_opened", path,
       ...(completionTreeGateApplies(task) && { completion_gate: "recorded_tip" as const }),
       ...(reads.length > 0 && { reads }),
+      ...(realEnvironment && { real_environment: realEnvironment }),
     },
   });
 }
 
-/** ADR 0361 決定1: 読み専用の checkout —— `git init` に面接室から出題の head だけを fetch した複製(alternates なし、ADR 0356 決定2 の
- *  Interview の線)。読み手に届くのは出題の head の tree だけで、root と受験者のブランチは引けない。番地を作れないのは host 側の失敗、
- *  fetch の失敗は fetch 元の面接室の性質で、読み手の (task, 面接室) の項の文 `describe` で包む(ADR 0386 決定3)。 */
-function openReadCheckout(at: string, room: WorkspaceConfig, head: string | undefined, taskId: string, describe: string | undefined): ReadCheckout {
+/** 読み専用の checkout —— 面接室の出題の head(ADR 0361 決定1)か、実環境の休止位置の head(ADR 0426 決定1・2)だけを fetch した複製。
+ *  番地を作れないのは host 側の失敗。fetch・展開の失敗は fetch 元の性質として項の文 `describe` で包む(ADR 0386 決定3)。 */
+function openReadCheckout(at: string, place: WorkspaceConfig, head: string | undefined, taskId: string, kind: "interview room" | "real environment", describe: string | undefined): ReadCheckout {
   let path: string;
   try {
     mkdirSync(at, { recursive: true });
     path = realpathSync(at);
     git(path, "init", "--quiet", "--template=", "--initial-branch=main");
   } catch (cause) {
-    throw new CheckoutHostError(`the read checkout of the interview room ${room.name} for ${taskId} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new CheckoutHostError(`the read checkout of the ${kind} ${place.name} for ${taskId} cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   if (head !== undefined) {
     try {
       // 未生の main へ直接 fetch するので --update-head-ok。reflog にも面接室の在り処を残さない(ADR 0276 決定1 と同じ)
-      git(path, "-c", "core.logAllRefUpdates=false", "fetch", ...FETCH_FLAGS, "--update-head-ok", room.path, `${head}:refs/heads/main`);
+      // ADR 0426 決定1: 実環境の休止位置と閉包だけを運び、tag は追従しない。
+      const real = kind === "real environment";
+      if (real) assertNotShallow(place.path);
+      git(path, "-c", "core.logAllRefUpdates=false", ...(real ? STRICT_FETCH : []), "fetch", ...FETCH_FLAGS, ...(real ? ["--no-tags"] : []), "--update-head-ok", place.path, `${head}:refs/heads/main`);
       git(path, "read-tree", "-u", "--reset", "HEAD");
     } catch (err) {
-      throw PickupGateError.of(room, err, describe);
+      throw PickupGateError.of(place, err, describe);
     }
   }
-  return { name: room.name, path };
+  return { name: place.name, path };
 }
 
 /** ADR 0365 決定2: 出題の写しの tree が面接室の保護ブランチの head から gitlink を足す・進める —— 文は verb の側で書く。 */
@@ -3143,14 +3157,19 @@ export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfi
   if (board.live?.() === false) return;
   // ADR 0356 決定1・2: タスクブランチは名前の場所(面接室を含む)の ref として作るだけで、worker は fetch した task の checkout で走る
   const now = board.now();
+  const realEnvironment = task.type === "interview" ? board.realEnvironment : undefined;
+  if (task.type === "interview" && !realEnvironment) throw new CheckoutHostError(`the real environment for ${task.id} was not supplied at pickup`);
   openTaskCheckout(db, workspace, task, board.workspacesBaseDir, now, {
     defaultWorkspaceName: board.defaultWorkspaceName,
     fix: (forkSource) => fixTaskAndUnstartedAncestors(db, workspace, task, board.defaultWorkspaceName, now, { forkSource }),
+    realEnvironment,
   });
 }
 
 type PickupPreparation = PickupPrep & {
   reads?: ReadonlyArray<{ place: WorkspaceConfig; predicates: PickupPredicate[] }>;
+  /** ADR 0426 決定1: root が読む、pickup の門を通った実環境。 */
+  realEnvironment?: WorkspaceConfig;
   /** task の checkout の番地の基点と、開いた event の時刻(ADR 0356 決定2)。時刻は準備の await の後、書く同期区間ごとに読む(#3384)。 */
   workspacesBaseDir: string;
   now: () => Date;
@@ -4425,6 +4444,8 @@ function recordTaskCheckoutKept(db: Db, taskId: string, path: string, now: Date)
  *  唯一の写しとして残す解放(ADR 0356 決定2)でも、解放を飛ばす後始末(ADR 0363 決定4)でも消す。 */
 export function releaseReadCheckouts(db: Db, taskId: string): void {
   for (const read of sessionReadCheckouts(db, taskId)) removeBoardCheckout(read.path, CHECKOUT_LAYOUT.read.parents);
+  const real = sessionRealEnvironmentCheckout(db, taskId);
+  if (real) removeBoardCheckout(real.path, CHECKOUT_LAYOUT.realEnvironment.parents);
 }
 
 /** 外への書き込み(ref・event・`done`)の後に作業台を消す —— 投げない(ADR 0401 決定1 の (3): 書いた後の拒否は出口を名指せない)。

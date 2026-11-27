@@ -228,8 +228,8 @@ export type EventPayload =
   // ADR 0273 決定1: 盤面が root の最初の pickup で面接室を作った —— path はその在り処。基点が後で変わっても在り処はこれで引く
   | { kind: "interview_room_opened"; path: string }
   // ADR 0356 決定1・2: 盤面が worker の形で走る task の pickup ごとに task の checkout を作った —— path はその在り処(番地の鍵は pickup の event id)
-  // reads は同じ session の読み専用の checkout(ADR 0361 決定1)。面接室を読む task だけ
-  | { kind: "task_checkout_opened"; path: string; completion_gate?: "recorded_tip"; reads?: ReadCheckout[] }
+  // reads は同じ session が読む面接室の checkout(ADR 0361 決定1)。real_environment は root が読む実環境の checkout(ADR 0426 決定3)
+  | { kind: "task_checkout_opened"; path: string; completion_gate?: "recorded_tip"; reads?: ReadCheckout[]; real_environment?: ReadCheckout }
   // ADR 0369 決定7: 成果が名前の場所の task/<id> に着いた —— path の checkout は消してよい。
   // 再実行では運ぶ段を飛ばし、名前の場所の後半を走らせてから消す。
   | { kind: "task_checkout_released"; path: string }

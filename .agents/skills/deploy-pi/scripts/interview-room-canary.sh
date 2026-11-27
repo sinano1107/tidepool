@@ -2,7 +2,7 @@
 # Interview-room canary (issue #2197 / ADR 0273 decision 2): measures, for both
 # providers, that an Interview root's floor holds on the real CLI — cwd = the
 # interview room (a fresh git repository), the work floor, and the real
-# environment opened for reading on top.
+# environment's resting-head checkout opened for reading on top (ADR 0426).
 #
 #     bash .agents/skills/deploy-pi/scripts/interview-room-canary.sh local   # a Linux host (the Lima VM)
 #     bash .agents/skills/deploy-pi/scripts/interview-room-canary.sh pi      # the production Pi
@@ -25,6 +25,7 @@
 #   (a) real-env-log   — `git log -1` in the real environment returns its HEAD hash
 #       real-env-cat   — `cat` of a file in it returns that file's token
 #   (b) real-env-write — a write into it is refused by the OS and nothing lands
+#       named-env-read — the named workspace is masked by the OS
 #   (c) room-git       — a file written and committed in the room is on disk as
 #                        the room's HEAD commit
 #   controls (ADR 0033 addendum / ADR 0257 decision 3)
@@ -53,7 +54,7 @@
 # is why that row is checked from outside first).
 #
 # EXIT CODES: 0 = every row passed for both providers.
-# 1 = home was read (read-floor's hole), the sandbox died, or the combination does
+# 1 = home or the named workspace was read, the sandbox died, or the combination does
 # not hold for a provider: the real environment was written or its write refused
 # in the harness's words (b), or (a)/(c) was refused beside a passing home control.
 # The combination not holding is ADR 0273's rejected option 3, a human decision.
@@ -108,7 +109,9 @@ opened_verdict() {
 
 PROBE="scripts/interview-room-canary-probe.sh"
 WORK=$(realpath -m ~/interview-room-canary)
-REAL=$WORK/real
+NAMED=$WORK/named
+NAMED_FILE=$NAMED/named-env.txt
+REAL=$WORK/real-read
 REAL_FILE=$REAL/real-env.txt
 READ_TOOL_FILE=$REAL/read-tool.txt
 WRITE_TOOL_FILE=$REAL/written-by-claude-tool.txt
@@ -117,18 +120,32 @@ HOME_TARGET=$WORK/home-canary.txt
 REAL_TOKEN="INTERVIEWROOM-REAL-6f2b0c84d1e9"
 READ_TOOL_TOKEN="INTERVIEWROOM-READTOOL-0d7c41e9a8b3"
 HOME_TOKEN="INTERVIEWROOM-HOME-a39d5e17b2c0"
+NAMED_TOKEN="INTERVIEWROOM-NAMED-d28c6f4107a5"
 # The board stamps a worker's commits with the agent's identity in the env
 # (agentGitIdentityEnv); the same here, for both spawns and the real env's commit.
 export GIT_AUTHOR_NAME=interview-room-canary GIT_COMMITTER_NAME=interview-room-canary
 export GIT_AUTHOR_EMAIL=interview-room-canary@tidepool.invalid GIT_COMMITTER_EMAIL=interview-room-canary@tidepool.invalid
 
 rm -rf "$WORK"
-mkdir -p "$REAL"
-echo "$REAL_TOKEN" > "$REAL_FILE"
-echo "$READ_TOOL_TOKEN" > "$READ_TOOL_FILE"
-echo "$HOME_TOKEN" > "$HOME_TARGET"
-git init -q "$REAL" && git -C "$REAL" add real-env.txt read-tool.txt && git -C "$REAL" commit -qm "real environment"
-REAL_HEAD=$(git -C "$REAL" rev-parse HEAD)
+# ADR 0426 decision 4: the board gives the sandbox a fresh repo with only
+# the resting head and its closure. Leave the named workspace outside it.
+if ! {
+  mkdir -p "$NAMED" "$REAL" &&
+    echo "$REAL_TOKEN" > "$NAMED/real-env.txt" &&
+    echo "$READ_TOOL_TOKEN" > "$NAMED/read-tool.txt" &&
+    echo "$NAMED_TOKEN" > "$NAMED_FILE" &&
+    echo "$HOME_TOKEN" > "$HOME_TARGET" &&
+    git init -q --template= --initial-branch=main "$NAMED" &&
+    git -C "$NAMED" add real-env.txt read-tool.txt &&
+    git -C "$NAMED" commit -qm "real environment" &&
+    REAL_HEAD=$(git -C "$NAMED" rev-parse HEAD) &&
+    git init -q --template= --initial-branch=main "$REAL" &&
+    git -C "$REAL" -c core.logAllRefUpdates=false fetch --quiet --no-tags --no-auto-gc --no-write-fetch-head --no-recurse-submodules --update-head-ok "$NAMED" "$REAL_HEAD:refs/heads/main" &&
+    git -C "$REAL" read-tree -u --reset HEAD
+}; then
+  fail "could not prepare the named workspace and resting-head checkout"
+  exit 2
+fi
 TASK_TEMPS=()
 
 status=1
@@ -144,6 +161,7 @@ trap cleanup EXIT
 
 grep -qF "$REAL_TOKEN" "$REAL_FILE" && base_real=yes || base_real=no
 grep -qF "$HOME_TOKEN" "$HOME_TARGET" && base_home=yes || base_home=no
+grep -qF "$NAMED_TOKEN" "$NAMED_FILE" && base_named=yes || base_named=no
 
 VERDICTS=()
 ROW_FMT='%-7s %-15s %-9s %-72s %s\n'
@@ -176,6 +194,7 @@ REAL_ENV='$REAL'
 REAL_FILE='$REAL_FILE'
 REAL_WRITE='$REAL/written-by-$cli.txt'
 HOME_FILE='$HOME_TARGET'
+NAMED_FILE='$NAMED_FILE'
 EOF
 }
 
@@ -209,6 +228,13 @@ judge() {
   harness=no
   [[ "$cli" == claude ]] && harness_refused_in "$out" "$REAL/written-by-$cli.txt" && harness=yes
   record "$cli" real-env-write "$base_real" "$line" "$(refused_row_verdict "$base_real" "$seen" "$os" "$harness")"
+
+  line=$(line_of named-env-read)
+  os_refused_in "$line" && os=yes || os=no
+  seen=$(read_seen "$line" "$NAMED_TOKEN" "$out")
+  harness=no
+  [[ "$cli" == claude ]] && harness_refused_in "$out" "$NAMED_FILE" && harness=yes
+  record "$cli" named-env-read "$base_named" "$line" "$(refused_row_verdict "$base_named" "$seen" "$os" "$harness")"
 
   line=$(line_of room-git)
   [[ "$(git -C "$ROOM" log -1 --format=%s 2>/dev/null)" == "interview-room-canary" \
@@ -314,7 +340,7 @@ printf '%s' "$TABLE"
 echo
 status=$(run_status "${VERDICTS[@]}")
 if [[ "$status" == "0" ]]; then
-  log "both providers read the real environment, were refused writing it by the OS, and committed in the room"
+  log "both providers read the resting-head checkout and committed in the room. The OS denied writes to the checkout and reads of the named workspace."
 elif [[ "$status" == "2" ]]; then
   fail "nothing got out, but this run could not tell (exit 2). Read the table above:"
   fail "  a row with no OBSERVED = the probe did not run for that provider (a decline, a cut-off, codex absent)"
@@ -325,7 +351,7 @@ elif [[ "$status" == "2" ]]; then
   fail "                           control that did not pass"
 else
   fail "THE INTERVIEW ROOM'S FLOOR DOES NOT HOLD (exit 1). Read the FAIL rows above:"
-  fail "  home                    = a read got out of the opened set: read-floor-canary.sh's hole, treat it"
+  fail "  home or named-env-read  = a read got out of the opened set: treat it"
   fail "                            as a production incident"
   fail "  real-env-write, real-env-log/-cat or room-git = the combination itself breaks for that provider"
   fail "                            (written, refused in the harness's words, or refused beside a passing"
