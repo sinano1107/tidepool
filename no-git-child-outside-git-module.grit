@@ -1,0 +1,15 @@
+language js
+
+// ADR 0441 決定1・3: 盤面の git の子は git の module(src/git.ts)の起動口だけが作る —— そこで env を固定し、失敗の型を1回だけ付ける。
+// 第1引数が文字列の "git" の execFileSync / spawnSync / execFile / spawn を、名前のままでも namespace 越し(`cp.spawnSync("git", …)`)でも
+// 落とす。当てない場所は biome.json の override の `includes` が外す。tests/ は fixture を作るために git を直接撃つ。scripts/ は人間が
+// `npm run` で走らせる道具で、人間の身元で走る。Codex の canary の `cp.spawnSync("git", …)` は sandbox で走る script の文字列の中にあり、
+// 構文木上は呼び出しにならないので当たらない。
+// 見えない形: 変数や定数に入れた command 名(`const bin = "git"`)、絶対 path の command 名(`"/usr/bin/git"`)、別名の import
+// (`import { spawnSync as run }`)、`promisify(execFile)` で包んだ関数(`execFileAsync("git", …)`)、`exec` / `execSync` に渡す shell の
+// 文字列(`"git status"`)。
+JsCallExpression(callee=$fn, arguments=JsCallArguments(args=[$cmd, ...])) as $call where {
+  $fn <: or { `execFileSync`, `spawnSync`, `execFile`, `spawn`, `$_.execFileSync`, `$_.spawnSync`, `$_.execFile`, `$_.spawn` },
+  $cmd <: r"[\"'`]git[\"'`]",
+  register_diagnostic(span=$call, message="Start the board's git children through the git module's runners (ADR 0441 decision 1): they fix the env and type the failure once.", severity="error")
+}

@@ -100,9 +100,9 @@ export function stashEntries(cwd: string, bounded = false): string[] {
 /** #3826: git が件を落としたか数えられなかった —— 並びは短いので、答えにしない。 */
 export class ListingUnreadableError extends Error {}
 
-/** ADR 0378 決定4: read the configured origin before applying insteadOf. */
-export function readOriginConfig(readGit: (args: string[]) => Buffer): string | undefined {
-  return readConfig(readGit, ["remote.origin.url"]);
+/** ADR 0378 決定4: read the configured origin before applying insteadOf. A missing `cwd` names `verb`, the call the read is for. */
+export function readOriginConfig(cwd: string, verb: string): string | undefined {
+  return readConfig((args) => run(cwd, args, undefined, undefined, undefined, undefined, verb), ["remote.origin.url"]);
 }
 
 function readConfig(readGit: (args: string[]) => Buffer, args: string[]): string | undefined {
@@ -413,7 +413,12 @@ export function boardViewStatus(cwd: string, head: string, objectsFrom: string, 
 
 /** `git` に stdin を渡したもの(`--stdin` を取る subcommand 用)。 */
 export function gitWithInput(input: string, cwd: string, ...args: string[]): string {
-  return run(cwd, args, undefined, input).toString().trim();
+  return gitBytesWithInput(input, cwd, ...args).toString().trim();
+}
+
+/** `gitWithInput` の出力を byte のまま —— 呼び手が byte 数で切る(`cat-file --batch`)。 */
+export function gitBytesWithInput(input: string, cwd: string, ...args: string[]): Buffer {
+  return run(cwd, args, undefined, input);
 }
 
 /** ADR 0409 決定2: git that exits 0 can still report something on stderr, so this runner returns both. A non-zero exit throws like `git`,
@@ -426,18 +431,15 @@ export function gitReporting(
   timeout?: number,
   bound = timeout,
 ): { stdout: string; stderr: string } {
-  const result = spawnSync("git", args, { ...runOptions(cwd, env, input), ...timeoutOptions(timeout) });
+  const result = spawnSync("git", args, { ...runOptions(cwd, localGitEnv(env), input), ...timeoutOptions(timeout) });
   const stderr = result.stderr?.toString() ?? "";
-  if (result.error) {
-    if (timeout !== undefined && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") throwTimedOut(result.error, result.pid, stderr, args, bound ?? timeout);
-    throw gitFailure(cwd, args, result.error);
-  }
-  if (result.status !== 0) throw gitFailure(cwd, args, Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr }));
+  if (result.error) throwFailure(cwd, args, result.error, result.pid, stderr, { timeout, bound });
+  if (result.status !== 0) throwFailure(cwd, args, Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr }), result.pid, stderr, { timeout, bound });
   return { stdout: result.stdout.toString(), stderr };
 }
 
 /** ADR 0356 決定5 / ADR 0339 決定1: build the local environment and keep transport restricted to file. */
-export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
     LC_ALL: process.env.LC_ALL,
@@ -464,10 +466,10 @@ export function localGitEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 const subcommandOf = (args: string[]): string => args.find((arg, i) => !arg.startsWith("-") && args[i - 1] !== "-c" && args[i - 1] !== "-C") ?? "";
 
-/** The spawn options `run` and `gitReporting` share (with `timeoutOptions` and `throwTimedOut`). */
-const runOptions = (cwd: string, env: NodeJS.ProcessEnv | undefined, input: string | Buffer | undefined) => ({
+/** The spawn options `startGit` and `gitReporting` share (with `timeoutOptions` and `throwFailure`). `env` is passed as built. */
+const runOptions = (cwd: string, env: NodeJS.ProcessEnv, input: string | Buffer | undefined) => ({
   cwd,
-  env: localGitEnv(env),
+  env,
   maxBuffer: 64 * 1024 * 1024,
   input,
   stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] as ("ignore" | "pipe")[],
@@ -487,15 +489,51 @@ function throwTimedOut(err: unknown, pid: number | undefined, stderr: Buffer | s
   throw new WorkerTreeGitTimeoutError(subcommandOf(args), bound, stderr?.toString().split("\n")[0]?.trim() ?? "", { cause: err });
 }
 
-/** `timeout` kills the call; `bound` is the limit its expiry names (the stage's, when the call ran on what remained of it). */
-function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string | Buffer, timeout?: number, bound = timeout): Buffer {
+/** The local runner: `env` overrides `localGitEnv`. `timeout` kills the call; `bound` is the limit its expiry names (the stage's, when
+ *  the call ran on what remained of it). `verb` is `Launch`'s. */
+function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string | Buffer, timeout?: number, bound = timeout, verb?: string): Buffer {
+  return startGit(cwd, args, localGitEnv(env), { input, timeout, bound, verb });
+}
+
+/** ADR 0441 決定2・4: the network git's launch, with github-auth's built env as it is. Only a missing cwd and this host's failure come
+ *  back typed; any other failure is thrown as git failed, and github-auth classifies it. A lint keeps this to github-auth (決定3). */
+export function networkGit(cwd: string, args: string[], env: NodeJS.ProcessEnv): Buffer {
+  return startGit(cwd, args, env, { network: true });
+}
+
+type Launch = {
+  input?: string | Buffer;
+  timeout?: number;
+  bound?: number;
+  /** the subcommand a missing cwd names, when the call stands for another (`readOriginConfig`) */
+  verb?: string;
+  /** ADR 0441 決定4: network git —— a failure that is neither a missing cwd nor this host's is thrown as git failed, and the lines the
+   *  remote wrote on stderr do not count as this host running out of space */
+  network?: boolean;
+};
+
+/** ADR 0441 決定1: `startGit` and `gitReporting` are the git module's launch points —— every board git child starts at one of them, with
+ *  `env` built by the caller, and its failure is typed once (`throwFailure`). */
+function startGit(cwd: string, args: string[], env: NodeJS.ProcessEnv, launch: Launch): Buffer {
   try {
-    return execFileSync("git", args, { ...runOptions(cwd, env, input), ...timeoutOptions(timeout) });
+    return execFileSync("git", args, { ...runOptions(cwd, env, launch.input), ...timeoutOptions(launch.timeout) });
   } catch (err) {
-    const { code, pid, stderr } = err as NodeJS.ErrnoException & { pid?: number; stderr?: Buffer };
-    if (timeout !== undefined && code === "ETIMEDOUT") throwTimedOut(err, pid, stderr, args, bound ?? timeout);
-    throw gitFailure(cwd, args, err as Error);
+    const { pid, stderr } = err as { pid?: number; stderr?: Buffer };
+    throwFailure(cwd, args, err as Error, pid, stderr, launch);
   }
+}
+
+/** A failed launch: a bounded call that ran out kills its process group (`throwTimedOut`); any other failure is typed (`gitFailure`). */
+function throwFailure(
+  cwd: string,
+  args: string[],
+  err: Error & GitToolFields,
+  pid: number | undefined,
+  stderr: Buffer | string | undefined,
+  { timeout, bound = timeout, verb, network = false }: Launch,
+): never {
+  if (timeout !== undefined && err.code === "ETIMEDOUT") throwTimedOut(err, pid, stderr, args, bound ?? timeout);
+  throw gitFailure(cwd, verb ? [verb] : args, err, network);
 }
 
 /** #3826: git that lists refs or reflog entries skips one it cannot read with only a warning on stderr, its exit still 0 (or 1, a
@@ -543,17 +581,10 @@ export function workerRepoGitUntil(deadline: number, cwd: string, args: string[]
   return runOnWorkerTree(cwd, args, undefined, input, deadline).toString().trim();
 }
 
-/** github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` の失敗の口(`run`・`gitReporting` は `gitFailure` で同じ
- *  `missingCwd` を通る)—— 網に出る git そのもの(`runAuthedGit`)は盤面所有の repo か HOME を cwd にするので通らず、clone の置き場の不在は
- *  `authedClone` が同じ文で先に名指す。Node は cwd が無いときも git が PATH に無いときも在り処を言わない「spawnSync git ENOENT」だけを
- *  投げ、それが quarantine の理由にそのまま載る(issue #2722)—— cwd が無いほうだけを在り処を名指す git の道具の失敗(ADR 0433 決定3)に
- *  書き換え、ほかの失敗(git が無い、origin が無い)は受け取ったまま投げる。 */
-export function rethrowNamingMissingCwd(err: unknown, cwd: string, args: string[]): never {
-  throw missingCwd((err as NodeJS.ErrnoException).code, cwd, args, err) ?? err;
-}
-
+/** Node は cwd が無いときも git が PATH に無いときも在り処を言わない「spawnSync git ENOENT」だけを投げ、それが quarantine の理由にそのまま
+ *  載る(issue #2722)—— cwd が無いほうだけを在り処を名指す git の道具の失敗(ADR 0433 決定3)にする。 */
 const missingCwd = (code: string | undefined, cwd: string, args: string[], cause: unknown) =>
-  code === "ENOENT" && !existsSync(cwd) ? new GitToolError(`\`git ${args[0]}\` cannot run: the directory ${cwd} does not exist`, { cause }) : undefined;
+  code === "ENOENT" && !existsSync(cwd) ? new GitToolError(`\`git ${subcommandOf(args)}\` cannot run: the directory ${cwd} does not exist`, { cause }) : undefined;
 
 /** The fields a failed git call carries — `execFileSync`'s, or `gitReporting`'s `status` and `stderr`. */
 type GitToolFields = Pick<GitToolError, "status" | "stderr" | "stdout" | "code" | "pid">;
@@ -568,16 +599,21 @@ export class GitToolError extends Error {
   pid?: number;
 }
 
-/** ADR 0433 決定3・5: `run` と `gitReporting` の失敗 `err` の出所 —— disk が満ちた失敗は host の失敗、残りは git の道具の失敗。元の失敗は欄に
- *  写すので cause に持たない(cwd が無い失敗だけが今までどおり持つ)。 */
-function gitFailure(cwd: string, args: string[], err: Error & GitToolFields): Error {
+/** ADR 0433 決定3・5: `throwFailure` の失敗 `err` の出所 —— disk が満ちた失敗は host の失敗、残りは git の道具の失敗。元の失敗は欄に写すので
+ *  cause に持たない(cwd が無い失敗だけが今までどおり持つ)。`network` は `Launch` のもの。 */
+function gitFailure(cwd: string, args: string[], err: Error & GitToolFields, network: boolean): Error {
   const { message, status, stderr, stdout, code, pid } = err;
   const missing = missingCwd(code, cwd, args, err);
   if (missing) return missing;
   // 述語の「no」(exit 1)は答え —— 空き 0 を返す fs でも host の失敗にしない。空きを見るのは git が容量切れと言わない失敗だけ
-  if (saysOutOfSpace(err) || (status !== 1 && noFreeSpace(cwd))) {
+  if (saysOutOfSpace(network ? { code, stderr: ownLines(stderr) } : err) || (status !== 1 && noFreeSpace(cwd))) {
     // `stderr` と `code` も持つ —— 写す段の `outOfSpace` が同じ欄で読む。staging と写す段はこの型を見て段の文で包み直す
     return Object.assign(new GitOutOfSpaceError(`the host is out of space: ${message}`), { code, stderr });
   }
-  return Object.assign(new GitToolError(message), { status, stderr, stdout, code, pid });
+  // ADR 0441 決定4: 網に出る git の一般の失敗の型は #3999 が決める —— git が投げたまま返す
+  return network ? err : Object.assign(new GitToolError(message), { status, stderr, stdout, code, pid });
 }
+
+/** ADR 0441 決定4: 網に出る git の stderr のうち手元の git の行 —— 相手が書いた行(`remote: …`、`fatal: remote error: …`)は相手の disk の話。 */
+const ownLines = (stderr: Buffer | string | undefined) =>
+  String(stderr ?? "").split("\n").filter((line) => !/^(remote: |fatal: remote error: )/.test(line)).join("\n");
