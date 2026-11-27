@@ -1,5 +1,5 @@
+import Database from "better-sqlite3";
 import { afterEach, expect, it, vi } from "vitest";
-import type { AgentView } from "../src/agent-create.js";
 import { recordKnowledge } from "../src/memory.js";
 import {
   api,
@@ -7,6 +7,7 @@ import {
   callAsTask,
   defaultingTo,
   expectReclaimed,
+  fakeRegistry,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   injectMemoryMaterial,
@@ -26,7 +27,19 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
  *  domain の「material was not injected」の拒否は tests/complete-memory-review.test.ts / tests/complete-routing-review.test.ts が言う。 */
 let t: Tidepool;
 afterEach(async () => {
+  hook.record = undefined;
   await t?.stop();
+});
+
+// 実の stack では狙って起こせない記録の transaction の失敗(CONSTRAINT / BUSY)だけを投げる口 —— 既定は素通し
+const hook = vi.hoisted(() => ({ record: undefined as Error | undefined }));
+vi.mock("../src/memory.js", async (importOriginal) => {
+  const memory = await importOriginal<typeof import("../src/memory.js")>();
+  const completeMemoryReview = ((...args: Parameters<typeof memory.completeMemoryReview>) => {
+    if (hook.record) throw hook.record;
+    return memory.completeMemoryReview(...args);
+  }) as typeof memory.completeMemoryReview;
+  return { ...memory, completeMemoryReview };
 });
 
 /** slot に入った memory meta-review(材料の Knowledge を1件書いて poll させる)。後始末は回収済み観測の後ろに止めておく。 */
@@ -64,6 +77,23 @@ it("材料の注入が記録されていない memory meta-review の complete_m
   });
 });
 
+it.each([
+  ["CONSTRAINT", new Database.SqliteError("UNIQUE constraint failed: events.id", "SQLITE_CONSTRAINT_UNIQUE")],
+  ["BUSY", new Database.SqliteError("database is locked", "SQLITE_BUSY")],
+] as const)("complete_memory_review の記録の transaction の %s は拒まず、巻き戻した後にその失敗の文を載せた failure question を登録して session を回収する(ADR 0424 決定2)", async (_, cause) => {
+  const { review, session, workspace } = await memoryReviewInSlot();
+  const judgments = injectMemoryMaterial(t.db, review.id, t.worker.id, t.clock.now());
+  hook.record = cause;
+
+  const res = await callAsTask(t, review.id, "complete_memory_review", { judgments });
+  hook.record = undefined;
+
+  await expectReclaimed(t, {
+    verb: "complete_memory_review", taskId: review.id, session, res, fragment: cause.message, quarantined: workspace,
+    nothingRecorded: nothingCompleted(review.id),
+  });
+});
+
 /** 入力の拒否は今のまま(ADR 0424 決定1): 拒否の文が返り、回収も failure question も無く、session は続く(次の呼び出しが答える)。 */
 async function expectRefusedAndContinuing(taskId: string, res: any, refusal: string) {
   expect(res.isError).toBe(true);
@@ -79,16 +109,6 @@ it("材料を注入した memory meta-review の complete_memory_review は、�
 
   await expectRefusedAndContinuing(review.id, await callAsTask(t, review.id, "complete_memory_review", { judgments: [] }), "unjudged");
 });
-
-/** registry の agent 一覧の fake: `unreadable` を立てると読みが落ちる。 */
-function fakeRegistry() {
-  const state = { unreadable: false };
-  const list = (): AgentView[] => {
-    if (state.unreadable) throw new Error("registry clone is broken");
-    return [];
-  };
-  return { state, agentAdmin: { list } };
-}
 
 /** slot に入った routing meta-review(実行設定の行の変更を材料に poll させる)。後始末は回収済み観測の後ろに止めておく。 */
 async function routingReviewInSlot() {
@@ -143,13 +163,17 @@ it("propose_routing_change の op agent_tier で registry の読みが落ちる�
   });
 });
 
-it("registry が読めなくても、registry を読む前の入力の拒否(op agent_tier に tier)と complete_routing_review の unjudged は今どおり拒否で、session は続く", async () => {
+it("registry が読めなくても、registry を読む前の propose_routing_change の入力の拒否(op agent_tier に tier)は今どおり拒否で、session は続く", async () => {
   const { review, registry } = await routingReviewInSlot();
-  injectRoutingMaterial(t.db, review.id, t.worker.id, t.clock.now(), []);
   registry.state.unreadable = true;
 
   await expectRefusedAndContinuing(review.id, await callAsTask(t, review.id, "propose_routing_change", { ...lowerDeckhand, tier: "standard" }), "op agent_tier takes no tier or description");
-  registry.state.unreadable = false;
+});
+
+it("材料を注入した routing meta-review の complete_routing_review は、判断の無い項目を今どおり unjudged で拒み、session は続く", async () => {
+  const { review } = await routingReviewInSlot();
+  injectRoutingMaterial(t.db, review.id, t.worker.id, t.clock.now(), []);
+
   await expectRefusedAndContinuing(review.id, await callAsTask(t, review.id, "complete_routing_review", { judgments: [] }), "unjudged");
 });
 

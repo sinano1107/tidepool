@@ -690,17 +690,28 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // ADR 0310 決定4: 材料が停止の RCA の verb の文は材料の停止を指す
   const stopRca = attributedTaskId !== null && materialStop(deps.db, attributedTaskId) !== undefined;
   /** `done` へ決着させる種別ごとの完了の verb の handler(門は持たない —— ADR 0363 決定3): 完了した task の id と status を返す。
-   *  `before` は記録の transaction の外で走り(回収の書き込みを巻き戻さない)、その値を `complete` が受ける。 */
+   *  `before` は記録の transaction の外で走り(回収の書き込みを巻き戻さない)、その値を `complete` が受ける。`reclaimAs` は
+   *  `runReleasingVerb` のそれ(記録の transaction の型の無い throw を回収する)。 */
   const completing =
-    <I, B = undefined>(complete: (db: Db, task: Task, input: I, actorId: string, now: Date, origin: "worker", before: B) => Task, before?: (task: Task) => B) =>
+    <I, B = undefined>(
+      complete: (db: Db, task: Task, input: I, actorId: string, now: Date, origin: "worker", before: B) => Task,
+      before?: (task: Task) => B,
+      reclaimAs?: string,
+    ) =>
     async (input: I) =>
-      runReleasingVerb(deps, attributedTaskId, (task) => {
-        const prepared = before?.(task) as B;
-        return (actorId, now) => {
-          const done = complete(deps.db, task, input, actorId, now, "worker", prepared);
-          return { id: done.id, status: done.status };
-        };
-      });
+      runReleasingVerb(
+        deps,
+        attributedTaskId,
+        (task) => {
+          const prepared = before?.(task) as B;
+          return (actorId, now) => {
+            const done = complete(deps.db, task, input, actorId, now, "worker", prepared);
+            return { id: done.id, status: done.status };
+          };
+        },
+        undefined,
+        reclaimAs,
+      );
 
   server.registerTool(
     "get_current_task",
@@ -1020,7 +1031,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      completing(completeMemoryReview, (task) => injectedMaterialOrReclaim(deps, task, "memory", "complete_memory_review")),
+      completing(completeMemoryReview, (task) => injectedMaterialOrReclaim(deps, task, "memory", "complete_memory_review"), "complete_memory_review"),
     );
   }
 
@@ -1060,6 +1071,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           injectedMaterialOrReclaim(deps, task, "routing", "complete_routing_review");
           return registryReadOrReclaim(deps, task, "complete_routing_review")?.();
         },
+        "complete_routing_review",
       ),
     );
   }
@@ -1720,18 +1732,27 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       },
     },
     async (input) =>
-      run((reader, now) =>
-        proposeRoutingChange(
+      run((reader, now) => {
+        const task = getTask(deps.db, reader.taskId)!;
+        return proposeRoutingChange(
           deps.db,
           reader.taskId,
           input,
           reader.agent,
           now,
-          // 読みは op agent_tier が一覧を要る所でだけ —— それより前の入力の拒否は回収に変わらない
-          registryReadOrReclaim(deps, getTask(deps.db, reader.taskId)!, "propose_routing_change"),
-          (name) => assertWorkspaceKnown(name, deps.resolveWorkspace, deps.workspace),
-        ),
-      ),
+          // ADR 0424 決定1: 読みは op agent_tier が一覧を要る所でだけ —— それより前の入力の拒否は回収に変わらない
+          registryReadOrReclaim(deps, task, "propose_routing_change"),
+          (name) => {
+            // ADR 0424 決定1・2: 知らない名前は agent が直せる拒否のまま、名前を解く読みの失敗は直せない —— 回収する
+            try {
+              assertWorkspaceKnown(name, deps.resolveWorkspace, deps.workspace);
+            } catch (err) {
+              if (err instanceof DomainError) throw err;
+              reclaimUnfixable(deps, task, "propose_routing_change", err);
+            }
+          },
+        );
+      }),
   );
 }
 
