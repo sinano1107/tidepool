@@ -102,6 +102,8 @@ export interface QueueTask {
 export interface BoardTask extends QueueTask {
   type: "work" | "question" | "review" | "memory_repair" | "routing_repair" | "interview";
   parent_id: string | null;
+  /** 別の workspace に置かれた根だけ: 分解元の task の id(ADR 0384 決定3)。 */
+  origin_task_id: string | null;
   /** 受験者だけ: その Interview の root の id(ADR 0267 決定6)。 */
   interview_root_id: string | null;
   /** 出題済みの Interview の root が blocked で待つもの(ADR 0273 決定3): 監査か受験者か。他の行には欄が無い。 */
@@ -266,6 +268,8 @@ export interface WireContract {
   "GET /api/tasks/:id": BoardTask & {
     /** Human stop entries, resolved by the shared task history read. cause / evidence only when the stop is attributed (ADR 0310). */
     human_stops: Array<{ id: number; reason: string; cause?: Cause; evidence?: string }>;
+    /** この task を分解元に持つ根(ADR 0384 決定3)、status は盤面に見えるもの。根の側の分解元は `origin_task_id`。 */
+    placed_roots: Array<Pick<QueueTask, "id" | "title" | "status">>;
     /** 保存された assignee(編集フォームが読む素の値)。`assignee` は一覧と同じ解決後の値(issue #1208)。 */
     raw_assignee: string | null;
     landing?: LandingAnnotation | null;
@@ -364,6 +368,8 @@ export interface WireContract {
     | { status: "throttled" };
   /** 人間の分解の子は、親の作業台に取り込まれていない commit があれば警告の1行を添える(spec #3273 group C)。 */
   "POST /api/tasks": Pick<BoardTask, "id" | "type"> & { warning?: string };
+  /** 人間の「別の workspace に置く」が登録した分解元つきの根(ADR 0384 決定3)。 */
+  "POST /api/tasks/:id/place": BoardTask;
   /** 観測決着も 200 で、印が回答は記録されていないことを言う(ADR 0265 決定7)。 */
   "POST /api/tasks/:id/answer": SettledMark;
   /** 人間担当の task の完了。作業台を残した完了は text C7 を `notice` に添える(spec #3273)。 */

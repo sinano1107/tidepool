@@ -71,6 +71,7 @@ import {
   openedPlaceNames,
   owedReleases,
   type PickupStopped,
+  parentOrOrigin,
   pickupTask,
   registerFailureQuestion,
   resolveTaskAgent,
@@ -816,9 +817,11 @@ export function startScheduler(deps: {
     }
   }
 
-  /** 親の issue の死は子の失敗ではない。文面を読める closed は保持し、not_found だけ空にする(ADR 0321 決定3・5)。 */
+  /** 親の issue の死は子の失敗ではない。文面を読める closed は保持し、not_found だけ空にする(ADR 0321 決定3・5)。
+   *  分解元つきの根は分解元を親として読む(ADR 0384 決定4・5)。 */
   async function parentBriefingAtPickup(head: Task): Promise<GateVerdict<ParentBriefing | undefined>> {
-    const parent = head.parent_id && getTask(db, head.parent_id);
+    const parentId = parentOrOrigin(head).taskId;
+    const parent = parentId && getTask(db, parentId);
     if (!parent) return { pass: undefined };
     // RCA は判事と同じ session の task 固有の文面を逐語で読む。記録が無ければ null、再構成しない(ADR 0321 決定1・2)。
     const anchors = head.type === "review"

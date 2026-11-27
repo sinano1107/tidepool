@@ -576,7 +576,7 @@ it("人間の登録 door は issue-backed decompose child を登録しない", a
   expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
 });
 
-// ADR 0384 決定1: 子は workspace を入力に持たない —— 親と同じ名前でも拒み、別の workspace に置くなら根として登録する
+// ADR 0384 決定1・3: 子は workspace を入力に持たない —— 親と同じ名前でも拒み、別の workspace に置くなら親の「別の workspace に置く」を使う
 it("人間の分解と人間の登録 door は、親と同じ名前でも分解の子の workspace を拒み、子を登録しない", async () => {
   db = openDb(":memory:");
   const parent = registerTask(
@@ -596,8 +596,8 @@ it("人間の分解と人間の登録 door は、親と同じ名前でも分解�
   );
 
   expect({ decomposed, registered }).toEqual({
-    decomposed: { ok: false, failure: { kind: "domain_error", error: expect.stringMatching(/register it as a root/) } },
-    registered: { ok: false, failure: { kind: "invalid", error: expect.stringMatching(/register it as a root/) } },
+    decomposed: { ok: false, failure: { kind: "domain_error", error: expect.stringMatching(/use "place in another workspace" on the parent/) } },
+    registered: { ok: false, failure: { kind: "invalid", error: expect.stringMatching(/use "place in another workspace" on the parent/) } },
   });
   expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
 });
@@ -616,7 +616,7 @@ it("人間の Edit door は、子の workspace を registry に無い名前へ�
     "webui",
   );
 
-  expect(result).toEqual({ ok: false, failure: { kind: "domain_error", error: expect.stringMatching(/register it as a root/) } });
+  expect(result).toEqual({ ok: false, failure: { kind: "domain_error", error: expect.stringMatching(/use "place in another workspace" on the parent/) } });
 });
 
 it("PR promotion の retry が失敗したら question を未決着のまま残す", async () => {

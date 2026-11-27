@@ -183,6 +183,10 @@ function initializeDb(db: Db): void {
       -- Immutable provenance: the decision-log event this decomposed child
       -- rests on. Null for tasks outside a decomposition decision.
       based_on_decision   INTEGER,
+      -- ADR 0384 決定3: 別の workspace に置かれた根の分解元 —— 分解した task とその分解の判断(decision_logged の event id)。
+      -- 対で書かれ、parent_id・based_on_decision とは同居しない。それ以外の task は null。
+      origin_task_id      TEXT REFERENCES tasks(id),
+      origin_decision     INTEGER,
       -- 前提の破綻の射影(ADR 0121 / issue #631): 宣言が開いている間だけ、破綻した分解判断の
       -- event id を持つ。閉じたら null。
       premise_breach_decision INTEGER,
