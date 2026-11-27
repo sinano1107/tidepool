@@ -1,7 +1,8 @@
 import { rmSync } from "node:fs";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
+import { appendEvent } from "../src/events.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { createLanding, type Landing, landingState, registerPrPromotionFailureQuestion, settledByObservation } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
@@ -152,18 +153,21 @@ it("収束が着地を終えた根とその子は終える集合に入らず、�
   expect([c.root, c.child].map((task) => landingState(c.db, getTask(c.db, task.id)!))).toEqual(before);
 });
 
-it("盤面の外の merge を観測して収束がまだ着地を終えていない根も、その子も終える集合に入り、根の行は merge の観測のまま", async () => {
+// ADR 0434 決定2: merge の記録は内容の到達を言わないので、終える前に収束が根を読み終えるのを待つ
+it("盤面の外の merge を観測して収束がまだ着地を終えていない根が在れば、扉は何も終えずに拒み、収束が着地を終えた後は根もその子も終える集合に入らずに通る", async () => {
   const c = await reefWithPrRootAndChild("escalate");
   await mergeOnGitHub(c.workspace, c.root.id);
   c.github.scriptMergedOutside(1);
   await c.landing.tick("outside_merge");
   expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("merge_observed");
 
-  await expect(c.door(false)).rejects.toMatchObject({ landingEnds: [{ id: c.root.id, pr_number: 1 }, { id: c.child.id }] });
-  await c.door();
+  await expect(c.door(false)).rejects.toMatchObject({ name: "DeletionBlockedError", reasons: [{ code: "merged_pr_landing_unfinished", task_ids: [c.root.id] }] });
+  expect([c.root, c.child].map((task) => landingState(c.db, getTask(c.db, task.id)!))).not.toContain("workspace_deleted");
+  await c.landing.converge();
 
-  expect([c.root, c.child].map((task) => landingState(c.db, getTask(c.db, task.id)!))).toEqual(["merge_observed", "workspace_deleted"]);
-  await expectLandingDoesNothing(c, [c.root, c.child]);
+  await expect(c.door(false)).rejects.toMatchObject({ landingEnds: [] });
+  await c.door();
+  expect([c.root, c.child].map((task) => landingState(c.db, getTask(c.db, task.id)!))).not.toContain("workspace_deleted");
 });
 
 it("盤面の外で閉じた PR の根は終える集合に入り、行は閉じた観測のまま", async () => {
@@ -274,6 +278,21 @@ it("registry の refresh を待つ間に着地の執行が始まれば、扉は�
 
   expect(c.registered()).toBe(false);
   expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("workspace_deleted");
+});
+
+it("registry の refresh を待つ間に盤面が PR の merge を観測すれば、扉は何も書かずに投げる(ADR 0434 決定2)", async () => {
+  const c = await reefAwaitingRegistry();
+
+  await expect(
+    c.deleteAround(() => {
+      // この名前は出元 repo を持たず tick は PR を読めないので、外の merge の観測を盤面の書く形で置く
+      appendEvent(c.db, { taskId: c.root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 }, at: c.clock.now() });
+    }),
+  ).rejects.toMatchObject({ reasons: [{ code: "merged_pr_landing_unfinished", task_ids: [c.root.id] }] });
+
+  expect(c.registered()).toBe(true);
+  expect(holdsBaseline(c.db, "reef")).toBe(true);
+  expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("merge_observed");
 });
 
 // 終える集合が収束の候補と違う唯一の端: local 着地の question が開いた根は、入口では未決着で拒まれ、窓の中で立てば終える側が閉じる

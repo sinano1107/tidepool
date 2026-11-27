@@ -1213,8 +1213,10 @@ export function hasTaskBranchInForce(db: Db, taskId: string): boolean {
   return hasTaskBranch(db, taskId) && !taskBranchLostInForce(db, taskId);
 }
 
-/** spec #3273 group H: 内容が保護ブランチに届いた着地の記録。ADR 0380 決定1: 失われたので終えた記録・`nothing_to_land`・閉じた PR は数えない。 */
-const REACHED_PROTECTED_BRANCH_KINDS = ["local_merge_executed", "pr_merged", "pr_merge_observed", "landing_finished"];
+/** spec #3273 group H: 内容が保護ブランチに届いた着地の記録。ADR 0380 決定1: 失われたので終えた記録・`nothing_to_land`・閉じた PR は数えない。
+ *  ADR 0434 決定1: 着地が終わったことを確かめた記録だけ —— PR の merge の記録(`pr_merged` / `pr_merge_observed`)は merge の時点の head までしか
+ *  言わず、その後に根へ merge back した内容は届いていないことがあるので数えない。 */
+const REACHED_PROTECTED_BRANCH_KINDS = ["local_merge_executed", "landing_finished"];
 
 /** `taskIds` のどれかが、id が `after` より後で `before` より前の `kinds` の event を持つか。 */
 function hasRecordBetween(db: Db, taskIds: string[], kinds: string[], after = 0, before = Number.MAX_SAFE_INTEGER): boolean {
@@ -1226,16 +1228,16 @@ function hasRecordBetween(db: Db, taskIds: string[], kinds: string[], after = 0,
 }
 
 /** ADR 0421 決定3 と Status 追記(#3895): 削除の扉が着地を終えた task(`landing_ended_workspace_deleted`)のうち、終わりの記録より前に自身が
- *  内容の保護ブランチへの到達の記録を持たないもの —— 帰り先の無い系譜の3つ目。子は根の記録を継がない(merge の後に merge back した修理は
- *  届いていないことがある)。記録だけで読み、`asOf` を渡せばその event より前の記録で読む。 */
+ *  内容の保護ブランチへの到達の記録(ADR 0434 決定1: PR の merge の記録は数えない)を持たないもの —— 帰り先の無い系譜の3つ目。子は根の記録を
+ *  継がない(merge の後に merge back した修理は届いていないことがある)。記録だけで読み、`asOf` を渡せばその event より前の記録で読む。 */
 export function landingEndedByDeletionUnreached(db: Db, taskId: string, asOf?: number): boolean {
   const ended = latestEventOfTask(db, taskId, "landing_ended_workspace_deleted", asOf);
   return ended !== undefined && !hasRecordBetween(db, [taskId], REACHED_PROTECTED_BRANCH_KINDS, 0, ended.id);
 }
 
 /** ADR 0421 決定5 と Status 追記: 系譜の読みが「着地済み」と数える祖先の記録 —— 着地がまだ終わっていない完了 task(`landingUnendedSql`、
- *  収束の候補と同じ読み —— local 着地を執行した根も外れる、ADR 0289 決定1)でなく、自身が内容の保護ブランチへの到達の記録か、運ぶ内容が
- *  無かった記録(`nothing_to_land`)を持つ。行の着地の状態 `landed`(`landing_finished` だけ)より広い。 */
+ *  収束の候補と同じ読み —— local 着地を執行した根も外れる、ADR 0289 決定1)でなく、自身が内容の保護ブランチへの到達の記録(ADR 0434 決定1)か、
+ *  運ぶ内容が無かった記録(`nothing_to_land`)を持つ。行の着地の状態 `landed`(`landing_finished` だけ)より広い。 */
 export function landedForLineage(db: Db, taskId: string): boolean {
   const unended = db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${landingUnendedSql("t")}`).get(taskId) !== undefined;
   return !unended && hasRecordBetween(db, [taskId], [...REACHED_PROTECTED_BRANCH_KINDS, "nothing_to_land"]);
@@ -1256,7 +1258,8 @@ function lostAsCreated(db: Db, taskId: string, lost: { id: number; payload: { sh
 }
 
 /** ADR 0380 決定1: 効いている失われた event `lost` を持つ done の work は、失われた sha が作成時の sha と同じ(handoff だけ)か、内容が
- *  保護ブランチに届いた記録を自身か数える祖先(`counted`)が持ち、その記録より前に完了していれば透明、それ以外は死んだ。記録だけで読む。
+ *  保護ブランチに届いた記録(ADR 0434 決定1: PR の merge の記録は数えない)を自身か数える祖先(`counted`)が持ち、その記録より前に完了していれば
+ *  透明、それ以外は死んだ。記録だけで読む。
  *  ADR 0375 決定2: 作成時の sha を持たない `task_branch_created`(この event の前に作られたブランチ)は編集があった側。
  *  ADR 0380 Status 追記(#3297): 数える記録は失われた event より前のもの —— 失われた後の記録は失われた内容を運べない(届いた merge back は
  *  tip の object を残す、ADR 0375 決定1)ので、透明か死んだかは失われた時点で決まり、生きている根が後で着地しても変わらない(同 決定6)。

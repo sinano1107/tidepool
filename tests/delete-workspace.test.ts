@@ -7,7 +7,7 @@ import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { CheckoutHostError } from "../src/git.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
-import { contentLeftBehindLocally, createLanding, lastPushedHead, prRootIdsWithUnpushedContentInWorkspace, registerPrPromotionFailureQuestion, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
+import { contentLeftBehindLocally, createLanding, lastPushedHead, mergedPrRootIdsAwaitingLandingInWorkspace, prRootIdsWithUnpushedContentInWorkspace, registerPrPromotionFailureQuestion, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { openQuarantineQuestion, registerQuarantine, workspaceContainmentValue } from "../src/quarantine.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
@@ -82,6 +82,7 @@ function deletionDeps(db: Db, dir: string, workspacesBaseDir = "/workspaces") {
     listAwaitingLandingTaskIds: (name: string) => taskIdsAwaitingLandingInWorkspace(db, resolveIn(name), name),
     listUnpushedPrRootIds: (name: string) => prRootIdsWithUnpushedContentInWorkspace(db, resolveIn(name), name),
     listLandingInProgressTaskIds: () => [],
+    listMergedPrRootIdsAwaitingLanding: (name: string) => mergedPrRootIdsAwaitingLandingInWorkspace(db, name),
     listPrRootIdsLackingUnpushedContent: (name: string) => prRootIdsWithUnpushedContentInWorkspace(db, resolveIn(name), name, { declined: true }),
   };
 }

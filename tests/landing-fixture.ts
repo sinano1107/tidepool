@@ -11,6 +11,7 @@ import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
   createLanding,
   type Landing,
+  mergedPrRootIdsAwaitingLandingInWorkspace,
   prRootIdsWithUnpushedContentInWorkspace,
   registerPrPromotionFailureQuestion,
   taskIdsAwaitingLandingInWorkspace,
@@ -810,6 +811,7 @@ export function deletionReaders(db: Db, resolve: WorkspaceResolver | undefined, 
     listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
     listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name),
     listLandingInProgressTaskIds: (name) => (landing ? taskIdsBeingLandedInWorkspace(db, landing, name) : []),
+    listMergedPrRootIdsAwaitingLanding: (name) => mergedPrRootIdsAwaitingLandingInWorkspace(db, name),
     listPrRootIdsLackingUnpushedContent: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name, { declined: true }),
   };
 }
