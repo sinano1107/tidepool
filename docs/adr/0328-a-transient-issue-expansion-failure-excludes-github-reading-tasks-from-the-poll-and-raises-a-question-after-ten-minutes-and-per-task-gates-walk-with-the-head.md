@@ -1,5 +1,7 @@
 # issue 展開の一時的失敗は、pickup で GitHub を読む task をその poll から外して次の head へ進み、成功を挟まず10分続けば確認 question を立てる —— task の性質の門は head の歩きの中に置き、例外を飲まず verdict を返す
 
+**Status 追記: 決定1 の天候と決定3 の展開失敗の計測に、registry の読みの失敗は数えない —— gh の呼び出しの中で起きても止まりを立て済みの型で、question は registry の止まりの1枚である([ADR 0444](0444-an-unattended-catch-adds-no-question-of-its-own-to-a-failure-that-already-stopped-its-resource-and-teardown-waits-for-that-stop.md) 決定4、2026-11-28、issue #4017)。**
+
 2026-10-30 の triage → grilling(issue #2704)で決定。issue-backed task の展開が `IssueGoneError` 以外で投げると、pickup の門は null を返し
 poll は `SUCCEEDED` で終わっていた。後ろの通常 task は見られず(head-of-line blocking)、上限も question も無く、しかも本体に入った後の
 return なので ADR 0294 の連続失敗の計測を**戻し**、開いた `pollFailure` question を観測で決着させていた —— 信号に入らないどころか信号を

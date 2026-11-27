@@ -1,5 +1,7 @@
 # 盤面 DB が書きを拒んだ記録の書き込みは床から process を終え、後始末の step の中の盤面のバグは落ちた後始末である —— memory の印は書き込みの後
 
+**Status 追記: 決定1 の「後始末の step の中の盤面のバグは落ちた後始末」に、止まりを立て済みの型(registry の読みの失敗)は入らない —— 後始末は question を立てずに残りの手と枠を握ったまま待ち、その止まりの受理が残りを撃ち直す([ADR 0444](0444-an-unattended-catch-adds-no-question-of-its-own-to-a-failure-that-already-stopped-its-resource-and-teardown-waits-for-that-stop.md) 決定2、2026-11-28、issue #4017)。**
+
 **Status 追記: 決定1 の「後始末の step の中の盤面のバグは落ちた後始末」は、step の中で名前の場所の Quarantine に畳む catch にも届く —— 型で名指された資源の故障だけが資源を止め、型の付かない失敗は落ちた後始末へ行く([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定2・3、2026-11-27、issue #3938)。**
 
 **Status 追記: 決定1 の (A) は「盤面 DB が操作を拒む」に広がり、読みの拒否も入る。判定は底でなく `openDb` が返す handle が投げた所でし、同期で終える —— 決定3 の底の分類と `uncaughtException` の受け手、決定4 の境界の catch の投げ直しは消える。決定2 の「`in_progress` 行の無い盤面は起動が通る」は `READONLY` にだけ残る([ADR 0389](./0389-the-board-db-handle-classifies-a-refusal-where-it-is-thrown-and-ends-the-process-synchronously-reads-included.md)、2026-11-21、issue #2868)。**

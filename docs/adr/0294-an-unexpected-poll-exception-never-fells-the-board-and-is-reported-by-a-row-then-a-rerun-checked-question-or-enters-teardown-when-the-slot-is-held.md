@@ -1,5 +1,7 @@
 # poll の想定外の例外は盤面を落とさない —— 何も握っていなければ行で報せて次の poll に任せ、続けば撃ち直しで確かめる question を立て、slot を握っていれば worker が走らなかった pickup として後始末へ入る
 
+**Status 追記: 決定3 の「slot を握った後の想定外の例外は `spawn_failed`」に、registry の読みの失敗は入らない —— 読み込みの1点が止まりを立て済みの型なので資源の停止で、question を足さずに pickup の停止として task を todo へ戻す([ADR 0444](0444-an-unattended-catch-adds-no-question-of-its-own-to-a-failure-that-already-stopped-its-resource-and-teardown-waits-for-that-stop.md) 決定3、2026-11-28、issue #4017)。**
+
 **Status 追記: 決定3 の「slot を握った後の想定外の例外は `spawn_failed`」は、pickup の準備と worker の準備の catch で型の付かない失敗にも届く —— 名前の場所の Quarantine に畳まない([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定2、2026-11-27、issue #3938)。**
 
 **Status 追記: registry が読めずに投げた poll は、registry の Quarantine(`registryUnreadable`)が開いていれば決定1 の行にも決定2 の計測にも数えない —— 止まりは registry の読み込みの1点が立て、人間には盤面全体の停止として届く([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定5、2026-11-23、issue #3554)。**
