@@ -99,6 +99,7 @@ import { whyNotPositiveInteger } from "./positive-integer.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
 import {
+  authorityProfileSchema,
   InvalidAgentDefinitionError,
   InvalidAgentNameError,
   InvalidAllowedDomainError,
@@ -107,7 +108,6 @@ import {
   InvalidSkillAllowlistError,
   InvalidWorkspaceNameError,
   isBuiltInAgentName,
-  MERGE_DIAL_VALUES,
   UnknownAgentError,
   UnknownAuthorityProfileError,
 } from "./registry.js";
@@ -229,13 +229,6 @@ const agentFieldsSchema = z.object({
   advisor: z.boolean().optional(),
   skills: z.array(z.string()),
   system_prompt: z.string(),
-});
-
-const profileFieldsSchema = z.object({
-  guidance: z.string(),
-  assignable_to: z.array(z.string()),
-  allowed_workspaces: z.array(z.string()),
-  merge: z.enum(MERGE_DIAL_VALUES),
 });
 
 /** Maps the WebUI's registry failure taxonomy to MCP tool errors. */
@@ -672,7 +665,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "create_profile",
     {
       description: "Create an authority profile in the human-managed registry.",
-      inputSchema: profileFieldsSchema.extend({ name: requiredTextSchema }),
+      inputSchema: authorityProfileSchema.extend({ name: requiredTextSchema }),
     },
     async (input) => {
       if (!deps.profileAdmin?.create) return toolError("profile administration is not configured");
@@ -702,7 +695,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Update an authority profile in the human-managed registry. Fields omitted from the request are left unchanged.",
       // 部分パッチ(issue #266 / ADR 0086)— create 扉は全フィールド必須のまま
-      inputSchema: profileFieldsSchema.partial().extend({ name: requiredTextSchema }),
+      inputSchema: authorityProfileSchema.partial().extend({ name: requiredTextSchema }),
     },
     async (input) => {
       if (!deps.profileAdmin?.update) return toolError("profile administration is not configured");
@@ -1316,7 +1309,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         parent_id: z.string().optional(),
         assignee: z.string().optional(),
         workspace: z.string().optional()
-          .describe("Roots only: a task with parent_id takes no workspace (refused) — a child always runs in its parent's workspace."),
+          .describe("Required for a GitHub issue reference. With parent_id, an issue becomes a child in a fixed, matching tree or a separate root carrying that origin. Other tasks with parent_id take no workspace."),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN),
         tier: z

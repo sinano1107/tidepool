@@ -19,7 +19,6 @@ const seed = (input: RegisterTaskInput) => registerTask(t.db, input, t.clock.now
 const PERMISSIVE_AUTHORITY: AuthorityProfile = {
   name: "permissive",
   guidance: "",
-  // no allowed_workspaces — unrestricted
 };
 
 function resolveAuthority(assignee: string | null): AuthorityProfile | undefined {
@@ -51,7 +50,7 @@ it("review タスクは実行 assignee 自身の authority profile がどれだ�
           title: "patch prod directly",
           purpose: "p",
           completion_criteria: "c",
-          workspace: "prod",
+          assignee: "other-agent",
         },
       ],
     },

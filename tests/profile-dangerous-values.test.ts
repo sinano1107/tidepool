@@ -6,7 +6,7 @@ describe("dangerousValues: 危険値判定の純関数(issue #76 — 判定の�
     expect(
       dangerousValues({
         assignable_to: ["deckhand", "tako"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "escalate",
       }),
     ).toEqual([]);
@@ -16,7 +16,7 @@ describe("dangerousValues: 危険値判定の純関数(issue #76 — 判定の�
     expect(
       dangerousValues({
         assignable_to: ["deckhand"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "external",
       }),
     ).toEqual([]);
@@ -26,7 +26,7 @@ describe("dangerousValues: 危険値判定の純関数(issue #76 — 判定の�
     expect(
       dangerousValues({
         assignable_to: ["deckhand"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "auto_if_ci_green",
       }),
     ).toContain("merge_auto_if_ci_green");
@@ -36,34 +36,23 @@ describe("dangerousValues: 危険値判定の純関数(issue #76 — 判定の�
     expect(
       dangerousValues({
         assignable_to: ["*"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "escalate",
       }),
     ).toContain("assignable_to_wildcard");
-  });
-
-  it("allowed_workspaces の \"*\" は危険理由として検知される", () => {
-    expect(
-      dangerousValues({
-        assignable_to: ["deckhand"],
-        allowed_workspaces: ["*"],
-        merge: "escalate",
-      }),
-    ).toContain("allowed_workspaces_wildcard");
   });
 
   it("複数の危険値は理由がすべて集まる", () => {
     expect(
       dangerousValues({
         assignable_to: ["*"],
-        allowed_workspaces: ["*"],
+
         merge: "auto_if_ci_green",
       }),
     ).toEqual(
       expect.arrayContaining([
         "merge_auto_if_ci_green",
         "assignable_to_wildcard",
-        "allowed_workspaces_wildcard",
       ]),
     );
   });
@@ -78,7 +67,7 @@ describe("dangerousValues: 部分パッチ(issue #266 / ADR 0086 — 現れな�
     expect(dangerousValues({ merge: "auto_if_ci_green" })).toEqual(["merge_auto_if_ci_green"]);
   });
 
-  it("空配列は安全側 —— 「誰にも / どこにも」なので確認は出ない", () => {
-    expect(dangerousValues({ assignable_to: [], allowed_workspaces: [] })).toEqual([]);
+  it("空配列は安全側 —— 「誰にも」なので確認は出ない", () => {
+    expect(dangerousValues({ assignable_to: [] })).toEqual([]);
   });
 });

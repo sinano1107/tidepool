@@ -32,7 +32,7 @@ const AGENTS = [
 ];
 
 const PROFILES = [
-  { name: "implementer", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "escalate" },
+  { name: "implementer", guidance: "g", assignable_to: ["*"], merge: "escalate" },
 ];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */

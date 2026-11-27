@@ -652,10 +652,9 @@ function builtInResolutionChecker(board: BoardComposition, db: Db): ((name: stri
   return (name) => ownEntry(loadBoardRegistry(board, db).agents, name)?.builtin === true;
 }
 
-/** Whether an explicitly named workspace is protected (issue #15 layer 2 /
- *  ADR 0013), read fresh against the registry — a decompose child naming a
- *  protected workspace converts to an approval question unconditionally
- *  (mcp.ts), and a task executing against one always asks before merging its
+/** Whether a workspace is protected (ADR 0013), read fresh against the registry.
+ *  Agent placement names a protected destination in its approval question (ADR 0384 決定3)
+ *  and a task executing there always asks before merging its
  *  PR (tasks.ts's recordPrOpened), regardless of the registering/executing
  *  worker's authority profile. Without a registry, no workspace is ever
  *  protected. */

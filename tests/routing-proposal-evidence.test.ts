@@ -5,7 +5,7 @@ import { appendEvent, type EventPayload, getEvent, latestEventOfTask } from "../
 import { applyExecutionSettingsChange, type RowKey } from "../src/execution-setting.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { getTask, listBoard, listChildren, registerTask } from "../src/tasks.js";
+import { fillEmptyWorkspace, getTask, listBoard, listChildren, registerTask } from "../src/tasks.js";
 import { readTiers, tierIdOf } from "../src/tier.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
 import { DECKHAND_AGENT, deckhandOnTier, decomposedChild, examineeRootId, HUMAN_WEBUI, interviewExaminee, judgedRoutingReview, OPUS_ROW, routedOpusSessions, rowSession, WORKER_SPAWNED } from "./harness.js";
@@ -240,6 +240,7 @@ it("段の説明の提案の根拠の書き手は文面の書き手で、agent �
   const { db, propose } = board();
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "reef" }, at, ...HUMAN_WEBUI);
   const child = decomposedChild(db, parent, "child", "scout", at, "standard");
+  fillEmptyWorkspace(db, child.id, "reef");
   const { question_id } = propose({ op: "tier_description", tier: "standard", description: "Work that needs a plan.", evidence: [spawnOn(db, child.id)] });
 
   const lines = detailLines(db, question_id);

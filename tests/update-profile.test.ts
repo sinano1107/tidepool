@@ -31,7 +31,7 @@ describe("updateProfile: 正常系(issue #76 — ファイル全体の書き直�
         name: "standard",
         guidance: "Rewritten guidance.",
         assignable_to: ["deckhand"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "escalate",
       },
       { db, registry: { dir: registryDir, mode: "purely-local" } },
@@ -42,7 +42,7 @@ describe("updateProfile: 正常系(issue #76 — ファイル全体の書き直�
       name: "standard",
       guidance: "Rewritten guidance.",
       assignable_to: ["deckhand"],
-      allowed_workspaces: ["tidepool"],
+
       merge: "escalate",
     });
     // registryDir 自身の working tree は checkout ではなく着地先の ref だけを見る
@@ -64,7 +64,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
         name: "standard",
         guidance: "Rewritten guidance.",
         assignable_to: ["deckhand"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "escalate",
       },
       { db, registry: { dir: registryDir, mode: "remote-backed" } },
@@ -89,7 +89,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
           name: "standard",
           guidance: "Rewritten guidance.",
           assignable_to: ["deckhand"],
-          allowed_workspaces: ["tidepool"],
+
           merge: "escalate",
         },
         { db, registry: { dir: registryDir, mode: "remote-backed" } },
@@ -110,7 +110,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
       name: "standard",
       guidance: "Prefer reversible actions. Anything irreversible is outside your authority.\n",
       assignable_to: ["*"],
-      allowed_workspaces: ["*"],
+
       merge: "external" as const,
       // no-change でも確認は要る — 判定はペイロードだけを見るので、"*" を
       // 「書いた」ことに変わりはない(ADR 0061 決定2)
@@ -126,7 +126,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
   it("配列フィールドは中身の比較 — 同じ要素の再送はコミットなしの成功(参照比較のバグ回帰)", async () => {
     const registryDir = await makeMainRegistry({
       "authority/reviewer.yaml":
-        "guidance: review only\nassignable_to:\n  - deckhand\n  - tako\nallowed_workspaces:\n  - tidepool\nmerge: escalate\n",
+        "guidance: review only\nassignable_to:\n  - deckhand\n  - tako\nmerge: escalate\n",
     });
     const before = git(registryDir, "rev-parse", "HEAD");
 
@@ -135,7 +135,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         name: "reviewer",
         guidance: "review only",
         assignable_to: ["deckhand", "tako"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "escalate",
       },
       { db, registry: { dir: registryDir, mode: "purely-local" } },
@@ -147,7 +147,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
   it("assignable_to の中身だけが変われば(要素数は同じ)コミットする — 長さだけの比較への後退を防ぐ", async () => {
     const registryDir = await makeMainRegistry({
       "authority/reviewer.yaml":
-        "guidance: review only\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: escalate\n",
+        "guidance: review only\nassignable_to:\n  - deckhand\nmerge: escalate\n",
     });
     const before = git(registryDir, "rev-parse", "HEAD");
 
@@ -156,7 +156,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         name: "reviewer",
         guidance: "review only",
         assignable_to: ["tako"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "escalate",
       },
       { db, registry: { dir: registryDir, mode: "purely-local" } },
@@ -170,7 +170,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
 describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触らない)", () => {
   const AUTO_MERGE_PROFILE = {
     "authority/roamer.yaml":
-      "guidance: old guidance\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: auto_if_ci_green\n",
+      "guidance: old guidance\nassignable_to:\n  - deckhand\nmerge: auto_if_ci_green\n",
   };
 
   it("guidance だけのパッチは他の3フィールドを既存値のまま残す", async () => {
@@ -187,7 +187,7 @@ describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触
       name: "roamer",
       guidance: "new guidance",
       assignable_to: ["deckhand"],
-      allowed_workspaces: ["tidepool"],
+
       merge: "auto_if_ci_green",
     });
   });
@@ -213,7 +213,7 @@ describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触
       name: "roamer",
       guidance: "",
       assignable_to: [],
-      allowed_workspaces: ["tidepool"],
+
       merge: "auto_if_ci_green",
     });
   });
@@ -238,7 +238,7 @@ describe("updateProfile: 存在しないプロファイル(issue #76 — 編集�
 
     await expect(
       updateProfile(
-        { name: "ghost", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "escalate" },
+        { name: "ghost", guidance: "g", assignable_to: ["*"], merge: "escalate" },
         { db, registry: { dir: registryDir, mode: "purely-local" } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
@@ -250,13 +250,12 @@ describe("updateProfile: 存在しないプロファイル(issue #76 — 編集�
 describe("updateProfile: 危険な値の確認(ADR 0061 決定1 — 執行はドメイン側に1つ)", () => {
   const SAFE_PROFILE = {
     "authority/roamer.yaml":
-      "guidance: old guidance\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: escalate\n",
+      "guidance: old guidance\nassignable_to:\n  - deckhand\nmerge: escalate\n",
   };
-  // 受け入れ条件が名指しする3ペイロード × 両半分を、判定が住むこの層で揃える
+  // 受け入れ条件が名指しする2ペイロード × 両半分を、判定が住むこの層で揃える
   const DANGEROUS_PATCHES: [string, Record<string, unknown>][] = [
     ["merge_auto_if_ci_green", { merge: "auto_if_ci_green" }],
     ["assignable_to_wildcard", { assignable_to: ["*"] }],
-    ["allowed_workspaces_wildcard", { allowed_workspaces: ["*"] }],
   ];
 
   for (const [reason, patch] of DANGEROUS_PATCHES) {
@@ -280,7 +279,7 @@ describe("updateProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
   it("判定はパッチだけを見る — auto_if_ci_green の profile への guidance だけのパッチは確認を要求しない", async () => {
     const registryDir = await makeMainRegistry({
       "authority/roamer.yaml":
-        "guidance: old guidance\nassignable_to:\n  - deckhand\nallowed_workspaces:\n  - tidepool\nmerge: auto_if_ci_green\n",
+        "guidance: old guidance\nassignable_to:\n  - deckhand\nmerge: auto_if_ci_green\n",
     });
 
     await updateProfile(

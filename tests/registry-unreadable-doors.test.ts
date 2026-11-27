@@ -26,7 +26,7 @@ const doors: Record<string, Door> = {
   "workspace create": (deps) => createWorkspace({ mode: "create", name: "lagoon" }, deps),
   "workspace list": (deps) => listWorkspaceViews(deps, "configured"),
   "authority profile create": (deps) =>
-    createProfile({ name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "external" }, deps),
+    createProfile({ name: "risky", guidance: "g", assignable_to: ["*"], merge: "external" }, deps),
   "authority profile list": (deps) => listProfileViews(deps),
 };
 
@@ -48,7 +48,7 @@ it.each(Object.keys(doors))("registry が読めないと、%s は RegistryUnread
 // registry のファイルに既にある不正な名前は読み込みの失敗であって、呼び手の入力の誤り(名前の型の 400)ではない
 it.each([
   ["workspace", { "workspaces.yaml": "Bad Name:\n  path: /nonexistent/bad\n" }, "workspace create"],
-  ["authority profile", { "authority/Bad Name.yaml": "guidance: g\nassignable_to: []\nallowed_workspaces: []\nmerge: external\n" }, "authority profile create"],
+  ["authority profile", { "authority/Bad Name.yaml": "guidance: g\nassignable_to: []\nmerge: external\n" }, "authority profile create"],
 ] as const)("registry に不正な %s の名前があると、作成の扉は RegistryUnreadableError を投げる", async (_kind, files, door) => {
   const deps = await doorDeps(await makeRegistry(files));
 

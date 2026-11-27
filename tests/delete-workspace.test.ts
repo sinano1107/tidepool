@@ -300,25 +300,6 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
     ).rejects.toMatchObject({ name: "DeletionBlockedError", reasons: [{ code: "board_default" }] });
   });
 
-  it("profile の allowed_workspaces に列挙されているだけの workspace は消せる(ADR 0087 決定2)", async () => {
-    const registryDir = await makeRegistry({
-      "authority/standard.yaml":
-        "guidance: lists tidepool as an allowed workspace\nassignable_to: []\nallowed_workspaces:\n  - tidepool\nmerge: escalate\n",
-    });
-    git(registryDir, "branch", "-M", "main");
-
-    await deleteWorkspace(
-      { name: "tidepool", confirm: true },
-      deletionDeps(openDb(":memory:"), registryDir),
-    );
-
-    expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeUndefined();
-    // 掃除は不要 —— 許可先が1つ消えるだけで無害である
-    expect(
-      loadRegistry(registryDir, "purely-local").authority.standard?.allowed_workspaces,
-    ).toEqual(["tidepool"]);
-  });
-
   // ADR 0377 決定8: registry clone を拒む削除の項は消えた —— 手で足した registry clone の entry は削除の扉で外せる(spec #3273 text E1 の出口)
   it("registry clone を名指す手書きの entry は消せて、registry clone はそのまま残る", async () => {
     const registryDir = await makeMainRegistry();

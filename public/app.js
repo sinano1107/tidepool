@@ -1886,8 +1886,7 @@ function AgentRecord({ agent, authorityProfiles, providerOptions, executionSetti
 const DANGEROUS_REASON_LABEL = {
   merge_auto_if_ci_green: "Merge is auto_if_ci_green \u2014 a PR under this authority merges unattended once CI is green, with no human in the loop.",
   assignable_to_wildcard: 'Assignable-to carries the wildcard "*" \u2014 an agent with this authority may delegate to any agent.',
-  allowed_workspaces_wildcard: 'Allowed-workspaces carries the wildcard "*" \u2014 this authority reaches every workspace on the board.',
-  unprotect: "Protection is being removed \u2014 tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.",
+  unprotect: "Protection is being removed. Its PRs will follow the merge dial.",
   review_allowed_commands_set: "Review-allowed commands is non-empty \u2014 review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.",
   allowed_domains_set: "Allowed domains is non-empty \u2014 worker sessions in this workspace gain an external data-transfer path to those domains.",
   human_merge_paths_removed: "Human merge paths are being removed. Changes matching those paths may become eligible for unattended merge.",
@@ -1987,7 +1986,7 @@ function SkillListInput({ candidates, degraded, values, onChange }) {
     }
   )), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", onClick: addFree }, "Add")));
 }
-function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assignableTo, setAssignableTo, allowedWorkspaces, setAllowedWorkspaces, merge, setMerge }) {
+function ProfileFields({ agentNames, guidance, setGuidance, assignableTo, setAssignableTo, merge, setMerge }) {
   const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
   return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     Input,
@@ -1997,7 +1996,7 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
       rows: 4,
       value: guidance,
       onChange: (e) => setGuidance(e.target.value),
-      hint: 'name the act you want stopped \u2014 offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to / Allowed workspaces, or in a protected workspace \u2014 never in a flag, which declares rather than gates',
+      hint: 'name the act you want stopped \u2014 offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to, or in a protected workspace \u2014 never in a flag, which declares rather than gates',
       placeholder: "how an agent carrying this authority should act"
     }
   ), /* @__PURE__ */ React.createElement(
@@ -2009,16 +2008,6 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
       wildcardHint: "any agent",
       values: assignableTo,
       onChange: setAssignableTo
-    }
-  ), /* @__PURE__ */ React.createElement(
-    ProfileListInput,
-    {
-      label: "Allowed workspaces",
-      hint: 'which workspaces this authority may act in \u2014 pick a registered workspace, or "*" for every one (confirmed on save)',
-      candidates: workspaceNames,
-      wildcardHint: "every workspace",
-      values: allowedWorkspaces,
-      onChange: setAllowedWorkspaces
     }
   ), /* @__PURE__ */ React.createElement(Select, { label: "Merge authority", options: MERGE_OPTIONS, value: merge, onChange: (e) => setMerge(e.target.value) }));
 }
@@ -2118,13 +2107,12 @@ function useWorkspaceSave(say, onDone) {
     savedOf: (err) => apiErrorDetail(err, "PATCH /api/workspaces/:name 502")?.saved ? "workspace updated \u2014 some task branches were not sent" : null
   });
 }
-function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }) {
+function ProfileRecord({ profile, agentNames, agentIcons, say, onChanged, edit }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const id = `profile:${profile.name}`;
   const open = edit.isOpen(id);
   const [guidance, setGuidance] = React.useState(profile.guidance);
   const [assignableTo, setAssignableTo] = React.useState(profile.assignable_to ?? []);
-  const [allowedWorkspaces, setAllowedWorkspaces] = React.useState(profile.allowed_workspaces ?? []);
   const [merge, setMerge] = React.useState(profile.merge ?? "");
   const { busy, save, dialog } = useProfileSave(say, async () => {
     edit.close();
@@ -2133,7 +2121,6 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const changed = {
     guidance: guidance !== profile.guidance,
     assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
-    allowed_workspaces: !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []),
     merge: (merge || "") !== (profile.merge ?? "")
   };
   const dirty = Object.values(changed).some(Boolean);
@@ -2141,14 +2128,12 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const startEdit = () => edit.open(id, () => {
     setGuidance(profile.guidance);
     setAssignableTo(profile.assignable_to ?? []);
-    setAllowedWorkspaces(profile.allowed_workspaces ?? []);
     setMerge(profile.merge ?? "");
   });
   const submit = () => {
     const body = {};
     if (changed.guidance) body.guidance = guidance;
     if (changed.assignable_to) body.assignable_to = assignableTo;
-    if (changed.allowed_workspaces) body.allowed_workspaces = allowedWorkspaces;
     if (changed.merge) body.merge = merge;
     save(async (confirm) => {
       await api(`/api/profiles/${encodeURIComponent(profile.name)}`, { ...body, ...confirm }, "PATCH");
@@ -2164,26 +2149,14 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
       wildcardHint: "any agent",
       unsetLabel: "nobody \u2014 this authority can't be delegated"
     }
-  ), /* @__PURE__ */ React.createElement(
-    FieldRow,
-    {
-      label: "allowed workspaces",
-      kind: (profile.allowed_workspaces ?? []).length ? "tags" : "unset",
-      tags: profile.allowed_workspaces ?? [],
-      wildcardHint: "every workspace",
-      unsetLabel: "no workspace \u2014 this authority can't act anywhere"
-    }
   ), /* @__PURE__ */ React.createElement(FieldRow, { label: "merge authority", kind: "mono", value: profile.merge })), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(
     ProfileFields,
     {
       agentNames,
-      workspaceNames,
       guidance,
       setGuidance,
       assignableTo,
       setAssignableTo,
-      allowedWorkspaces,
-      setAllowedWorkspaces,
       merge,
       setMerge
     }
@@ -3591,23 +3564,22 @@ function NewAgentForm({ authorityProfiles, providerOptions, executionSettingsFai
     }
   ));
 }
-function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
+function NewProfileForm({ agentNames, say, onCreated, edit }) {
   const { Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [name, setName] = React.useState("");
   const nameReason = TidepoolRules.whyInvalidRegistryName(TidepoolRules.normalizeText(name));
   const [guidance, setGuidance] = React.useState("");
   const [assignableTo, setAssignableTo] = React.useState([]);
-  const [allowedWorkspaces, setAllowedWorkspaces] = React.useState([]);
   const [merge, setMerge] = React.useState("");
   const { busy, save, dialog } = useProfileSave(say, async () => {
     edit.close();
     await onCreated();
   }, "POST /api/profiles 409");
-  const dirty = !TidepoolRules.whyBlank(name) || !!guidance.trim() || assignableTo.length > 0 || allowedWorkspaces.length > 0 || !!merge;
+  const dirty = !TidepoolRules.whyBlank(name) || !!guidance.trim() || assignableTo.length > 0 || !!merge;
   useDirtySignal(edit, true, dirty);
   const submit = () => save(
     async (confirm) => {
-      await api("/api/profiles", { name: TidepoolRules.normalizeText(name), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge, ...confirm });
+      await api("/api/profiles", { name: TidepoolRules.normalizeText(name), guidance, assignable_to: assignableTo, merge, ...confirm });
     },
     "created",
     TidepoolRules.normalizeText(name)
@@ -3625,13 +3597,10 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }) {
     ProfileFields,
     {
       agentNames,
-      workspaceNames,
       guidance,
       setGuidance,
       assignableTo,
       setAssignableTo,
-      allowedWorkspaces,
-      setAllowedWorkspaces,
       merge,
       setMerge
     }
@@ -3971,7 +3940,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
           profile: rec,
           agentNames,
           agentIcons,
-          workspaceNames,
           say,
           onChanged: refreshAfterProfile,
           edit
@@ -3981,7 +3949,6 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         NewProfileForm,
         {
           agentNames,
-          workspaceNames,
           say,
           onCreated: refreshAfterProfile,
           edit

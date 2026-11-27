@@ -205,9 +205,7 @@ export interface RegisterThroughHumanDoorDeps {
   taskExecutionCandidates?: TaskExecutionCandidates;
 }
 
-export interface HumanRegisterInput extends RegisterTaskInput {
-  decompose_reason?: string;
-}
+export type HumanRegisterInput = RegisterTaskInput;
 
 export type GateFailure =
   | { kind: "invalid"; error: string }
@@ -263,7 +261,7 @@ function notTakenInWarningOf(deps: DecomposeThroughHumanDoorDeps, task: Task): s
 export function decomposeThroughHumanDoor(
   deps: DecomposeThroughHumanDoorDeps,
   taskId: string,
-  input: { reason: string; children: ChildSpec[] },
+  input: { reason: string; children: (ChildSpec & { workspace?: string })[] },
   now: () => Date,
   origin: EventOrigin,
 ): HumanVerbResult<{ children: Task[]; warning?: string }> {
@@ -492,11 +490,12 @@ export async function registerThroughHumanDoor(
     if (input.type !== "work" && input.type !== "review" && input.type !== "interview") {
       throw new DomainError("a human can register only work, review or interview tasks");
     }
-    const isHumanDecomposeChild = input.parent_id !== undefined && input.type === "work";
-    if (isHumanDecomposeChild && input.github_issue_number !== undefined) {
-      throw new DomainError("a child task cannot be issue-backed");
+    const issueBacked = input.github_issue_number !== undefined;
+    const isHumanDecomposeChild = input.parent_id !== undefined && input.type === "work" && !issueBacked;
+    if (!issueBacked && !hasWorkspaceField(input) && input.workspace !== undefined) throw new DomainError(CHILD_TAKES_NO_WORKSPACE);
+    if (issueBacked && input.parent_id !== undefined && !getTask(deps.db, input.parent_id)) {
+      return { ok: false, failure: { kind: "not_found", error: "parent task not found" } };
     }
-    if (!hasWorkspaceField(input) && input.workspace !== undefined) throw new DomainError(CHILD_TAKES_NO_WORKSPACE);
     // 子の登録は decompose を通り registerTask の検査に届かないので、同じ検査をここで呼ぶ
     if (isHumanDecomposeChild) assertInterviewFields(deps.db, input);
     if (isHumanDecomposeChild) {
@@ -595,7 +594,13 @@ export async function registerThroughHumanDoor(
     }
     const task = registerAsHuman(deps, input, now(), origin);
     deps.pollNow();
-    return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
+    const parent = issueBacked && task.parent_id ? getTask(deps.db, task.parent_id) : undefined;
+    const warning = parent && notTakenInWarningOf(deps, parent);
+    return {
+      ok: true,
+      task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName),
+      ...(warning !== undefined && { warning }),
+    };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "invalid", error: err.message } };
@@ -1377,7 +1382,7 @@ function humanWorkGate(db: Db, taskId: string, verb: keyof typeof HUMAN_WORK_GAT
   }
   // ADR 0421 決定3 / ADR 0301 決定3: 帰り先の無い系譜では書き始めない —— 登録の床と同じ述語を同じ入力(自分の列も問う、ADR 0380 決定5)で
   // 記録だけで読み、準備の git より前に拒む
-  const noReturn = verb === "start work" && task.parent_id !== null ? whyNoReturnDestination(db, task.parent_id, undefined, task.workspace ?? undefined) : undefined;
+  const noReturn = verb === "start work" && task.parent_id !== null ? whyNoReturnDestination(db, task.parent_id) : undefined;
   if (noReturn) throw new DomainError(`cannot ${verb}: ${noReturn}.`);
   if (derived && derivedWorkspace(db, task) !== derived.name) {
     throw new DomainError(`cannot ${verb}: this task's workspace changed while the board prepared ${derived.place} — ${verb} again.`);

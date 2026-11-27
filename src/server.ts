@@ -199,12 +199,8 @@ export interface ServerOptions {
   auditorName?: string;
   /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
   interviewerName?: string;
-  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
-   *  protected workspace / ADR 0013), read fresh against the registry by the
-   *  caller — a decompose child naming a protected workspace converts to an
-   *  approval question unconditionally (mcp.ts), regardless of the
-   *  registering worker's authority profile. Absent → no workspace is
-   *  protected. */
+  /** Whether the workspace requires human merge and is named as protected in its placement
+   *  approval question (ADR 0013 / ADR 0384 決定3). */
   isProtectedWorkspace?: (name: string) => boolean;
   /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名(provider / Harness は
    *  registry を読む)。直接 cancel の門へ渡す(pickup と queue の skipped は entry を

@@ -669,7 +669,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("roster の human 行: assignable_to に human があれば固定の1行で描画する(issue #43 / ADR 0014)", async () => {
     const { start, calls } = await makeWorker({
-      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - navigator\n  - human\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - navigator\n  - human\nmerge: external\n`,
       "agents/navigator.md": NAVIGATOR_MD,
     });
     start();
@@ -688,7 +688,7 @@ describe("ClaudeCodeWorker", () => {
   it("組み込み agent に解決される名前は、assignable_to の \"*\" 展開にも名指しにも roster に現れない(ADR 0235 決定1)", async () => {
     for (const assignableTo of ['"*"', "fugu\n  - navigator"]) {
       const { start, calls } = await makeWorker({
-        "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - ${assignableTo}\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+        "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - ${assignableTo}\nmerge: external\n`,
         "agents/navigator.md": NAVIGATOR_MD,
       });
       start();
@@ -713,7 +713,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("assignable_to の Object.prototype 由来のキー(toString 等)は drift と同じく黙ってスキップされ roster に混入しない(issue #69)", async () => {
     const { start, calls } = await makeWorker({
-      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - toString\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+      "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - toString\nmerge: external\n`,
     });
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -741,7 +741,7 @@ describe("ClaudeCodeWorker", () => {
     const registryGuidance = "Registry authority guidance must not appear in a review.";
     const { start, calls } = await makeWorker({
       "authority/standard.yaml":
-        `guidance: ${registryGuidance}\nassignable_to:\n  - \"*\"\nallowed_workspaces:\n  - \"*\"\nmerge: external\n`,
+        `guidance: ${registryGuidance}\nassignable_to:\n  - \"*\"\nmerge: external\n`,
       "agents/keeper.md": KEEPER_MD,
     });
     start("task-review-authority", null, "keeper", "review");
@@ -971,7 +971,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("authority guidance が空文字なら、system prompt から `## Authority` 見出しごと省く(issue #488)", async () => {
     const { start, calls } = await makeWorker({
-      "authority/standard.yaml": `guidance: ""\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+      "authority/standard.yaml": `guidance: ""\nassignable_to:\n  - "*"\nmerge: external\n`,
       "agents/navigator.md": NAVIGATOR_MD,
     });
     start();

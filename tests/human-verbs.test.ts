@@ -22,8 +22,11 @@ import { createLanding, type LandingDeps, registerPrPromotionFailureQuestion, ta
 import { quarantineAgent } from "../src/quarantine.js";
 import {
   cancelTaskDirectly,
+  derivedWorkspace,
+  fillEmptyWorkspace,
   getTask,
   listBoard,
+  pickupTask,
   presentTask,
   QuestionClosedError,
   recordPrOpened,
@@ -42,6 +45,7 @@ import {
   humanDecomposeTaskViaWebui,
   initWorkspaceCheckout,
   queuedForAutoMerge,
+  recordTaskBranchCreated,
 } from "./harness.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
@@ -542,38 +546,41 @@ it("人間の登録 door は decompose reason を parent の存在より先に�
   });
 });
 
-it("人間の登録 door は issue-backed decompose child を登録しない", async () => {
+it.each([
+  { fixed: "pickup", workspace: "tidepool", child: true },
+  { fixed: "branch", workspace: "tidepool", child: true },
+  { fixed: "none", workspace: "tidepool", child: false },
+  { fixed: "pickup", workspace: "registry", child: false },
+  { fixed: "branch", workspace: "registry", child: false },
+  { fixed: "pickup", workspace: "tidepool", child: false, historicalParentWorkspace: "registry" },
+])("registers an issue-backed task into the tree only when $fixed fixes a matching workspace ($workspace, historical parent workspace $historicalParentWorkspace)", async ({ fixed, workspace, child, historicalParentWorkspace }) => {
   db = openDb(":memory:");
-  const parent = registerTask(
-    db,
-    {
-      type: "work",
-      title: "parent work",
-      purpose: "deliver the whole change",
-      completion_criteria: "all slices are integrated",
-    },
-    NOW,
-    ...HUMAN_WEBUI,
-  );
+  const root = registerTask(db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c", workspace: "tidepool" }, NOW, ...HUMAN_WEBUI);
+  const parent = registerTask(db, { type: "work", title: "part of the plan", purpose: "p", completion_criteria: "c", parent_id: root.id }, NOW, ...HUMAN_WEBUI);
+  if (historicalParentWorkspace) fillEmptyWorkspace(db, parent.id, historicalParentWorkspace);
+  if (fixed === "pickup") pickupTask(db, root, "deckhand", NOW);
+  if (fixed === "branch") recordTaskBranchCreated(db, root.id, undefined, "tidepool");
+  const issue = { type: "work" as const, parent_id: parent.id, decompose_reason: "split the issue-backed task", github_issue_number: 189, workspace };
+  const deps = { db, pollNow: () => {} };
 
-  const result = await registerThroughHumanDoor(
-    { db, pollNow: () => {} },
-    {
-      type: "work",
-      parent_id: parent.id,
-      decompose_reason: "split the issue-backed child",
-      github_issue_number: 189,
-      workspace: "tidepool",
-    },
-    () => NOW,
-    "webui",
-  );
+  const result = await registerThroughHumanDoor(deps, issue, () => NOW, "webui");
 
-  expect(result).toEqual({
-    ok: false,
-    failure: { kind: "invalid", error: "a child task cannot be issue-backed" },
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.failure.error);
+  const task = getTask(db, result.task.id)!;
+  const decision = listEvents(db, parent.id).find(({ kind }) => kind === "decision_logged")!.id;
+  expect(task).toMatchObject({
+    github_issue_number: 189,
+    title: "#189",
+    parent_id: child ? parent.id : null,
+    based_on_decision: child ? decision : null,
+    origin_task_id: child ? null : parent.id,
+    origin_decision: child ? null : decision,
+    workspace: child ? null : workspace,
   });
-  expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
+  expect(derivedWorkspace(db, task)).toBe(workspace);
+  expect(await registerThroughHumanDoor(deps, { type: "work", github_issue_number: 189, workspace }, () => NOW, "webui"))
+    .toMatchObject({ ok: false, failure: { kind: "invalid", error: expect.stringContaining("already referenced") } });
 });
 
 // ADR 0384 決定1・3: 子は workspace を入力に持たない —— 親と同じ名前でも拒み、別の workspace に置くなら親の「別の workspace に置く」を使う

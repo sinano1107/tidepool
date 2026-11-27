@@ -696,12 +696,12 @@ it("宣言 repo が registry と同じ repo の workspace を名指しする分�
 
     const children = decomposeTask(db, picked, {
       reason: "propose one change",
-      children: [{ title: "change the registry", purpose: "edit configuration", completion_criteria: "configuration updated", workspace: workspace.name }],
-    }, "deckhand", now, { allowed_workspaces: [workspace.name] }, options.isProtectedWorkspace, "worker");
+      children: [{ title: "change the registry", purpose: "edit configuration", completion_criteria: "configuration updated", place_in_workspace: workspace.name }],
+    }, "deckhand", now, undefined, options.isProtectedWorkspace, "worker");
 
     expect(children).toEqual([]);
     expect(listBoard(db)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "question", parent_id: parent.id, purpose: expect.stringContaining('targets protected workspace "registry-edit"') }),
+      expect.objectContaining({ type: "question", parent_id: parent.id, purpose: expect.stringContaining('places a root in protected workspace "registry-edit"') }),
     ]));
   } finally {
     db.close();

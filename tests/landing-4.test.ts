@@ -29,6 +29,7 @@ import {
   cancelTaskDirectly,
   completeTask,
   countUnsettledTasksReferencing,
+  fillEmptyWorkspace,
   getTask,
   listBoard,
   pickupTask,
@@ -1265,15 +1266,16 @@ function attachReview(board: Db, now: Date, parentId: string): Task {
   );
 }
 
-/** domain の registerTask で、`parentId` の下に workspace を明示した未決着の work を足す —— 人間の扉は子の workspace を拒む(ADR 0384 決定1)が、
- *  共有の registerTask は agent の分解のために #3423 まで明示を運ぶ。 */
+/** ADR 0372 決定4: a child fixed in another workspace before the registration rule changed. */
 function registerWorkChildIn(board: Db, now: Date, parentId: string, workspace: string): Task {
-  return registerTask(
+  const child = registerTask(
     board,
-    { type: "work", title: "follow-up", purpose: "p", completion_criteria: "c", assignee: "squid", parent_id: parentId, workspace },
+    { type: "work", title: "follow-up", purpose: "p", completion_criteria: "c", assignee: "squid", parent_id: parentId },
     now,
     ...HUMAN_WEBUI,
   );
+  fillEmptyWorkspace(board, child.id, workspace);
+  return getTask(board, child.id)!;
 }
 
 it.each(["abandoned", "pr_opened"] as const)(

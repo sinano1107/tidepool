@@ -105,7 +105,7 @@ describe("npm run init-registry", () => {
       name: "standard",
       guidance: "",
       assignable_to: ["*"],
-      allowed_workspaces: ["*"],
+
       merge: "escalate",
     });
     expect(registry.workspaces).toEqual({ sandbox: {} });

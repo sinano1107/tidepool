@@ -119,7 +119,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
  *  ADR 0272 決定3 / ADR 0279 決定4): read-only は task type の性質であって実行エージェントの性質ではない
  *  (GLOSSARY.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
  *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
- *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
+ *  層(decompose/list_agents の assignable_to)の強制で、
  *  ここはその追記が狙う CLI ツール層の強制 — 両方とも「task type が profile を
  *  上書きする」という ADR 0013 の同じ原則の別レイヤーでの実装。issue #56 の
  *  resolveSkillAllowlist と同じ「組み立ては純関数、配線は launch() 側」という

@@ -247,8 +247,8 @@ const registerTaskSchema = z.object({
   // refuses tier / priority on one (ADR 0111 追記10)
   tier: z.string().optional(),
   priority: z.string().optional(),
-  // human decompose (ADR 0047 decision 7): the reason is required for a
-  // `parent_id` child and checked at the shared human door; roots do not need one.
+  // A human decomposition needs a reason (ADR 0047 decision 7). Issue-backed work
+  // with a parent can use its issue reference as the decision (ADR 0384 decision 2).
   decompose_reason: z.string().optional(),
   // an Interview's targets and fields (ADR 0199 決定3 / ADR 0273 決定9): which values exist is the domain's to say (registerTask)
   interview_targets: z.array(interviewTargetSchema).optional(),
