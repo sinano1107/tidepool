@@ -48,19 +48,27 @@ the next gate on this line first, then relabel every open issue; until then the 
 | `priority:low`    | Looked at after the gate. Not in any human queue until then.                                              |
 | (none)            | Forgotten. The sweep picks these first and labels them.                                                   |
 
-Four mechanical tests put an issue on `high`: its implementation reshapes an existing table or column —
-renames, removes or moves a column, or tightens its type, NOT NULL or CHECK (no migrations before release — the
-board is rebuilt, and real-use records with it). A question counts before it is answered when any of its
-conclusions would reshape. Purely additive changes — a new table, a new nullable column, an index — do not
-count, and neither does **loosening** a constraint (dropping a NOT NULL, adding a value to a CHECK): every
-existing row already satisfies the looser rule, so the table rebuild SQLite needs for it copies the records
-without losing any — it costs the first migration, not the record (ADR 0244 追記, #360 / #361); a defect in what writes records
-(decision log, events, episodes, usage, PR outcome); the implementation or a defect of a process
-that acts on its own (memory / routing meta-review, Interview, the learner); a defect that would
-damage the repo, the wallet, or trust in real use. A defect here includes one not yet confirmed: a
-suspicion that would meet a test if true goes on `high`, its first step is the measurement, and it comes
-down (or closes) when the measurement says otherwise. No sub-ranking inside `high`: take the oldest `high`
-with no open blocker.
+Five tests put an issue on `high` (ADR 0445). Each asks what is lost if the fix lands after real use begins:
+
+1. **Fixing it later needs a backfill or a reinterpretation of rows or registrations that already exist.** No
+   migrations are written, before or after real use. Reshaping an existing table or column counts (renaming,
+   removing or moving a column, tightening its type, NOT NULL or CHECK), and so does an additive change whose
+   readers treat an old row's missing value as a mismatch or a stop. A new table, a nullable column old rows can
+   leave empty, an index, or a loosened constraint does not count. A question counts before it is answered when
+   any of its conclusions would.
+2. **A writer of records drops or misrecords a fact that cannot be reconstructed later** (decision log, events,
+   episodes, usage, PR outcome, fields derived from the transcript).
+3. **It damages the repo or the wallet in the first real use.**
+4. **It makes the gate's delegation lap observe something false.**
+5. **Text that reaches an agent running in the first real use can change its judgment** through a missing
+   definition or a wrong fact.
+
+A suspicion goes on `high` when it would meet a test if true. Its first step is the measurement, and it
+comes down (or closes) when the measurement says otherwise. A defect that only fires through an operation the
+human running the gate has chosen not to perform does not go on `high`. The list of those operations is the
+human's and is not kept here. A ticket split from a spec does not inherit the spec's priority: test each
+ticket. The spec stays on `high` only while one of its tickets does. No sub-ranking inside `high`: take the
+oldest `high` with no open blocker.
 
 **Default is `low`** when it is unclear whether a test applies. Whoever files an issue labels it; raising it needs one line saying what it blocks.
 Readers: `/triage-sweep` orders its queue unlabeled → `high` → `medium` and leaves `low` out unless invoked
