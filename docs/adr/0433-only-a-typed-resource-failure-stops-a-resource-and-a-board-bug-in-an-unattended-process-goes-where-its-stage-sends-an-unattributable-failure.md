@@ -1,5 +1,7 @@
 # 資源を止めるのは型で名指された資源の故障だけ —— 無人の過程の盤面のバグは、その段が帰属の分からない失敗を送る先へ行く
 
+**Status 追記: 決定3・5 の出所での型は、網に出る git にも及ぶ —— 盤面の git の子は1つの起動口だけが作り、cwd が無い失敗と host の失敗はそこで型になる。網に出る git の一般の失敗の型は #3999 が決める([ADR 0441](0441-the-board-starts-every-git-child-at-one-place-that-types-its-failure-once-and-network-git-only-brings-its-own-env.md) 決定1・4、2026-11-28、issue #2897)。**
+
 2026-11-27 の triage → grilling(issue #3938、#3903 の triage で族の根として分けた)で決定。無人の過程(後始末・pickup・着地・worker の
 準備)の catch は、型の付いた失敗を ADR の決めた行き先へ送り、残りを全部名前の場所の Quarantine にしていた。名前の場所に撃つ git の
 失敗は素の `Error` なので、この既定は git の失敗には偶然当たる。だが盤面のバグ(`TypeError`・不変条件の門)と host の失敗も同じ所に
