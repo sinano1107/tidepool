@@ -1,5 +1,7 @@
 # 盤面の git の子は1つの起動口だけが作り、失敗の型はそこで1回だけ付ける —— 網に出る git は env だけを持ち込む
 
+**Status 追記: 決定4 で残した網に出る git の一般の失敗の型は「remote の側の失敗」に決まった —— pickup と後始末の解放では名前の場所の Quarantine になる([ADR 0443](0443-a-failure-to-reach-the-remote-or-the-broker-is-its-own-family-and-stops-the-named-place-at-pickup-and-teardown.md) 決定1・2、2026-11-28、issue #3999)。**
+
 2026-11-28 の triage → grilling(issue #3999 の triage で、族の根として #2897 に寄せた)で決定した。盤面が git を起動する経路は3系統あった。
 local の runner は失敗を「cwd が無い」「host の失敗(disk 満杯)」「git の道具の失敗」に分ける(ADR 0433 決定3・5)。網に出る git(ADR 0339 決定1)は
 別に子を作り、この分類を通らない。ほかに、runner を通らない直接の起動もあった。失敗の分類を起動口ごとに書いていたので、分類を1つ足すたびに

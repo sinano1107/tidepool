@@ -2,6 +2,8 @@
 
 **Status 追記: 決定3・5 の出所での型は、網に出る git にも及ぶ —— 盤面の git の子は1つの起動口だけが作り、cwd が無い失敗と host の失敗はそこで型になる。網に出る git の一般の失敗の型は #3999 が決める([ADR 0441](0441-the-board-starts-every-git-child-at-one-place-that-types-its-failure-once-and-network-git-only-brings-its-own-env.md) 決定1・4、2026-11-28、issue #2897)。**
 
+**Status 追記: 型の族は4つになる —— remote か仲介に届かない・断られる失敗は「remote の側の失敗」で、pickup と後始末の解放では名前の場所の Quarantine に行き、pickup では修復案内が付く([ADR 0443](0443-a-failure-to-reach-the-remote-or-the-broker-is-its-own-family-and-stops-the-named-place-at-pickup-and-teardown.md) 決定1〜3、2026-11-28、issue #3999)。**
+
 2026-11-27 の triage → grilling(issue #3938、#3903 の triage で族の根として分けた)で決定。無人の過程(後始末・pickup・着地・worker の
 準備)の catch は、型の付いた失敗を ADR の決めた行き先へ送り、残りを全部名前の場所の Quarantine にしていた。名前の場所に撃つ git の
 失敗は素の `Error` なので、この既定は git の失敗には偶然当たる。だが盤面のバグ(`TypeError`・不変条件の門)と host の失敗も同じ所に
