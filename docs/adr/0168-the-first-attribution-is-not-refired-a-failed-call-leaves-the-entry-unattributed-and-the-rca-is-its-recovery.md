@@ -1,5 +1,7 @@
 # 初回の帰責は撃ち直さず、撃てなかった・失敗した entry は未帰責のまま RCA に倒し、記録は判断だけを持つ
 
+**Status 追記: worker 以外の行への異議群は未帰責ではなく帰責の対象外で、第2回を待たず RCA に倒れない(ADR 0437 決定2)。**
+
 **Status 追記: `memory_draft_failed` の `entry_id` は `log_entry_id` に改名(issue #2578 / ADR 0311 決定3・5)** —— 決定2 の「`memory_draft_failed` と同じ形」は、`objection_attribution_failed` の `entry_id` が `memory_draft_failed` では `log_entry_id` の名前で並ぶと読み替える。
 
 2026-09-28 の grilling(issue #1063、ADR 0164 の派生)で決定。ADR 0164 は起草と第2回の帰責を「結果の不在で拾って盤面が撃ち直す」と
