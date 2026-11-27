@@ -117,8 +117,8 @@ function forComparison(path: string, platform: NodeJS.Platform): string {
  *  「重なっていない」に見えるのを防ぐ。
  *
  *  **まだ存在しないパスは親を辿って realpath + 字句結合**する。盤面の保護対象は
- *  存在しないのが正常な瞬間がある(token をまだ発行していない盤面の
- *  `~/.tidepool/api-token`、登録の門の clone / 新規作成モードが指す未作成の
+ *  存在しないのが正常な瞬間がある(キーをまだ置いていない盤面の
+ *  `~/.tidepool/moonshot-api-key`、登録の門の clone / 新規作成モードが指す未作成の
  *  ディレクトリ)。ここで fail-closed に倒すと、新品の盤面が全 workspace を
  *  quarantine することになる。存在しない末端に symlink は在り得ないので、
  *  実在する最も深い祖先まで解決すれば嘘は付かれない。
@@ -161,6 +161,15 @@ export function boardStateOverlap(
         "whether it overlaps the board's own state paths is unknown, and unknown is not safe",
     };
   }
+  const overlapsState = (target: BoardStatePath): BoardStateOverlap => ({
+    reason:
+      `workspace path ${workspacePath} overlaps the board's ${target.label} ` +
+      `at ${target.path} — a worker's write radius is its workspace, so the ` +
+      "board's own state would be inside it. Move the workspace or the board's " +
+      "state so the two do not intersect",
+  });
+  // registry clone を囲む workspace は、clone を収める固定点(家)の文で言う —— 何も収めていなければ clone との重なりとして止める
+  let enclosedClone: BoardStatePath | undefined;
   for (const target of paths) {
     const candidate = resolveForComparison(target.path);
     if ("cause" in candidate) {
@@ -174,21 +183,17 @@ export function boardStateOverlap(
     const a = forComparison(workspace.resolved, platform);
     const b = forComparison(candidate.resolved, platform);
     if (contains(a, b) || contains(b, a)) {
-      if (target.kind === "registry-clone") {
+      if (target.kind !== "registry-clone") return overlapsState(target);
+      // ADR 0377 決定3: clone に居るか clone の中を指す workspace には spec #3273 text E1
+      if (contains(b, a)) {
         return {
           reason:
             `${workspacePath} overlaps the registry clone (${target.path}), which is not a workspace. ` +
             "To let agents edit the registry, clone the registry's repository to another path and register that.",
         };
       }
-      return {
-        reason:
-          `workspace path ${workspacePath} overlaps the board's ${target.label} ` +
-          `at ${target.path} — a worker's write radius is its workspace, so the ` +
-          "board's own state would be inside it. Move the workspace or the board's " +
-          "state so the two do not intersect",
-      };
+      enclosedClone ??= target;
     }
   }
-  return undefined;
+  return enclosedClone && overlapsState(enclosedClone);
 }

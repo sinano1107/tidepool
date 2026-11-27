@@ -1,17 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { readBoardHomeIdentifier, resolveBoardPlaces } from "../src/board-home.js";
+import { BoardHomeMissingError, createBoardHome, openBoardHome, resolveBoardPlaces } from "../src/board-home.js";
 import { resolveWorkspacesBaseDir } from "../src/workspace.js";
 import { tempDir } from "./temp-dir.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-/** 実 HOME の家には触れない —— TIDEPOOL_HOME は必ず使い捨ての場所を指す。 */
-const runScript = (script: string, home: string) =>
-  spawnSync("npm", ["run", "-s", script], { cwd: ROOT, env: { ...process.env, TIDEPOOL_HOME: home }, encoding: "utf8" });
 
 const inside = (home: string, path: string) => !relative(home, path).startsWith("..") && relative(home, path) !== "";
 
@@ -40,41 +37,66 @@ describe("resolveBoardPlaces: env から盤面の家を解決し、家から置�
     expect(places.workspacesDir).toBe("/mnt/ssd/workspaces");
     expect(places.workspacesDirSource).toBe("configured");
   });
+
+  it("空の TIDEPOOL_HOME は cwd にも既定の家にも倒さず、空であることを言って拒む", () => {
+    expect(() => resolveBoardPlaces({ TIDEPOOL_HOME: "" })).toThrow(BoardHomeMissingError);
+    expect(() => resolveBoardPlaces({ TIDEPOOL_HOME: "" })).toThrow("TIDEPOOL_HOME is empty");
+  });
 });
 
 // ADR 0436 決定5: 家は起動前の人間のコマンドが作り、識別子は作るときに乱数で生まれて家の中に残る
-describe("npm run create-home: 盤面の家を作るコマンド", () => {
-  it("家の dir と識別子を作り、盤面が読むのと同じ識別子を表示する", async () => {
+describe("createBoardHome: 盤面の家を作る", () => {
+  it("家の dir と識別子を作る", async () => {
     const home = join(await tempDir("tidepool-create-home-"), "board");
 
-    const created = runScript("create-home", home);
+    const created = createBoardHome(home);
 
-    expect(created.status, created.stderr).toBe(0);
-    const identifier = readBoardHomeIdentifier(home);
-    expect(identifier).not.toBe("");
-    expect(created.stdout).toContain(home);
-    expect(created.stdout).toContain(identifier);
+    expect(created).toEqual({ identifier: expect.any(String), created: true });
+    expect(created.identifier).not.toBe("");
+    expect(existsSync(home)).toBe(true);
   });
 
-  it("既にある家は作り直さず、同じ識別子を表示する", async () => {
+  it("既にある家は作り直さず、同じ識別子を返す", async () => {
     const home = join(await tempDir("tidepool-create-home-"), "board");
-    runScript("create-home", home);
-    const identifier = readBoardHomeIdentifier(home);
+    const { identifier } = createBoardHome(home);
     writeFileSync(join(home, "kept.txt"), "the board's state\n");
 
-    const again = runScript("create-home", home);
-
-    expect(again.status, again.stderr).toBe(0);
-    expect(again.stdout).toContain(identifier);
-    expect(readBoardHomeIdentifier(home)).toBe(identifier);
+    expect(createBoardHome(home)).toEqual({ identifier, created: false });
     expect(readFileSync(join(home, "kept.txt"), "utf8")).toBe("the board's state\n");
   });
 
   it("別の家は別の識別子を持つ", async () => {
-    const [a, b] = [join(await tempDir("tidepool-create-home-"), "a"), join(await tempDir("tidepool-create-home-"), "b")];
-    runScript("create-home", a);
-    runScript("create-home", b);
+    const a = createBoardHome(join(await tempDir("tidepool-create-home-"), "a"));
+    const b = createBoardHome(join(await tempDir("tidepool-create-home-"), "b"));
 
-    expect(readBoardHomeIdentifier(a)).not.toBe(readBoardHomeIdentifier(b));
+    expect(a.identifier).not.toBe(b.identifier);
+  });
+});
+
+it("npm run create-home は家のパスと識別子を表示する", async () => {
+  const home = join(await tempDir("tidepool-create-home-"), "board");
+
+  // 実 HOME の家には触れない —— TIDEPOOL_HOME は必ず使い捨ての場所を指す
+  const result = spawnSync("npm", ["run", "-s", "create-home"], { cwd: ROOT, env: { ...process.env, TIDEPOOL_HOME: home }, encoding: "utf8" });
+
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain(home);
+  expect(result.stdout).toContain(createBoardHome(home).identifier);
+});
+
+// ADR 0436 決定5: 盤面は家を自分で作らない
+describe("openBoardHome: 家を開く口は家を作らない", () => {
+  it("盤面の家が無ければ BoardHomeMissingError で拒み、家を作らない", async () => {
+    const home = join(await tempDir("tidepool-no-home-"), "board");
+
+    expect(() => openBoardHome(home)).toThrow(BoardHomeMissingError);
+    expect(existsSync(home)).toBe(false);
+  });
+
+  it("識別子の無い dir は盤面の家ではなく、BoardHomeMissingError で拒む", async () => {
+    const notAHome = await tempDir("tidepool-not-a-home-");
+
+    expect(() => openBoardHome(notAHome)).toThrow(BoardHomeMissingError);
+    expect(readdirSync(notAHome)).toEqual([]);
   });
 });

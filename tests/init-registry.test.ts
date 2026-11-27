@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { boardHomePlaces, createBoardHome } from "../src/board-home.js";
+import { createBoardHome, resolveBoardPlaces } from "../src/board-home.js";
 import {
   DEFAULT_AGENT_NAME,
   DEFAULT_AUDITOR_NAME,
@@ -29,7 +29,7 @@ async function emptyRegistryClone(): Promise<{ clone: string; origin: string; ro
   const origin = join(root, "origin.git");
   const home = join(root, "home");
   createBoardHome(home);
-  const clone = boardHomePlaces(home).registryDir;
+  const clone = resolveBoardPlaces({ TIDEPOOL_HOME: home }).registryDir;
   git(root, "init", "--bare", "-b", "main", origin);
   git(root, "clone", "--quiet", origin, clone);
   git(clone, "config", "user.name", "Registry Owner");
@@ -74,7 +74,7 @@ describe("npm run init-registry", () => {
     const result = runInit(cleanEnv({ TIDEPOOL_HOME: home }));
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain(`no registry clone at ${boardHomePlaces(home).registryDir}`);
+    expect(result.stderr).toContain(`no registry clone at ${resolveBoardPlaces({ TIDEPOOL_HOME: home }).registryDir}`);
   });
 
   it("seeds an empty remote with the default registry and an initial workspace", async () => {
@@ -254,7 +254,7 @@ describe("npm run init-registry", () => {
     const root = await tempDir("tidepool-init-no-origin-");
     const home = join(root, "home");
     createBoardHome(home);
-    const clone = boardHomePlaces(home).registryDir;
+    const clone = resolveBoardPlaces({ TIDEPOOL_HOME: home }).registryDir;
     const workspacesDir = join(root, "workspaces");
     git(root, "init", "-b", "main", clone);
 

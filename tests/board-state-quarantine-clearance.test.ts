@@ -30,7 +30,7 @@ async function bootWithOverlap(): Promise<{ live: { path: string }; questionId: 
   t = await bootTidepool({
     resolveWorkspace: resolve,
     boardState: {
-      paths: [{ label: "board home (TIDEPOOL_HOME)", path: join(overlapping.path, "board.sqlite") }],
+      paths: [{ label: "board home (TIDEPOOL_HOME)", path: join(overlapping.path, "board-home") }],
       listWorkspaces: () => [{ name: "self", path: live.path }],
     },
   });

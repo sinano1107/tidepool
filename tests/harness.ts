@@ -20,7 +20,7 @@ import {
   hashToken,
 } from "../src/auth.js";
 import type { BoardCall } from "../src/board-call.js";
-import { boardHomePlaces, createBoardHome, openBoardHome, startBoardOnHome } from "../src/board-home.js";
+import { createBoardHome, openBoardHome, resolveBoardPlaces, startBoardOnHome } from "../src/board-home.js";
 import type { BoardStatePath } from "../src/board-state.js";
 import type { Cause } from "../src/cause.js";
 import { ClaudeCodeWorker, moonshotKeyAbsence } from "../src/claude-worker.js";
@@ -236,10 +236,8 @@ export interface Tidepool {
 }
 
 export interface BootOptions {
-  /** Existing board dir to reboot on — for restart tests. The dir is the board home. */
+  /** 起動し直す既存の盤面の家 —— 再起動のテスト用。家がまだ無ければ家を作る口で作る。 */
   dir?: string;
-  /** false → `dir` を家を作る口に通さずに開く(家の無い起動の拒否を駆動するテストだけ)。Absent → 家が無ければ作る。 */
-  prepareHome?: boolean;
   /** Override the scripted WorkerAdapter identity across board restarts. */
   workerId?: string;
   /** Use a scripted fake or exercise the real client against a test transport. */
@@ -264,7 +262,7 @@ export interface BootOptions {
    *  `t.containers` は配線されない fake になる(`workerAdapter` と `t.worker` と同じ)。 */
   containerRuntime?: ContainerRuntime;
   /** transcript の器(ADR 0149)。session の stream を取って落としたいテストだけが渡す。
-   *  Absent → 盤面の dir に開く既定の器。 */
+   *  Absent → 盤面の家に開く既定の器。 */
   transcripts?: TranscriptStore;
   /** This board's one worker's authority profile (issue #11). */
   authority?: AuthorityProfile;
@@ -395,7 +393,7 @@ function normalizeCandidates(
 export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool> {
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
   // ADR 0436 決定5: テストの盤面も家を作る口で家を用意し、本番と同じ家を開く口を通る
-  if (options.prepareHome !== false) createBoardHome(dir);
+  createBoardHome(dir);
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock, options.workerId);
   const containers =
@@ -404,7 +402,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const push = new FakePushClient();
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
   // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
-  const existingBoard = existsSync(boardHomePlaces(dir).dbPath);
+  const existingBoard = existsSync(resolveBoardPlaces({ TIDEPOOL_HOME: dir }).dbPath);
   const home = openBoardHome(dir, { terminate: () => {} });
   const { db } = home;
   if (!existingBoard) rememberFixtureHeadRepos(db);
@@ -434,7 +432,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     transcripts: options.transcripts ?? new TranscriptStore(dir),
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
-    // 面接室(ADR 0273 決定1)は盤面の dir の下に作る —— テストがホームの既定の基点に書かない
+    // 面接室(ADR 0273 決定1)は盤面の家の下に作る —— テストがホームの既定の基点に書かない
     workspacesDir: join(dir, "workspaces"),
     watchdog: options.watchdog,
     github: options.github ?? github,

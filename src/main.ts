@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openHumanCredential, resolvePublicOrigins } from "./auth.js";
@@ -33,10 +33,13 @@ const port = Number(process.env.PORT ?? 4589);
 const mcpPort = Number(process.env.MCP_PORT ?? port + 1);
 // ADR 0436 決定1: 盤面が書く置き場は盤面の家(TIDEPOOL_HOME)から導く。workspaces の基点(ADR 0018)と
 // その出所(ADR 0082 決定2)だけは家の外に残る
-const places = resolveBoardPlaces(process.env);
-const { workspacesDir, workspacesDirSource, logDir, codexHome } = places;
-// ADR 0140: registry を持たない盤面は、家の中の registry clone の dir が無い盤面
-const registryDir = existsSync(places.registryDir) ? places.registryDir : undefined;
+const { home, workspacesDir, workspacesDirSource } = resolveBoardPlaces(process.env);
+// ADR 0436 決定2: 家の lock を最初の書き込み(token file の初回作成、worker logs の dir、`openDb` の DDL と seed)より前に取る。
+// 取れなければ BoardHomeLockedError で何も書かずに終わる
+const opened = openBoardHome(home);
+// 運用する盤面は常に家の中の registry clone を読む —— clone が無ければ registry が読めない盤面全体の停止に落ちる(ADR 0403)。
+// registry の無い盤面(ADR 0140 決定2)はテストの足場だけに残る
+const { logDir, codexHome, apiTokenFile, registryDir } = opened.places;
 const workspaceName = process.env.TIDEPOOL_WORKSPACE ?? DEFAULT_WORKSPACE_NAME;
 // ADR 0012 / issue #36: TIDEPOOL_AGENT is a pointer to the board's default
 // agent, not "the one worker" — an unspecified assignee resolves here, but a
@@ -63,7 +66,7 @@ const { executable: codexExecutable, onPath: codexOnPath } = resolveCodexExecuta
 // 立たなかった場合でも、平文のファイルはそこに在る。
 const githubTokenFile = process.env.TIDEPOOL_GITHUB_TOKEN_FILE;
 const boardState = boardStatePaths({
-  home: places.home,
+  home,
   githubTokenFile,
   moonshotApiKeyFile,
   // 「盤面の実行 checkout」は2つの綴りを持つ(ADR 0040): cwd と、`public/` を実際に配信する
@@ -74,14 +77,9 @@ const boardState = boardStatePaths({
   registryDir,
 });
 
-// ADR 0436 決定2: 家の lock を最初の書き込み(token file の初回作成、worker logs の dir、`openDb` の DDL と seed)より前に取る。
-// 取れなければ BoardHomeLockedError で何も書かずに終わる
-const home = openBoardHome(places.home);
-
 // ADR 0043 / issue #33: worker options の口の一覧も server-options.ts が持つ。
-// ここに残るのはホストの副作用だけ —— ディレクトリの作成そのもの。registry 未設定
-// なら実 worker は立たないので(合成側が LoggingWorker に落ちる)作る必要もない。
-if (registryDir) mkdirSync(logDir, { recursive: true });
+// ここに残るのはホストの副作用だけ —— ディレクトリの作成そのもの。
+mkdirSync(logDir, { recursive: true });
 
 /** GLOSSARY.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
  *  for the translation client's prompt. Absent/unreadable GLOSSARY.md → no
@@ -122,7 +120,7 @@ function vapidConfig(): VapidConfig | undefined {
 // cookie はオリジン単位なので、盤面は自分が公開されている URL を知っている必要が
 // ある(自力では導出できない)。Pi なら tailnet の公開 URL をここに設定する。
 const { credential, messages } = openHumanCredential({
-  tokenFile: places.apiTokenFile,
+  tokenFile: apiTokenFile,
   origins: resolvePublicOrigins(process.env.TIDEPOOL_PUBLIC_ORIGINS, port),
 });
 for (const message of messages) {
@@ -137,7 +135,7 @@ for (const message of messages) {
 // 盤面の唯一の SQLite 接続は家を開く口が開く: server-options の resolver たちが合成の
 // 時点で盤面の行(実行設定の表、ADR 0110)を読むため、`startServer` の中で開いて
 // いては間に合わない。閉じるのは server の `stop()`。
-const server = await startBoardOnHome(home, async () => startServer(
+const server = await startBoardOnHome(opened, async () => startServer(
   await buildServerOptions({
     port,
     mcpPort,
@@ -169,7 +167,7 @@ const server = await startBoardOnHome(home, async () => startServer(
     vapid: vapidConfig(),
     translationClient: translationClientFactory,
     cliAuthExpiresAt: resolveCliAuthExpiry(process.env.TIDEPOOL_CLAUDE_TOKEN_EXPIRES_AT),
-  }, home.db),
+  }, opened.db),
 ));
 console.log(`tidepool listening on http://127.0.0.1:${server.port}`);
 console.log(`  /mcp listening on http://127.0.0.1:${server.mcpPort}/mcp`);

@@ -1238,7 +1238,7 @@ describe("CodexWorker (ADR 0098)", () => {
     const onPickupStopped = vi.fn();
     const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {
       onPickupStopped,
-      boardState: overlap ? (workspace) => [{ label: "board home (TIDEPOOL_HOME)", path: join(workspace, "board.sqlite") }] : undefined,
+      boardState: overlap ? (workspace) => [{ label: "board home (TIDEPOOL_HOME)", path: join(workspace, "board-home") }] : undefined,
     });
     const value = registerTask(f.db, { type: "work", assignee: "codex-agent", workspace: "work", title: "stopped", purpose: "p", completion_criteria: "c", ...fields }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
     expect(f.start(value)).toBeUndefined();

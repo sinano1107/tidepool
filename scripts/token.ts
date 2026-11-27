@@ -9,12 +9,17 @@
  *  出力する bootstrap URL も盤面が読む先とずれない(HOME の違う実行で別ファイルに
  *  書く事故を防ぐため、書いた絶対パスも必ず印字する)。lock は取らない —— 走っている盤面の横で回す。 */
 import { bootstrapNotice, resolvePublicOrigins, rotateToken } from "../src/auth.js";
-import { readBoardHomeIdentifier, resolveBoardPlaces } from "../src/board-home.js";
+import { BoardHomeMissingError, requireBoardHome, resolveBoardPlaces } from "../src/board-home.js";
 
 const port = Number(process.env.PORT ?? 4589);
-const { home, apiTokenFile: tokenFile } = resolveBoardPlaces(process.env);
-// ADR 0436 決定5: 家が無ければ作らない —— 綴りを誤った TIDEPOOL_HOME に識別子の無い家を生やさない
-readBoardHomeIdentifier(home);
-const origins = resolvePublicOrigins(process.env.TIDEPOOL_PUBLIC_ORIGINS, port);
-
-console.log(bootstrapNotice({ token: rotateToken(tokenFile), tokenFile, origins, rotated: true }));
+try {
+  const { home, apiTokenFile: tokenFile } = resolveBoardPlaces(process.env);
+  // ADR 0436 決定5: 家が無ければ作らない —— 綴りを誤った TIDEPOOL_HOME に識別子の無い家を生やさない
+  requireBoardHome(home);
+  const origins = resolvePublicOrigins(process.env.TIDEPOOL_PUBLIC_ORIGINS, port);
+  console.log(bootstrapNotice({ token: rotateToken(tokenFile), tokenFile, origins, rotated: true }));
+} catch (err) {
+  if (!(err instanceof BoardHomeMissingError)) throw err;
+  process.stderr.write(`Error: ${err.message}\n`);
+  process.exitCode = 1;
+}

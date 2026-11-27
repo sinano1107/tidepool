@@ -16,15 +16,15 @@ describe("boardStateOverlap: パス包含(ADR 0040)", () => {
   it("保護対象が workspace 配下にあれば重なりとして報告する", async () => {
     const ws = await tempDir("ws");
     const hit = boardStateOverlap(ws, [
-      { label: "board home (TIDEPOOL_HOME)", path: join(ws, "board.sqlite") },
+      { label: "board home (TIDEPOOL_HOME)", path: join(ws, "board-home") },
     ]);
     expect(hit?.reason).toContain("overlaps the board's board home (TIDEPOOL_HOME)");
   });
 
-  it("workspace が保護対象の配下にあっても重なり(双方向 — worker-logs の中に workspace を掘る逆包含)", async () => {
-    const logs = await tempDir("worker-logs");
-    const hit = boardStateOverlap(join(logs, "nested-workspace"), [
-      { label: "board home (TIDEPOOL_HOME)", path: logs },
+  it("workspace が保護対象の配下にあっても重なり(双方向 — 盤面の家の中に workspace を掘る逆包含)", async () => {
+    const home = await tempDir("board-home");
+    const hit = boardStateOverlap(join(home, "nested-workspace"), [
+      { label: "board home (TIDEPOOL_HOME)", path: home },
     ]);
     expect(hit?.reason).toContain("overlaps the board's board home (TIDEPOOL_HOME)");
   });
@@ -57,7 +57,7 @@ describe("boardStateOverlap: パス包含(ADR 0040)", () => {
     await mkdir(real);
     await symlink(real, link);
     const hit = boardStateOverlap(link, [
-      { label: "board home (TIDEPOOL_HOME)", path: join(real, "board.sqlite") },
+      { label: "board home (TIDEPOOL_HOME)", path: join(real, "board-home") },
     ]);
     expect(hit?.reason).toContain("overlaps");
   });
@@ -176,17 +176,31 @@ describe("boardStatePaths: registry clone は固定点(ADR 0377 決定3)", () =>
   it.each([
     ["equal to", (registry: string) => registry],
     ["inside", (registry: string) => join(registry, "agents")],
-    ["enclosing", (registry: string) => join(registry, "..")],
   ])("a path %s the registry clone overlaps it with spec #3273 text E1", async (_, at) => {
     const registryDir = await tempDir("registry");
     expect(boardStateOverlap(at(registryDir), registryFixedPoints(registryDir))?.reason).toBe(registryCloneOverlap(at(registryDir), registryDir));
   });
 
-  it("the registry clone inside the board home still overlaps with text E1, not as the home", async () => {
+  // ADR 0436 決定1: clone は家の中にある —— clone の中を指す workspace は E1、clone を囲む workspace(家そのもの)は家との重なり
+  const homeWithClone = async () => {
     const home = await tempDir("home");
     const registryDir = join(home, "registry");
-    const paths = boardStatePaths({ home, moonshotApiKeyFile: "/nonexistent/key", cwd: "/nonexistent/tidepool", servedRoot: "/nonexistent/tidepool", registryDir });
+    return { home, registryDir, paths: boardStatePaths({ home, moonshotApiKeyFile: "/nonexistent/key", cwd: "/nonexistent/tidepool", servedRoot: "/nonexistent/tidepool", registryDir }) };
+  };
+
+  it("the registry clone inside the board home still overlaps with text E1, not as the home", async () => {
+    const { registryDir, paths } = await homeWithClone();
     expect(boardStateOverlap(registryDir, paths)?.reason).toBe(registryCloneOverlap(registryDir, registryDir));
+  });
+
+  it("a path enclosing the registry clone overlaps as the board home it also encloses, not with text E1", async () => {
+    const { home, paths } = await homeWithClone();
+    expect(boardStateOverlap(home, paths)?.reason).toContain("overlaps the board's board home (TIDEPOOL_HOME)");
+  });
+
+  it("a path enclosing a registry clone that no other fixed point holds still overlaps it (fail-closed)", async () => {
+    const registryDir = await tempDir("registry");
+    expect(boardStateOverlap(join(registryDir, ".."), registryFixedPoints(registryDir))?.reason).toContain("overlaps the board's registry clone");
   });
 
   it("a board without a registry has no registry clone to protect", () => {

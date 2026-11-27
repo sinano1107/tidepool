@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readBoardHomeIdentifier, resolveBoardPlaces } from "../src/board-home.js";
+import { requireBoardHome, resolveBoardPlaces } from "../src/board-home.js";
 import { DEFAULT_AGENT_NAME, DEFAULT_WORKSPACE_NAME } from "../src/defaults.js";
 import {
   assertValidAgentName,
@@ -34,7 +34,7 @@ function copyTemplate(source: string, destination: string): void {
 function main(): void {
   // ADR 0436 決定1: 盤面と同じ家を解決し、registry clone は家の中の固定のパスにある
   const { home, registryDir, workspacesDir } = resolveBoardPlaces(process.env);
-  readBoardHomeIdentifier(home);
+  requireBoardHome(home);
   if (!existsSync(registryDir)) throw new Error(`no registry clone at ${registryDir} — clone the registry repository there first`);
 
   // TIDEPOOL_AUDITOR は読まない —— Auditor の既定は組み込みで種に無い(ADR 0117 決定1)

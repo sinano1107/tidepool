@@ -26,7 +26,7 @@ export interface BoardPlaces extends BoardHomePlaces {
   workspacesDirSource: WorkspacesBaseDirSource;
 }
 
-export function boardHomePlaces(home: string): BoardHomePlaces {
+function boardHomePlaces(home: string): BoardHomePlaces {
   const at = resolve(home);
   return {
     home: at,
@@ -40,6 +40,10 @@ export function boardHomePlaces(home: string): BoardHomePlaces {
 
 /** 盤面・`npm run token`・registry の初期化が同じ家を解決する1つの口(ADR 0436 決定1・5)。 */
 export function resolveBoardPlaces(env: NodeJS.ProcessEnv): BoardPlaces {
+  // 空の値は cwd に解決される —— 起動した場所で別の家を開かないよう、既定にも cwd にも倒さず拒む
+  if (env.TIDEPOOL_HOME === "") {
+    throw new BoardHomeMissingError("", "TIDEPOOL_HOME is empty — unset it to use the default board home, or set it to the board home's path");
+  }
   return {
     ...boardHomePlaces(env.TIDEPOOL_HOME ?? join(homedir(), ".tidepool", "board")),
     workspacesDir: resolveWorkspacesBaseDir(env.TIDEPOOL_WORKSPACES_DIR),
@@ -49,27 +53,36 @@ export function resolveBoardPlaces(env: NodeJS.ProcessEnv): BoardPlaces {
 
 const identifierFile = (home: string) => join(home, "home-id");
 
-/** ADR 0436 決定5: 家が無いか識別子が読めない。盤面は家を自分で作らず起動を拒む。 */
+/** ADR 0436 決定5: 家が無いか識別子が読めない(または家を指す env が空)。盤面は家を自分で作らず起動を拒む。文は1行で、直し方を言う。 */
 export class BoardHomeMissingError extends Error {
   constructor(
     public readonly home: string,
-    cause: string,
+    message: string,
   ) {
-    super(`no board home at ${home} (${cause}) — create it with \`npm run create-home\` before starting the board`);
+    super(message);
     this.name = "BoardHomeMissingError";
   }
 }
 
-/** 家の識別子。家が無いか識別子が読めなければ `BoardHomeMissingError`。 */
-export function readBoardHomeIdentifier(home: string): string {
+function readBoardHomeIdentifier(home: string): string {
+  const at = resolve(home);
   let identifier: string;
   try {
-    identifier = readFileSync(identifierFile(resolve(home)), "utf8").trim();
+    identifier = readFileSync(identifierFile(at), "utf8").trim();
   } catch (err) {
-    throw new BoardHomeMissingError(resolve(home), err instanceof Error ? err.message : String(err));
+    const cause = err instanceof Error ? err.message : String(err);
+    throw new BoardHomeMissingError(at, `no board home at ${at} (${cause}) — create it with \`npm run create-home\` before starting the board`);
   }
-  if (!identifier) throw new BoardHomeMissingError(resolve(home), "the home's identifier is empty");
+  // 作るコマンドが識別子を書き切る前に落ちた家 —— 作り直しは識別子の file を消してから
+  if (!identifier) {
+    throw new BoardHomeMissingError(at, `the board home at ${at} has an empty identifier file — delete ${identifierFile(at)} and rerun \`npm run create-home\``);
+  }
   return identifier;
+}
+
+/** 家があり識別子が読めることを確かめる。無ければ `BoardHomeMissingError` —— 盤面・`npm run token`・registry の初期化が、家を作らずに拒む1つの口。 */
+export function requireBoardHome(home: string): void {
+  readBoardHomeIdentifier(home);
 }
 
 /** 家を作るコマンドの本体(ADR 0436 決定5)。識別子を持つ家は作り直さず、その識別子を返す。 */
@@ -112,8 +125,8 @@ function takeHomeLock(home: string): () => void {
 
 export interface OpenedBoardHome {
   places: BoardHomePlaces;
-  identifier: string;
-  /** 盤面の唯一の接続。`openDb` 自体は lock を掛けない —— テストと人間の `sqlite3` は db を直接開ける。 */
+  /** 盤面の唯一の接続。ADR 0436 の退けた形: `openDb` 自体は lock を掛けない —— db を排他で開くと、走っている盤面の db を
+   *  外から読む運用(人間の `sqlite3`、テストの直接の接続)を塞ぐ。 */
   db: Db;
   /** 家の lock を外す。盤面の停止と起動の途中の失敗は `startBoardOnHome` が撃つ。 */
   release: () => void;
@@ -122,23 +135,28 @@ export interface OpenedBoardHome {
 /** 家を開く1つの口(ADR 0436 決定2・5): 家と識別子を確かめ、最初の書き込み(`openDb` の DDL と seed)より前に lock を取る。 */
 export function openBoardHome(home: string, dbOptions?: Parameters<typeof openDb>[1]): OpenedBoardHome {
   const places = boardHomePlaces(home);
-  const identifier = readBoardHomeIdentifier(places.home);
+  requireBoardHome(places.home);
   const release = takeHomeLock(places.home);
   try {
-    return { places, identifier, db: openDb(places.dbPath, dbOptions), release };
+    return { places, db: openDb(places.dbPath, dbOptions), release };
   } catch (err) {
     release();
     throw err;
   }
 }
 
-/** 盤面を家の上で起動する。起動が途中で失敗すれば lock を外して投げ直し、盤面の停止(db を閉じる時点)の後にも外す。 */
+/** 盤面を家の上で起動する。起動が途中で失敗すれば db を閉じてから lock を外して投げ直し、盤面の停止(db を閉じる時点)の後にも外す。 */
 export async function startBoardOnHome(opened: OpenedBoardHome, start: () => Promise<TidepoolServer>): Promise<TidepoolServer> {
   let server: TidepoolServer;
   try {
     server = await start();
   } catch (err) {
-    opened.release();
+    // lock を外した瞬間に次の盤面が開けるので、この process の接続を先に閉じる
+    try {
+      opened.db.close();
+    } finally {
+      opened.release();
+    }
     throw err;
   }
   return { ...server, stop: () => server.stop().finally(opened.release) };

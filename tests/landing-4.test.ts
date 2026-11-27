@@ -2634,8 +2634,8 @@ it("着地の比較: 開く前の項に落ちた行の無い名前は、直さ�
   expect(github.requests).toHaveLength(1);
 });
 
-/** 名前の場所の中に盤面の DB を置く固定点 —— 名前の場所と交差する(ADR 0040)。 */
-const overlappingFixedPoint = (workspace: WorkspaceConfig) => [{ label: "board home (TIDEPOOL_HOME)", path: join(workspace.path, "board.sqlite") }];
+/** 名前の場所の中に盤面の家を置く固定点 —— 名前の場所と交差する(ADR 0040)。 */
+const overlappingFixedPoint = (workspace: WorkspaceConfig) => [{ label: "board home (TIDEPOOL_HOME)", path: join(workspace.path, "board-home") }];
 
 it("着地の比較: 行の無い名前の場所が盤面の固定点と重なれば、着地は最初の撮りをせず、その名前の Quarantine で止まる", async () => {
   const { workspace, db, clock, github, work } = await doneRootWithBaseline("landing-compare-first-capture-fixed-point");

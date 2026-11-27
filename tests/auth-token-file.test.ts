@@ -11,7 +11,7 @@ import {
   readTokenHash,
   rotateToken,
 } from "../src/auth.js";
-import { boardHomePlaces, createBoardHome } from "../src/board-home.js";
+import { createBoardHome, resolveBoardPlaces } from "../src/board-home.js";
 import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -63,7 +63,7 @@ const runToken = (home: string) =>
 it("npm run token は TIDEPOOL_HOME の盤面の家にある、盤面が読むのと同じ token file をローテーションする", async () => {
   const home = join(await tempDir("tidepool-token-home-"), "board");
   createBoardHome(home);
-  const { apiTokenFile } = boardHomePlaces(home);
+  const { apiTokenFile } = resolveBoardPlaces({ TIDEPOOL_HOME: home });
 
   const result = runToken(home);
 

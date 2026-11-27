@@ -1,11 +1,8 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { BoardHomeLockedError, BoardHomeMissingError, boardHomePlaces } from "../src/board-home.js";
+import { BoardHomeLockedError, resolveBoardPlaces } from "../src/board-home.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { api, bootTidepool, HOUR, questions, queueWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
-import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool | undefined;
 afterEach(async () => {
@@ -58,30 +55,16 @@ it("起動が途中で失敗したあと、同じ盤面の家で起動し直せ�
   const task = queueWork(t, "interrupted by restart");
   await t.clock.advance(HOUR);
   await t.stopServer();
-  const seed = openDb(boardHomePlaces(t.dir).dbPath);
+  const { dbPath } = resolveBoardPlaces({ TIDEPOOL_HOME: t.dir });
+  const seed = openDb(dbPath);
   seed.exec("CREATE TRIGGER mark_fails BEFORE UPDATE OF teardown_started_at ON tasks BEGIN SELECT RAISE(ABORT, 'mark failed'); END");
   seed.close();
   await expect(bootTidepool({ dir: t.dir })).rejects.toThrow("mark failed");
-  const repair = openDb(boardHomePlaces(t.dir).dbPath);
+  const repair = openDb(dbPath);
   repair.exec("DROP TRIGGER mark_fails");
   repair.close();
 
   t = await bootTidepool({ dir: t.dir });
 
   expect((await questions(t)).map((q) => q.title)).toEqual([`restart interrupted task: ${task.title}`]);
-});
-
-// ADR 0436 決定5: 盤面は家を自分で作らない
-it("盤面の家が無ければ起動を拒み、家を作らない", async () => {
-  const home = join(await tempDir("tidepool-no-home-"), "board");
-
-  await expect(bootTidepool({ dir: home, prepareHome: false })).rejects.toThrow(BoardHomeMissingError);
-
-  expect(existsSync(home)).toBe(false);
-});
-
-it("識別子の無い dir は盤面の家ではなく、起動を拒む", async () => {
-  const notAHome = await tempDir("tidepool-not-a-home-");
-
-  await expect(bootTidepool({ dir: notAHome, prepareHome: false })).rejects.toThrow(BoardHomeMissingError);
 });
