@@ -301,7 +301,7 @@ it("読む実環境と他の面接室には tree の clean 検査を当てない
     return { place, predicates: checkoutPickupPredicates(place) };
   });
 
-  const place = await prepareAtPickup(db, room, root, { reads });
+  const place = await prepareAtPickup(db, room, root, { reads, real: workspace });
 
   // 旧: 面接室の HEAD が root のタスクブランチに乗った。ADR 0356 決定1 の後は task の checkout が乗る
   expect(git(place.path, "symbolic-ref", "HEAD")).toBe(`refs/heads/task/${root.id}`);
