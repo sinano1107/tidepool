@@ -1,5 +1,7 @@
 # 記憶の参照名(宛先・scope)は書く瞬間に registry で解決できなければ拒み、孤立は一覧で見せる
 
+**Status 追記: 決定5 の孤立の scope は「workspace 名が registry に無い」だけでなく、「scope の記録が今の宣言と食い違う」(同じ名前が別の repo や別の履歴で登録し直された)も含む。宛先の agent 名の孤立は名前の線のまま([ADR 0435](0435-a-record-written-under-a-workspace-name-carries-the-repo-it-was-written-for-and-only-a-human-carries-it-to-another-repo.md) 決定4、2026-11-27、issue #3950)。**
+
 2026-09-28 の grilling(issue #1055、#634 を畳む)で決定。Behavior / Exemplar の宛先(agent 名)と人間の面の scope(workspace 名)は
 schema が空でないことしか見ておらず、typo の宛先は誰にも注入されず黙って死ぬ。ADR 0083 追記3 の「旧名宛ての Behavior が孤立するのは正しい
 挙動」は書いた時点で存在した名前の話で、存在しない名前を通す理由にはならない。meta-review の scope は ADR 0122 決定1 で照合済みだが、
