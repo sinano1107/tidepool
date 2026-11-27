@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -144,4 +145,55 @@ it.each([
   Object.assign(hook, UNHOOKED);
 
   await expectReclaimed(board, root.id, session, res, fragment);
+});
+
+/** 面接室で `id` が正しく読める —— 中身の名前が `id` に一致する(`cat-file -p` は別の中身の loose を通す)。 */
+function readsWhole(room: string, id: string): boolean {
+  try {
+    const type = git(room, "cat-file", "-t", id);
+    const body = execFileSync("git", ["-C", room, "cat-file", type, id]);
+    return execFileSync("git", ["-C", room, "hash-object", "-t", type, "--stdin"], { input: body }).toString().trim() === id;
+  } catch {
+    return false;
+  }
+}
+
+/** 面接室の loose の `id` を壊す(`not zlib`)か消す。 */
+function damage(room: string, id: string, shape: "corrupt" | "missing"): void {
+  const loose = join(room, ".git", "objects", id.slice(0, 2), id.slice(2));
+  rmSync(loose);
+  if (shape === "corrupt") writeFileSync(loose, "not zlib");
+}
+
+// #3904: ADR 0424 決定3 の前提「verb の時点の名前の場所の失敗は、後始末が一歩あとに同じ失敗を観測する」を面接室で固定する。後始末の確かめは
+// root の tip の閉包を借りずに数え、閉包の外(前の出題の keep-around、main と無関係な root の履歴)の損傷も、運ぶ fetch が同じ object を読んで
+// 落ちる。止まらずに直ったなら、retry の root は同じ失敗を繰り返さない —— どちらでもない形が、出題の失敗が回収され続ける形
+it.each([
+  ["the protected head commit is corrupt", "corrupt", (room: string) => git(room, "rev-parse", "refs/heads/main")],
+  ["the protected head commit is missing", "missing", (room: string) => git(room, "rev-parse", "refs/heads/main")],
+  ["an earlier probe's kept commit outside the probe's closure is missing", "missing", (_room: string, rootId: string, board: Tidepool, checkout: string) => {
+    writeFileSync(join(checkout, "notes.txt"), "first\n");
+    const first = commitRoomCopy(board.db, taskRunPlaceForBoard(board.db, getTask(board.db, rootId)!, undefined)!, rootId);
+    writeFileSync(join(checkout, "notes.txt"), "second\n");
+    return first;
+  }],
+  ["the protected head commit is corrupt and the root's history does not contain it", "corrupt", (room: string, _rootId: string, _board: Tidepool, checkout: string) => {
+    const branch = git(checkout, "symbolic-ref", "--short", "HEAD");
+    git(checkout, "checkout", "-q", "--orphan", "unrelated");
+    git(checkout, "commit", "-q", "--allow-empty", "-m", "unrelated");
+    git(checkout, "branch", "-f", branch, "HEAD");
+    git(checkout, "checkout", "-q", branch);
+    git(checkout, "branch", "-D", "unrelated");
+    return git(room, "rev-parse", "refs/heads/main");
+  }],
+] as const)("%s: pose_probe が回収した後、後始末は面接室を quarantine するか、その object を直す(#3904、ADR 0424 決定3 の前提)", async (_, shape, target) => {
+  const { board, root, session, room, checkout } = await pickedRoot("pose-reclaim-teardown-observes");
+  const id = target(room, root.id, board, checkout);
+  damage(room, id, shape);
+
+  const res = await callAsTask(board, root.id, "pose_probe", POSE);
+
+  await expectReclaimed(board, root.id, session, res, "");
+  const stopped = (await servedQuarantineQuestion(board, "workspace", root.id)) !== undefined;
+  expect(stopped || readsWhole(room, id)).toBe(true);
 });
