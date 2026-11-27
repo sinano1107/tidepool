@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { CheckoutHostError, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, interviewRoomPath, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
-import { commitRoomCopy, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, NamedPlaceFetchError, NamedPlaceSideError, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -31,6 +31,7 @@ import {
   registerWork,
   servedQuarantineQuestion,
   sessionId,
+  shimGit,
   type Tidepool,
   writeObservations,
 } from "./harness.js";
@@ -361,6 +362,17 @@ it("写しの中の git が tmp の容量切れで落ちれば host の失敗で
   expect(existsSync(join(place.path, ".git"))).toBe(true);
 });
 
+it("写しの検証の git が disk の満杯で落ちれば、写しの host の失敗の文で task の失敗になる(ADR 0433 決定5 / ADR 0364 決定2)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  await shimGit({ fails: ["--strict", "fatal: unable to write file: No space left on device"] });
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(releaseFailure(db, task)).toMatchObject({ reason: expect.stringContaining("the board cannot make its copy of the task checkout's git files: the host is out of space: ") });
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+});
+
 it("運んだ後の確かめが tmp の容量切れで落ちれば写しの host の失敗で、完了の門は欠けや破損と言わずに拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
   const { db, task, place } = await pickedUp();
   commitWork(place.path, "work.txt", "work\n");
@@ -411,6 +423,44 @@ it("名前の場所の objects に書けない未決着の解放は名前の場�
   expect(listChildren(db, task.id)).toEqual([]);
 });
 
+it.each([
+  // 運んだ後の確かめが名前の場所の objects の在り処を読む手(`ensureCarriedWhole` の失敗)
+  ["the carried check", "objects"],
+  // 他の task のブランチを数える手
+  ["the other-task count", "refs/heads/task/"],
+])("tip の記録で %s の git が disk の満杯に落ちれば、名前の場所の側の失敗でなく host の失敗で投げる(ADR 0433 決定5)", async (_, argument) => {
+  const { db, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  await shimGit({ fails: [argument, "error: unable to write file: No space left on device"] });
+
+  let failure: unknown;
+  try {
+    recordTaskCheckoutTip(db, place, task.id);
+  } catch (err) {
+    failure = err;
+  }
+
+  expect(failure).toBeInstanceOf(CheckoutHostError);
+  expect(failure).not.toBeInstanceOf(NamedPlaceFetchError);
+});
+
+it("名前の場所の objects に書けない tip の記録は fetch の失敗で投げ、それは名前の場所の側の失敗の子である(ADR 0433 決定4)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  const thaw = freezeObjects(named.path);
+  let failure: unknown;
+  try {
+    recordTaskCheckoutTip(db, place, task.id);
+  } catch (err) {
+    failure = err;
+  } finally {
+    thaw();
+  }
+
+  expect(failure).toBeInstanceOf(NamedPlaceFetchError);
+  expect(failure).toBeInstanceOf(NamedPlaceSideError);
+});
+
 it("WIP の objects を名前の場所に書けなければ quarantine し、task の失敗にせず checkout を残す(ADR 0367 決定4)", async () => {
   const { db, named, task, place } = await pickedUp();
   writeFileSync(join(place.path, "wip.txt"), "only in the working tree\n");
@@ -425,6 +475,20 @@ it("WIP の objects を名前の場所に書けなければ quarantine し、tas
   expect(releaseFailure(db, task)).toBeUndefined();
   expect(listChildren(db, task.id)).toEqual([]);
   expect(existsSync(place.path)).toBe(true);
+});
+
+it("WIP の退避が名前の場所への fetch で disk の満杯に落ちれば、決着していない task の失敗で checkout を残し、名前の場所を quarantine しない(ADR 0433 決定5 / ADR 0364 決定2)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  writeFileSync(join(place.path, "wip.txt"), "only in the working tree\n");
+  // 解放の中の fetch は盤面所有の写しから名前の場所へ運ぶものだけ
+  await shimGit({ fails: ["fetch", "error: unable to write file: No space left on device"] });
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(releaseFailure(db, task)).toMatchObject({ path: place.path, reason: expect.stringContaining("No space left on device") });
+  expect(listChildren(db, task.id)).toMatchObject([{ type: "question", question_cancel_option: "abandon" }]);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+  expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("only in the working tree\n");
 });
 
 /** verb の時点で名前の場所の側か写しの host で tip を記録できない形。戻す手を返す。 */

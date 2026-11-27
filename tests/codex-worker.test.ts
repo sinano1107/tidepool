@@ -77,6 +77,7 @@ import {
   routingJudgmentRepairTask,
   seedZeroPaddedTree,
   sessionId,
+  shimGit,
   stubHostEnvDecoys,
   type Tidepool,
   unhandledRejectionsDuring,
@@ -1086,6 +1087,18 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(onPickupStopped).toHaveBeenCalledWith(f.value.id, expect.anything(), expect.objectContaining({ kind: "pickup_stopped" }));
       expect(openQuarantineValues(f.db, "workspace")).toHaveLength(1);
       expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
+      expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
+    });
+
+    it("2段目の checkout の fetch が disk の満杯で落ちれば、名前の場所の Quarantine でなく素の spawn_failed で、作りかけを残さない(ADR 0433 決定5)", async () => {
+      const f = await onBoard({ taskCheckout: await taskCheckoutWithSkill(), appServer: answerSkillsFromDisk });
+      // task の checkout は作り済み —— この後で `--update-head-ok` を持つ fetch は使い捨ての checkout を作るものだけ
+      await shimGit({ fails: ["--update-head-ok", "error: unable to write file: No space left on device"] });
+
+      await f.start(f.value);
+
+      expect(f.failures).toEqual([{ error_code: null, message: expect.stringMatching(/^the board could not prepare the throwaway checkout of main for the Codex skill check; the worker was not spawned \(no fail-open\): .*No space left on device/s) }]);
+      expect(openQuarantineValues(f.db, "workspace")).toEqual([]);
       expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
     });
 

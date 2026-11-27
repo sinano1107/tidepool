@@ -6,7 +6,7 @@ import { boardReadTree, boardWriteTree, CheckoutHostError, CheckoutUnreadableErr
 import { checkoutPickupPredicates, discardUncommitted } from "../src/pickup-predicates.js";
 import { registerTask } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
-import { commitRoomCopy, NamedPlaceFetchError, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, verifyWorkspaceClean, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, NamedPlaceFetchError, NamedPlaceSideError, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, verifyWorkspaceClean, type WorkspaceConfig } from "../src/workspace.js";
 import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, STAGING_FAILURES, submoduleSource } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -204,6 +204,24 @@ it.each([
   expect(failure).not.toBeInstanceOf(WorkerTreeGitTimeoutError);
   expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
   expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe("");
+});
+
+it("記録した親が commit でない出題の写しは名前の場所の側の失敗で拒み、fetch の失敗とは言わない(ADR 0433 決定4)", async () => {
+  const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-parent-side"));
+  git(room.path, "tag", "-a", "tag", "-m", "invalid protected branch target");
+  writeFileSync(join(room.path, ".git", "refs", "heads", "main"), `${git(room.path, "rev-parse", "refs/tags/tag")}\n`);
+  writeFileSync(join(place.path, "probe.txt"), "the environment\n");
+
+  const failure = (() => {
+    try {
+      commitRoomCopy(db, place, root.id);
+    } catch (err) {
+      return err;
+    }
+  })();
+
+  expect(failure).toBeInstanceOf(NamedPlaceSideError);
+  expect(failure).not.toBeInstanceOf(NamedPlaceFetchError);
 });
 
 // ADR 0412 決定1・2(#3814): 出題の写しの stage は面接室の objects を借りない —— worktree が前の写しの tree を再現しても stage は自前で書き、
