@@ -32,7 +32,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { CLEAN_LANDING_INTAKE, commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, lockDirInside, makeRemoteBackedWorkspace, makeShallowWorkspace, makeWorkspace, newTreePointsAtDamagedNamedBlob, notRemoved, prepareAtPickup, quarantineQuestion, seedZeroPaddedTree, sessionId, WORKER_SPAWNED, withHistoryOnlyBlob, withPushDuringWrap } from "./harness.js";
+import { CLEAN_LANDING_INTAKE, commitWork, decomposeTaskViaWorker, FULL_HANDOFF, failEventInsert, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, lockDirInside, makeRemoteBackedWorkspace, makeShallowWorkspace, makeWorkspace, newTreePointsAtDamagedNamedBlob, notRemoved, prepareAtPickup, quarantineQuestion, seedZeroPaddedTree, sessionId, WORKER_SPAWNED, withHistoryOnlyBlob, withPushDuringWrap } from "./harness.js";
 import { openLocalMergeQuestions } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 import { answer } from "./workbench-fixture.js";
@@ -1621,27 +1621,26 @@ it("タスクブランチを持ち作業台が disk に無い H の start_work �
   expect(existsSync(humanWorkbench(b, h))).toBe(false);
 });
 
-// ADR 0414 決定2 / ADR 0392 決定2: 固定が複製の後に拒めば(失われた ref が在る道)、この呼び出しが作った作業台は消し、前から disk にある作業台は残す
-it("失われた event が効いたまま task/<H> が在れば、start_work はこの呼び出しで作った作業台を disk に残さずに拒む(ADR 0414 決定2)", async () => {
-  const b = await board("start-work-lost-present-made");
-  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
-  expect((await startWork(b, h)).ok).toBe(true);
-  rmSync(humanWorkbench(b, h), { recursive: true, force: true });
-  recordLost(b, h);
-
-  expect(await startWork(b, h)).toEqual(refused(expect.stringContaining(`refs/heads/task/${h.id} is at `)));
-  expect(existsSync(humanWorkbench(b, h))).toBe(false);
-});
-
-it("失われた event が効いたまま task/<H> が在っても、前から disk にある作業台は人間の commit ごと残る(ADR 0414 決定2)", async () => {
-  const b = await board("start-work-lost-present-kept");
-  const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
+it.each([
+  { outcome: "removes the new workbench", existing: false },
+  { outcome: "keeps the existing workbench", existing: true },
+])("start_work $outcome when fixing fails (ADR 0414 decision 2)", async ({ existing }) => {
+  const b = await board("start-work-fixing-failed");
+  const { parent, h } = underUnfixedParent(b);
   const path = await startedWithCommit(b, h);
   const tip = git(path, "rev-parse", "HEAD");
-  recordLost(b, h);
+  const ref = `refs/heads/task/${parent.id}`;
+  recordLost(b, parent);
+  boardRefWriter(b.db, b.ws)(ref, "", () => git(b.ws.path, "update-ref", "-d", ref));
+  if (!existing) rmSync(path, { recursive: true, force: true });
+  const allowInsert = failEventInsert(b.db, "task_branch_created");
 
-  expect(await startWork(b, h)).toEqual(refused(expect.stringContaining(`refs/heads/task/${h.id} is at `)));
-  expect(git(path, "rev-parse", "HEAD")).toBe(tip);
+  expect(await startWork(b, h)).toEqual(refused(expect.stringContaining(`workspace ${b.ws.name} is quarantined`)));
+  allowInsert();
+
+  expect(quarantineQuestion(b.db, "workspace", b.ws.name)!.purpose).toContain("task_branch_created write failed");
+  if (existing) expect(git(path, "rev-parse", "HEAD")).toBe(tip);
+  else expect(existsSync(path)).toBe(false);
 });
 
 it("拒まれた take_in_work は task に何も書かない: tip が task/<H> の今の値を欠く(text C2a)・未 commit の変更がある(text C2d)—— 子孫の後始末が済んでいなくても通る(pin C6)", async () => {

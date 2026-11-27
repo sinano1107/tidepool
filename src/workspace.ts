@@ -47,6 +47,7 @@ import {
   gitWithInput,
   gitWithoutHistoryOverrides,
   isAncestor,
+  ListingUnreadableError,
   outOfSpace,
   ownWorktreeStatus,
   readCheckoutRemote,
@@ -2205,11 +2206,7 @@ export async function startHumanWork(
       } catch {
         // 固定が落ちた理由を消さない
       }
-      if (!(err instanceof LostTaskBranchPresentError)) throw err;
-      // ADR 0392 決定2: ref の持ち主(祖先のこともある)の failure question(出口は cancel)で止め、workspace の Quarantine に畳まない
-      const owner = getTask(db, err.taskId)!;
-      if (!hasOpenFailureQuestion(db, owner.id)) registerFailureQuestion(db, owner, `task branch cannot be taken: ${owner.title}`, err.message, now, null);
-      refusal = new DomainError(`cannot ${verb}: ${err.message}`);
+      throw err;
     }
   });
   if (refusal) throw refusal;
@@ -2786,19 +2783,34 @@ function fixTaskAndUnstartedAncestors(
 ): void {
   const ancestors = transparentToLineage(task.type) ? [] : ancestorsFromTop(db, task).filter((ancestor) => fixedAncestorName(db, workspace, ancestor, defaultWorkspaceName));
   // ADR 0414 決定9: 型付きの拒否は書く前に全員を上から確かめる —— 下で拒んでも上の ref・event・列を残さない(event は append-only)。
-  // ADR 0392 決定2: 失われた event が効いているのに在る ref は、クラッシュ後の回復と読まず採らずに止まる(give-up の後は届かない状態)
+  // ADR 0428 決定1・2: 在る ref を採る根拠は基準 —— 最初の作成も作り直しも、基準に在る値なら event を補える。
+  const baseline = refValues(storedRefs(db, workspace.name));
+  const current = taskRefsAtFixing(workspace);
   for (const member of [...ancestors, task]) {
     const ref = `refs/heads/${taskBranch(member.id)}`;
-    if (taskBranchLostInForce(db, member.id) && taskBranchExists(workspace, member.id)) {
-      throw new LostTaskBranchPresentError(member.id, ref, git(workspace.path, "rev-parse", ref));
+    const actual = current.get(ref);
+    if (actual === undefined) {
+      // ADR 0427 決定1: 一覧が黙って飛ばす行き先の無い symref と、ref が無い場合を区別する。
+      if (gitAnswers(() => gitListing(workspace.path, ["symbolic-ref", "--quiet", "--no-recurse", ref]))) {
+        throw new ListingUnreadableError(`git could not read ${ref} before the task branch was fixed: the symbolic ref has no resolved value.`);
+      }
+      continue;
+    }
+    const expected = baseline.get(ref);
+    if (!baselineAllows(expected, actual.value)) {
+      throw taskRefMoved(workspace, ref, "before the task branch was fixed", expected, actual.value);
     }
   }
   // 列の出所だけは書く時に読む —— 上で埋めた祖先の列が下の祖先の出所になる(ADR 0372 決定1・3)。
   // 下の祖先の fork 元の読みは帰り先なしで投げない(#3878): 帰り先を奪う決着した祖先の下に未決着の work は残らない —— give-up は session
   // の終わりを待ち、死んだ祖先の下を倒す(ADR 0380 決定2)。cancel は道連れにし、登録の床は拒む(決定5)。task 自身のブランチが在れば
   // 固定の前の系譜の読みは飛ぶので、それには頼らない
-  for (const ancestor of ancestors) createTaskBranch(db, workspace, { ...ancestor, workspace: workspace.name }, now, { filledFrom: filledFrom(db, ancestor) });
-  createTaskBranch(db, workspace, task, now, { filledFrom: fillOwnColumn ? filledFrom(db, task) : undefined, forkSource });
+  for (const ancestor of ancestors) {
+    const checkedSha = current.get(`refs/heads/${taskBranch(ancestor.id)}`)?.sha;
+    createTaskBranch(db, workspace, { ...ancestor, workspace: workspace.name }, now, { checkedSha, filledFrom: filledFrom(db, ancestor) });
+  }
+  const checkedSha = current.get(`refs/heads/${taskBranch(task.id)}`)?.sha;
+  createTaskBranch(db, workspace, task, now, { checkedSha, filledFrom: fillOwnColumn ? filledFrom(db, task) : undefined, forkSource });
 }
 
 /** ADR 0372 決定3: 同じ固定の瞬間に `workspace` で固定する祖先なら、列に書く名前(導出の値)。固定しない祖先なら undefined。 */
@@ -2868,14 +2880,12 @@ export function resolveTaskBranchLineage(
     };
   }
 
-  // ADR 0414 決定2: 固定の前の読みは、固定した後と同じ答えを返す —— 作り直す失われた祖先は下の読みが飛ばし(作り直す値はそこまでの候補と
-  // 同じ commit)、ref を書いて event の前に落ちた祖先(ADR 0329 決定2)は固定が採る ref の値で数える
+  // ADR 0414 決定2: 固定の前の読みは、固定した後と同じ答えを返す —— ref も作る祖先はそこまでの候補と同じ commit になり、
+  // event だけを補う祖先は固定が採る ref の値で数える(ADR 0428 決定1)。
   if (noReturnAncestor(db, workspace, task, { beforeFixing: beforeFixing !== undefined })) return { branch: undefined, outlivedForkSource: false, noReturn: true };
   let candidate: string | undefined;
   let outlivedForkSource = false;
   for (const ancestor of lineageAncestors(db, workspace, task, beforeFixing)) {
-    // ADR 0380 決定3: 残る失われた祖先は透明 —— git を当てずに系譜から外す
-    if (taskBranchLostInForce(db, ancestor.id)) continue;
     const branch = taskBranch(ancestor.id);
     if (!isSettled(ancestor.status)) {
       candidate = branch;
@@ -2902,14 +2912,14 @@ function taskBranchPresent(workspace: WorkspaceConfig, taskId: string): boolean 
   return gitListing(workspace.path, ["show-ref"]).split("\n").some((line) => line.endsWith(` ${ref}`));
 }
 
-/** ADR 0372 決定4: 系譜に数える祖先(`countedAncestors`)。固定の前の読み(ADR 0414 決定2)では、同じ瞬間の固定が採る祖先 —— 固定する祖先で、
- *  失われていない `task/<id>` が名前の場所に在る —— も上から数える。 */
+/** ADR 0372 決定4 / ADR 0380 決定3: 系譜に数える祖先から、残る失われた祖先は git を当てずに外す。固定の前の読み(ADR 0414 決定2)では、
+ *  同じ瞬間に固定する祖先で `task/<id>` が在れば、その値を固定が採るので数える(ADR 0428 決定1)。 */
 function lineageAncestors(db: Db, workspace: WorkspaceConfig, task: Pick<Task, "parent_id">, beforeFixing?: { defaultWorkspaceName: string | undefined }): Task[] {
-  const counted = countedAncestors(db, workspace.name, task);
+  const counted = countedAncestors(db, workspace.name, task).filter((ancestor) => !taskBranchLostInForce(db, ancestor.id));
   if (!beforeFixing) return counted;
   const ids = new Set(counted.map(({ id }) => id));
   const adopted = (ancestor: Task) =>
-    fixedAncestorName(db, workspace, ancestor, beforeFixing.defaultWorkspaceName) !== undefined && !taskBranchLostInForce(db, ancestor.id) && taskBranchExists(workspace, ancestor.id);
+    fixedAncestorName(db, workspace, ancestor, beforeFixing.defaultWorkspaceName) !== undefined && taskBranchExists(workspace, ancestor.id);
   return ancestorsFromTop(db, task).filter((ancestor) => ids.has(ancestor.id) || adopted(ancestor));
 }
 
@@ -2978,17 +2988,6 @@ function writeWithWorktree(db: Db, workspace: WorkspaceConfig, oldTip: string, t
   }
 }
 
-/** ADR 0392 決定2: 失われた event が効いている task の `task/<id>` が在る —— 止めるのはその task で、workspace の Quarantine に畳まない。 */
-export class LostTaskBranchPresentError extends Error {
-  constructor(
-    readonly taskId: string,
-    ref: string,
-    value: string,
-  ) {
-    super(`${ref} is at ${value}, but the task branch of task ${taskId} was recorded lost when the lost refs were given up, so the board does not take that value as that task's work. Cancel task ${taskId}.`);
-  }
-}
-
 /** 帰り先の無い系譜の task の fork 元を問われた —— その task の失敗で、出口は cancel(ADR 0421 決定3)。名前の場所は quarantine しない。
  *  登録の床と人間の扉が先に拒むので、届くのは削除の扉が着地を終える前に登録された task だけである。 */
 export class NoReturnLineageError extends Error {
@@ -3040,16 +3039,17 @@ function copySourceBeforeFixing(db: Db, named: WorkspaceConfig, task: Task, now:
 
 /** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。
  *  ADR 0372 決定2: ref を書いた後に `task_branch_created` を残す。`filledFrom` は同じ固定が空の列に `task.workspace` を書くときの出所で、
- *  列と event は1つの transaction で書く。ADR 0329 決定2 と同じく、ref を書いて event の前に落ちた作成は次の作成が event だけ足して通す。
- *  `forkSource` は複製が先に受け取った fork 元の commit(ADR 0414 決定2)—— 無ければここで読む。失われた event が効いたまま在る ref の
- *  拒否は、呼び手の固定の瞬間が書く前に確かめている(ADR 0414 決定9)。 */
-function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, { filledFrom, forkSource }: { filledFrom?: string; forkSource?: string } = {}): void {
+ *  列と event は1つの transaction で書く。ADR 0428 決定1: 基準と照合した時点で ref が在れば、そのとき確かめた sha で event だけを補う。
+ *  `forkSource` は複製が先に受け取った fork 元の commit(ADR 0414 決定2)—— 無ければここで読む。 */
+function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, { checkedSha, filledFrom, forkSource }: { checkedSha: string | undefined; filledFrom?: string; forkSource?: string }): void {
   const ref = `refs/heads/${taskBranch(task.id)}`;
-  if (!taskBranchExists(workspace, task.id)) {
+  let sha = checkedSha;
+  if (sha === undefined) {
     const source = forkSource ?? taskForkSource(db, workspace, task, () => now);
-    boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", ref, source, ""));
+    // 固定の確かめの後で置かれた symref の指し先には書かない。
+    boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", "--no-deref", ref, source, ""));
+    sha = source;
   } else if (hasTaskBranchInForce(db, task.id)) return;
-  const sha = git(workspace.path, "rev-parse", ref);
   // ADR 0273 決定8: 面接室で切る task も列の実環境の名前を残す
   const name = task.workspace ?? workspace.name;
   db.transaction(() => {
@@ -3261,6 +3261,16 @@ async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task
  *
  *  ADR 0345 決定2: `for-each-ref` は HEAD を出さないので1行足す。`HEAD` は `refs/` より前に並ぶので refname 順のまま。 */
 const REF_SNAPSHOT_FORMAT = "--format=%(if)%(symref)%(then)symref=%(symref)%(else)%(objectname)%(end) %(refname)";
+
+function taskRefsAtFixing(workspace: WorkspaceConfig): Map<string, { value: string; sha: string }> {
+  // ADR 0427 決定1: for-each-ref が先頭の壊れた packed-refs の行を黙って飛ばす形は show-ref で止める(#3826)。
+  gitListing(workspace.path, ["show-ref"]);
+  const refs = gitListing(workspace.path, ["for-each-ref", "--format=%(objectname) %(symref) %(refname)", "refs/heads/task/"]);
+  return new Map(refs.split("\n").filter(Boolean).map((line) => {
+    const [sha, target, ref] = line.split(" ") as [string, string, string];
+    return [ref, { value: target ? symrefValue(target) : sha, sha }];
+  }));
+}
 
 function readRefSnapshotValue(workspace: WorkspaceConfig, ref: string): string {
   return refValues(git(workspace.path, "for-each-ref", "--count=1", REF_SNAPSHOT_FORMAT, ref)).get(ref) ?? "";
@@ -4642,22 +4652,22 @@ function bringTaskCheckout(
   const tip = wipTip;
   if (tip) {
     const old = readRefSnapshotValue(namedPlace, taskRef);
-    if (old !== evacuationBaseRef) throw releaseRefMoved(namedPlace, taskRef, when, evacuationBaseRef, old);
+    if (old !== evacuationBaseRef) throw taskRefMoved(namedPlace, taskRef, when, evacuationBaseRef, old);
     if (old !== tip) {
       boardRefWriter(db, namedPlace)(taskRef, tip, () => git(namedPlace.path, "update-ref", "--no-deref", taskRef, tip, old));
       const current = readRefSnapshotValue(namedPlace, taskRef);
-      if (current !== tip) throw releaseRefMoved(namedPlace, taskRef, when, tip, current);
+      if (current !== tip) throw taskRefMoved(namedPlace, taskRef, when, tip, current);
     }
   }
   if (gated) {
     // ADR 0369 決定7: tree を先に読み、最後に今のタスクブランチが門の tip を持つことを確かめる。
     if (recorded) gitWithoutHistoryOverrides(namedPlace.path, "ls-tree", "-r", "--format=%(objectmode)", recorded);
     const current = readRefSnapshotValue(namedPlace, taskRef);
-    if (!recorded || !current || current.startsWith("symref=")) throw releaseRefMoved(namedPlace, taskRef, when, recorded, current);
+    if (!recorded || !current || current.startsWith("symref=")) throw taskRefMoved(namedPlace, taskRef, when, recorded, current);
     if (recorded !== current) {
-      if (!isAncestor(namedPlace, recorded, current, gitWithoutHistoryOverrides)) throw releaseRefMoved(namedPlace, taskRef, when, recorded, current);
+      if (!isAncestor(namedPlace, recorded, current, gitWithoutHistoryOverrides)) throw taskRefMoved(namedPlace, taskRef, when, recorded, current);
       const latest = readRefSnapshotValue(namedPlace, taskRef);
-      if (latest !== current) throw releaseRefMoved(namedPlace, taskRef, when, recorded, latest);
+      if (latest !== current) throw taskRefMoved(namedPlace, taskRef, when, recorded, latest);
     }
   }
   // ADR 0276 決定4: 決着した受験者の最後の checkout は記録として残る —— 消さず、解放済みとも刻まない。
@@ -4674,11 +4684,11 @@ class OtherTaskCommitsError extends Error {}
 function taskRefAsRecorded(db: Db, namedPlace: WorkspaceConfig, ref: string, when: string): string {
   const current = readRefSnapshotValue(namedPlace, ref);
   const expected = recordedRef(db, namedPlace.name, ref);
-  if (current.startsWith("symref=") || !baselineAllows(expected, current)) throw releaseRefMoved(namedPlace, ref, when, expected, current);
+  if (current.startsWith("symref=") || !baselineAllows(expected, current)) throw taskRefMoved(namedPlace, ref, when, expected, current);
   return current;
 }
 
-function releaseRefMoved(workspace: WorkspaceConfig, ref: string, when: string, expected: string | undefined, current: string): RefsMovedError {
+function taskRefMoved(workspace: WorkspaceConfig, ref: string, when: string, expected: string | undefined, current: string): RefsMovedError {
   return new RefsMovedError(`workspace ${workspace.name}: refs changed ${when} — was: ${expected || "absent"} ${ref}, now: ${current || "absent"} ${ref}`);
 }
 

@@ -13,9 +13,9 @@ import { Slot } from "../src/slot.js";
 import { completeTask, countUnsettledTasksReferencing, editTask, fillEmptyWorkspace, getTask, listBoard, listChildren, type RegisterTaskInput, recordPrOpened, registerTask, type Task, taskBranchLostInForce, whyNoReturnDestination } from "../src/tasks.js";
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { workbenchPath } from "../src/workbench.js";
-import { boardRefWriter, LostTaskBranchPresentError, quarantineWorkspace, recordTaskCheckoutTip, releaseWorkspace, removeReleasedTaskCheckoutsOn, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
+import { boardRefWriter, quarantineWorkspace, RefsMovedError, recordDeclaredRepo, recordTaskCheckoutTip, releaseWorkspace, removeReleasedTaskCheckoutsOn, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, decomposeTaskViaWorker, dropBoardBeforeFold, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, recordTaskBranchCreated, settleReviews, WORKER_SPAWNED } from "./harness.js";
+import { commitWork, decomposeTaskViaWorker, dropBoardBeforeFold, FULL_HANDOFF, failEventInsert, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeLandingWorkspace, makeWorkspace, prepareAtPickup, quarantineQuestion, recordTaskBranchCreated, settleReviews, WORKER_SPAWNED } from "./harness.js";
 import { attachUnsettledChild, commitThroughTaskCheckout, completeThroughTaskCheckout, failPrepareOnce, finish, landingWork, openBoard, promotionFailures } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -25,13 +25,16 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** git の呼び出しの引数の記録 —— 失われた `task/<id>` を git で読む経路が無いことの釘(ADR 0407 決定1)。既定は素通し。 */
 const gitCalls = vi.hoisted(() => [] as string[][]);
+const afterGit = vi.hoisted(() => ({ run: undefined as ((cwd: string, args: string[]) => void) | undefined }));
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
   return {
     ...actual,
     git: (cwd: string, ...args: string[]) => {
       gitCalls.push(args);
-      return actual.git(cwd, ...args);
+      const result = actual.git(cwd, ...args);
+      afterGit.run?.(cwd, args);
+      return result;
     },
     // ADR 0409 決定2: 手元の object の読みは stderr を取る runner を通る
     gitReporting: (...call: Parameters<typeof actual.gitReporting>) => {
@@ -53,6 +56,28 @@ type Board = { db: Db; clock: FakeClock; ws: WorkspaceConfig; base: string };
 
 async function board(name: string): Promise<Board> {
   return { db: openDb(":memory:"), clock: new FakeClock(), ws: await makeWorkspace(name), base: await tempDir("tidepool-task-checkouts-") };
+}
+
+/** Inject a change after a real Git operation returns, once per test. */
+function afterGitOperation(matches: (cwd: string, args: string[]) => boolean, run: () => void): void {
+  afterGit.run = (cwd, args) => {
+    if (!matches(cwd, args)) return;
+    afterGit.run = undefined;
+    run();
+  };
+  onTestFinished(() => { afterGit.run = undefined; });
+}
+
+/** After the task checkout or workbench is populated, between baseline comparison and fixing. */
+function afterTaskCopy(b: Board, run: () => void): void {
+  const base = realpathSync(b.base);
+  afterGitOperation((cwd, args) => cwd.startsWith(`${base}/`) && args[0] === "read-tree" && args.at(-1) === "HEAD", run);
+}
+
+/** When fixing has checked every candidate and started writing ancestors. */
+function afterAncestorRefWrite(b: Board, ancestor: Task, run: () => void): void {
+  const ref = `refs/heads/task/${ancestor.id}`;
+  afterGitOperation((cwd, args) => cwd === b.ws.path && args[0] === "update-ref" && args.includes(ref), run);
 }
 
 function work(b: Board, title: string, extra: Partial<RegisterTaskInput> = {}): Task {
@@ -1206,29 +1231,96 @@ it.each([["disk に在る", true], ["disk に無い", false]] as const)("give-up
   else await expect(refusal).rejects.not.toThrow(says);
 });
 
-/** setup のみ: 失われた event が効いたまま、盤面の口で `task/<id>` を `main` に作る(基準に入る)—— give-up の後は届かない状態。値を返す。 */
-function lostButPresent(b: Board, taskId: string): string {
-  const ref = `refs/heads/task/${taskId}`;
+it.each(["first creation", "recreation"])("pickup records the branch left by interrupted %s (ADR 0428 decision 1)", async (operation) => {
+  const b = await board("interrupted-task-branch");
+  const task = work(b, "root");
+  if (operation === "recreation") {
+    await commitThrough(b, task, "root.txt");
+    await giveUp(b, task.id);
+    expect(taskBranchLostInForce(b.db, task.id)).toBeDefined();
+  }
+  const ref = `refs/heads/task/${task.id}`;
   const main = git(b.ws.path, "rev-parse", "main");
-  boardRefWriter(b.db, b.ws)(ref, main, () => git(b.ws.path, "update-ref", ref, main));
-  return main;
-}
-
-// 盤面の pickup がこれを workspace の Quarantine でなく task の spawn の失敗(cancel だけ)にする分岐は scheduler にあり、ここでは見ない
-it("失われた event が効いたまま `task/<id>` が在れば、pickup の準備は採らずに止まり、`task_branch_created` を書かない(ADR 0392 決定2)", async () => {
-  const b = await board("lost-but-present-pickup");
-  const task = await commitThrough(b, work(b, "root"), "root.txt");
-  await giveUp(b, task.id);
-  const value = lostButPresent(b, task.id);
   const created = createdShas(b, task);
+  const allowInsert = failEventInsert(b.db, "task_branch_created");
 
-  await expect(pickUp(b, getTask(b.db, task.id)!))
-    .rejects.toThrow(new LostTaskBranchPresentError(task.id, `refs/heads/task/${task.id}`, value));
+  await expect(pickUp(b, getTask(b.db, task.id)!)).rejects.toThrow("task_branch_created write failed");
+  allowInsert();
 
   expect(createdShas(b, task)).toEqual(created);
-  // ADR 0414 決定2: 固定が checkout の後に拒めば、その pickup の checkout を残さない
+  expect(git(b.ws.path, "rev-parse", ref)).toBe(main);
   expect(existsSync(join(b.base, task.id, String(latestEventOfTask(b.db, task.id, "task_picked_up")!.id)))).toBe(false);
-  expect(taskBranchLostInForce(b.db, task.id)).toBeDefined();
+
+  const place = await pickUp(b, getTask(b.db, task.id)!);
+
+  expect(git(place.path, "rev-parse", "HEAD")).toBe(main);
+  expect(git(b.ws.path, "rev-parse", ref)).toBe(main);
+  expect(createdShas(b, task)).toEqual([...created, main]);
+  expect(taskBranchLostInForce(b.db, task.id)).toBeUndefined();
+});
+
+it("pickup accepts the new ref value while creation is still announced in the baseline (ADR 0428 decision 1)", async () => {
+  const b = await seededBoard("announced-task-branch");
+  const task = work(b, "root");
+  const ref = `refs/heads/task/${task.id}`;
+  const main = git(b.ws.path, "rev-parse", "main");
+  afterTaskCopy(b, () => {
+    const allowFold = dropBoardBeforeFold(b.db, { foldOnly: true });
+    expect(() => boardRefWriter(b.db, b.ws)(ref, main, () => git(b.ws.path, "update-ref", ref, main))).toThrow("the board dropped");
+    allowFold();
+  });
+
+  const place = await pickUp(b, task);
+
+  expect(createdShas(b, task)).toEqual([main]);
+  expect(git(place.path, "rev-parse", "HEAD")).toBe(main);
+});
+
+it.each([
+  { kind: "direct", symbolic: false },
+  { kind: "symbolic", symbolic: true },
+])("pickup records the checked commit when a $kind task ref moves during fixing (ADR 0428 decision 1)", async ({ symbolic }) => {
+  const b = await board("moved-after-task-branch-check");
+  const parent = work(b, "parent", { workspace: undefined });
+  const task = work(b, "child", { parent_id: parent.id });
+  const ref = `refs/heads/task/${task.id}`;
+  const target = symbolic ? "refs/heads/recovered" : ref;
+  const main = git(b.ws.path, "rev-parse", "main");
+  const moved = git(b.ws.path, "commit-tree", "main^{tree}", "-p", main, "-m", "outside work");
+  // First capture records the ref but there is no task_branch_created yet.
+  git(b.ws.path, "update-ref", target, main);
+  if (symbolic) git(b.ws.path, "symbolic-ref", ref, target);
+  afterAncestorRefWrite(b, parent, () => git(b.ws.path, "update-ref", target, moved, main));
+
+  const place = await pickUp(b, task);
+
+  expect(git(b.ws.path, "rev-parse", ref)).toBe(moved);
+  expect(git(place.path, "rev-parse", "HEAD")).toBe(main);
+  expect(createdShas(b, task)).toEqual([main]);
+  if (symbolic) expect(git(b.ws.path, "symbolic-ref", ref)).toBe(target);
+});
+
+it("pickup never writes through a dangling symref placed after the fixing check (ADR 0428 decision 1)", async () => {
+  const b = await board("symref-after-task-branch-check");
+  const parent = work(b, "parent", { workspace: undefined });
+  const task = work(b, "child", { parent_id: parent.id });
+  const ref = `refs/heads/task/${task.id}`;
+  const target = "refs/heads/unrelated";
+  const main = git(b.ws.path, "rev-parse", "main");
+  afterAncestorRefWrite(b, parent, () => git(b.ws.path, "symbolic-ref", ref, target));
+
+  const refusal = await pickUp(b, task).then(() => null, (error: unknown) => ({ error }));
+
+  expect(git(b.ws.path, "for-each-ref", target)).toBe("");
+  // Git versions differ on whether the absence check permits replacing a dangling symref.
+  if (refusal) {
+    expect(refusal.error).toMatchObject({ message: expect.stringContaining("dangling symref already exists") });
+    expect(git(b.ws.path, "symbolic-ref", ref)).toBe(target);
+    expect(createdShas(b, task)).toEqual([]);
+    return;
+  }
+  expect(git(b.ws.path, "rev-parse", ref)).toBe(main);
+  expect(createdShas(b, task)).toEqual([main]);
 });
 
 it("give-up の回答が checkout を残したと刻んだ後に後の task のやり直しで拒まれても、拒否の文が在り処を言い、次に通る回答は告げ直さない(ADR 0393 決定3)", async () => {
@@ -1283,111 +1375,167 @@ function schedulerOn(b: Board) {
   return worker;
 }
 
-it("盤面の pickup は、失われた event が効いたまま在る `task/<id>` を workspace の Quarantine にせず、その task の走らなかった pickup の失敗(cancel だけの question)にする(ADR 0392 決定2)", async () => {
-  const b = await board("lost-but-present-scheduler");
+it.each(["before comparison", "before fixing"])("scheduler quarantines a workspace when a human recreates a lost branch %s (ADR 0428 decision 2)", async (when) => {
+  const b = await board("human-recreated-lost-branch");
   const task = await commitThrough(b, work(b, "root"), "root.txt");
   await giveUp(b, task.id);
-  const value = lostButPresent(b, task.id);
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  const created = createdShas(b, task);
+  let value: string | undefined;
+  const move = () => { value = humanMoves(b, task.id); };
+  if (when === "before fixing") afterTaskCopy(b, move);
+  else move();
   const worker = schedulerOn(b);
 
   await b.clock.advance(HOURLY);
-  await vi.waitFor(() => expect(kindsOf(b, task)).toContain("spawn_failed"));
-  await vi.waitFor(() => expect(openQuestionOf(b, task)).toBeDefined());
+  await vi.waitFor(() => expect(quarantineQuestion(b.db, "workspace", b.ws.name)).toBeDefined());
+  await vi.waitFor(() => expect(statusOf(b, task)).toBe("todo"));
 
-  expect(listEvents(b.db, task.id).find(({ kind }) => kind === "spawn_failed")!.payload).toMatchObject({ message: expect.stringContaining(`refs/heads/task/${task.id} is at ${value}`) });
-  expect(openQuestionOf(b, task)!.question_items).toEqual([expect.objectContaining({ options: ["abandon"] })]);
-  expect(accepted(b)).toBe(true);
+  const reason = quarantineQuestion(b.db, "workspace", b.ws.name)!.purpose;
+  const stage = when === "before fixing" ? "before the task branch was fixed" : "while the checkout rested since the last session";
+  expect(reason).toContain(`refs changed ${stage}`);
+  expect(reason).toContain(`now: ${value} refs/heads/task/${task.id}`);
+  expect(createdShas(b, task)).toEqual(created);
+  expect(taskBranchLostInForce(b.db, task.id)).toBeDefined();
+  expect(openQuestionOf(b, task)).toBeUndefined();
+  expect(kindsOf(b, task)).not.toContain("spawn_failed");
   expect(worker.started).toEqual([]);
 });
 
-it("祖先の `task/<id>` が失われた event の効いたまま在れば、`start_work` は拒み、cancel だけの failure question を書き始めた task でなく祖先に立てる(ADR 0392 決定2)", async () => {
-  const b = await board("lost-but-present-ancestor");
+it("start_work copies an interrupted ancestor recreation even after the protected branch advances (ADR 0414 decision 2 / ADR 0428 decision 1)", async () => {
+  const b = await board("interrupted-ancestor-start-work");
   const parent = await commitThrough(b, work(b, "parent"), "parent.txt");
   await giveUp(b, parent.id);
-  const value = lostButPresent(b, parent.id);
+  const recreated = git(b.ws.path, "rev-parse", "main");
+  const created = createdShas(b, parent);
+  const allowInsert = failEventInsert(b.db, "task_branch_created");
+  await expect(pickUp(b, getTask(b.db, parent.id)!)).rejects.toThrow("task_branch_created write failed");
+  allowInsert();
+  const advanced = git(b.ws.path, "commit-tree", "main^{tree}", "-p", recreated, "-m", "main advanced after the interruption");
+  boardRefWriter(b.db, b.ws)("refs/heads/main", advanced, () => git(b.ws.path, "update-ref", "refs/heads/main", advanced, recreated));
   const h = work(b, "write it myself", { parent_id: parent.id, assignee: HUMAN_ACTOR_ID });
 
-  expect(await startWorkThroughHumanDoor(doorDeps(b), h.id, () => b.clock.now(), "webui")).toMatchObject({
-    ok: false,
-    failure: { error: expect.stringContaining(`refs/heads/task/${parent.id} is at ${value}, but the task branch of task ${parent.id} was recorded lost`) },
-  });
+  expect(await startWorkThroughHumanDoor(doorDeps(b), h.id, () => b.clock.now(), "webui")).toMatchObject({ ok: true });
 
-  expect(openQuestionOf(b, h)).toBeUndefined();
-  expect(openQuestionOf(b, parent)!.question_items).toEqual([expect.objectContaining({ options: ["abandon"] })]);
-  expect(createdShas(b, h)).toEqual([]);
-  expect(accepted(b)).toBe(true);
+  expect(createdShas(b, parent)).toEqual([...created, recreated]);
+  expect(taskBranchLostInForce(b.db, parent.id)).toBeUndefined();
+  expect(createdShas(b, h)).toEqual([recreated]);
+  expect(git(realpathSync(workbenchPath(b.base, { task: h.id })), "rev-parse", "HEAD")).toBe(recreated);
 });
 
-it("失われた event が効いたまま `task/<H>` が在れば、`start_work` は拒み、`task_branch_created` を書かず、H に ref と値を名指す cancel だけの failure question を1つ立て、workspace を Quarantine しない(ADR 0392 決定2)", async () => {
-  const b = await board("lost-but-present-start-work");
+it("start_work records its own branch after interrupted recreation (ADR 0428 decision 1)", async () => {
+  const b = await board("interrupted-own-start-work");
   const h = work(b, "write it myself", { assignee: HUMAN_ACTOR_ID });
   const at = () => b.clock.now();
-  await startWorkThroughHumanDoor(doorDeps(b), h.id, at, "webui");
-  commitWork(realpathSync(workbenchPath(b.base, { task: h.id })), "mine.txt", "mine\n");
+  const start = () => startWorkThroughHumanDoor(doorDeps(b), h.id, at, "webui");
+  const workbench = workbenchPath(b.base, { task: h.id });
+  expect(await start()).toMatchObject({ ok: true });
+  commitWork(realpathSync(workbench), "mine.txt", "mine\n");
   expect((await takeInWorkThroughHumanDoor(doorDeps(b), h.id, at, "webui")).ok).toBe(true);
   await giveUp(b, h.id);
-  rmSync(workbenchPath(b.base, { task: h.id }), { recursive: true, force: true });
-  const value = lostButPresent(b, h.id);
+  rmSync(workbench, { recursive: true, force: true });
   const created = createdShas(b, h);
+  const main = git(b.ws.path, "rev-parse", "main");
+  const allowInsert = failEventInsert(b.db, "task_branch_created");
 
-  for (let i = 0; i < 2; i++) {
-    expect(await startWorkThroughHumanDoor(doorDeps(b), h.id, at, "webui")).toMatchObject({ ok: false, failure: { error: expect.stringContaining(`refs/heads/task/${h.id} is at ${value}`) } });
-  }
-
+  expect(await start()).toMatchObject({ ok: false, failure: { error: expect.stringContaining(`workspace ${b.ws.name} is quarantined`) } });
+  allowInsert();
+  expect(existsSync(workbench)).toBe(false);
+  expect(quarantineQuestion(b.db, "workspace", b.ws.name)!.purpose).toContain("task_branch_created write failed");
+  expect(git(b.ws.path, "rev-parse", `task/${h.id}`)).toBe(main);
   expect(createdShas(b, h)).toEqual(created);
-  expect(accepted(b)).toBe(true);
-  const questions = listChildren(b.db, h.id).filter((child) => child.type === "question" && child.status === "todo");
-  expect(questions).toHaveLength(1);
-  expect(questions[0]!.question_items).toEqual([expect.objectContaining({ options: ["abandon"] })]);
-  expect(questions[0]!.purpose).toContain(`refs/heads/task/${h.id} is at ${value}`);
+  expect(taskBranchLostInForce(b.db, h.id)).toBeDefined();
+
+  await answerQuarantine(b, "repaired by hand");
+
+  expect(await start()).toMatchObject({ ok: true });
+  expect(git(realpathSync(workbench), "rev-parse", "HEAD")).toBe(main);
+  expect(createdShas(b, h)).toEqual([...created, main]);
+  expect(taskBranchLostInForce(b.db, h.id)).toBeUndefined();
 });
 
-/** G(自分の commit)の下に `titles` の鎖(それぞれ commit)を作って全部 give-up で失わせ、鎖の `task/<id>` だけ失われた event の効いたまま
- *  在る —— G は同じ固定で作り直す祖先。鎖は上から。 */
-async function lostAncestorAboveLostButPresent<T extends string[]>(name: string, ...titles: T) {
-  const b = await board(name);
-  // G に自分の commit を持たせる —— tip が main のままだと give-up が G を失われたと数えない
-  const g = await commitThrough(b, work(b, "G"), "g.txt");
-  const chain: Task[] = [];
-  for (const title of titles) chain.push(await commitThrough(b, work(b, title, { parent_id: (chain.at(-1) ?? g).id }), `${title}.txt`));
-  await giveUp(b, g.id, ...chain.map(({ id }) => id));
-  for (const { id } of chain) lostButPresent(b, id);
-  return { b, g, chain: chain as { [K in keyof T]: Task }, gCreated: createdShas(b, g) };
-}
-
-/** 拒んだ扉が上の祖先 G について何も書いていない —— `task/<G>` が無く、`task_branch_created` が増えず、失われた event が効いたまま。 */
-function nothingWrittenFor(b: Board, g: Task, gCreated: string[]) {
-  expect(git(b.ws.path, "for-each-ref", `refs/heads/task/${g.id}`)).toBe("");
-  expect(createdShas(b, g)).toEqual(gCreated);
-  expect(taskBranchLostInForce(b.db, g.id)).toBeDefined();
-}
-
-it("下の祖先 P で拒む `start_work` は、上で作り直すはずの祖先 G の ref・`task_branch_created` を書かず、G の失われた event は効いたまま(ADR 0414 決定9)", async () => {
-  const { b, g, chain: [p], gCreated } = await lostAncestorAboveLostButPresent("lost-present-below-start-work", "P");
+it("start_work quarantines a late ancestor ref and leaves the lineage unfixed (ADR 0414 decision 9 / ADR 0428 decision 2)", async () => {
+  const b = await seededBoard("late-ref-start-work");
+  const g = work(b, "G", { workspace: undefined });
+  const p = work(b, "P", { parent_id: g.id });
   const h = work(b, "write it myself", { parent_id: p.id, assignee: HUMAN_ACTOR_ID });
+  afterTaskCopy(b, () => humanMoves(b, p.id));
 
-  expect(await startWorkThroughHumanDoor(doorDeps(b), h.id, () => b.clock.now(), "webui")).toMatchObject({
-    ok: false,
-    failure: { error: expect.stringContaining(`the task branch of task ${p.id} was recorded lost`) },
+  const result = await startWorkThroughHumanDoor(doorDeps(b), h.id, () => b.clock.now(), "webui");
+
+  const quarantine = quarantineQuestion(b.db, "workspace", b.ws.name)!;
+  expect(result).toMatchObject({ ok: false, failure: { error: expect.stringContaining(`workspace ${b.ws.name} is quarantined — answer question ${quarantine.id} first`) } });
+  expect(quarantine.purpose).toContain("before the task branch was fixed");
+  expect(quarantine.purpose).toContain(`refs/heads/task/${p.id}`);
+  for (const member of [g, p, h]) {
+    expect(getTask(b.db, member.id)!.workspace).toBeNull();
+    expect(createdShas(b, member)).toEqual([]);
+    expect(openQuestionOf(b, member)).toBeUndefined();
+  }
+  for (const member of [g, h]) expect(git(b.ws.path, "for-each-ref", `refs/heads/task/${member.id}`)).toBe("");
+  expect(existsSync(workbenchPath(b.base, { task: h.id }))).toBe(false);
+});
+
+it.each([
+  { offender: "parent", moves: ["parent"] },
+  { offender: "child", moves: ["child"] },
+  { offender: "parent", moves: ["lower", "parent"] },
+] as const)("pickup refuses late changes $moves at $offender before writing any lineage (ADR 0414 decision 9 / ADR 0428 decision 2)", async ({ offender, moves }) => {
+  const b = await seededBoard("late-refs-pickup");
+  const root = work(b, "root", { workspace: undefined });
+  const parent = work(b, "parent", { parent_id: root.id });
+  const lower = work(b, "lower", { parent_id: parent.id });
+  const child = work(b, "child", { parent_id: lower.id, workspace: b.ws.name });
+  const members = { root, parent, lower, child };
+  // The task itself already has a branch in force on repeat pickup.
+  const main = git(b.ws.path, "rev-parse", "main");
+  seedThroughBoard(b, child.id, main);
+  recordDeclaredRepo(b.db, child.id, b.ws);
+  const ref = (member: Task) => `refs/heads/task/${member.id}`;
+  const moved = new Map<string, string>();
+  afterTaskCopy(b, () => {
+    for (const name of moves) moved.set(name, humanMoves(b, members[name].id));
   });
 
-  nothingWrittenFor(b, g, gCreated);
+  const pickup = pickUp(b, getTask(b.db, child.id)!);
+  await expect(pickup).rejects.toBeInstanceOf(RefsMovedError);
+  await expect(pickup).rejects.toThrow(`before the task branch was fixed — was: ${offender === "child" ? main : "absent"} ${ref(members[offender])}, now: ${moved.get(offender)} ${ref(members[offender])}`);
+
+  for (const member of [root, parent, lower]) {
+    expect(getTask(b.db, member.id)!.workspace).toBeNull();
+    expect(createdShas(b, member)).toEqual([]);
+  }
+  for (const [name, member] of Object.entries(members)) {
+    expect(git(b.ws.path, "for-each-ref", "--format=%(objectname)", ref(member))).toBe(moved.get(name) ?? (name === "child" ? main : ""));
+  }
+  expect(createdShas(b, child)).toEqual([main]);
+  expect(existsSync(join(b.base, child.id, String(latestEventOfTask(b.db, child.id, "task_picked_up")!.id)))).toBe(false);
 });
 
-it("下の祖先 P で拒む pickup の準備は、上で作り直すはずの祖先 G の ref・`task_branch_created` を書かず、G の失われた event は効いたまま(ADR 0414 決定9)", async () => {
-  const { b, g, chain: [p], gCreated } = await lostAncestorAboveLostButPresent("lost-present-below-pickup", "P");
-  const c = work(b, "C", { parent_id: p.id });
+it.each([
+  { kind: "broken loose", dangling: false },
+  { kind: "dangling symbolic", dangling: true },
+])("pickup detects a $kind ref before fixing any ancestor (ADR 0427 decision 1 / ADR 0414 decision 9)", async ({ dangling }) => {
+  const b = await seededBoard("unreadable-at-fixing");
+  const parent = work(b, "parent", { workspace: undefined });
+  const task = work(b, "child", { parent_id: parent.id });
+  const ref = `refs/heads/task/${task.id}`;
+  const target = "refs/heads/missing";
+  afterTaskCopy(b, () => {
+    if (dangling) {
+      git(b.ws.path, "symbolic-ref", ref, target);
+    } else {
+      mkdirSync(join(b.ws.path, ".git", "refs", "heads", "task"), { recursive: true });
+      writeFileSync(join(b.ws.path, ".git", ref), "garbage\n");
+    }
+  });
 
-  await expect(pickUp(b, c)).rejects.toMatchObject({ taskId: p.id });
+  await expect(pickUp(b, task)).rejects.toThrow(ref);
 
-  nothingWrittenFor(b, g, gCreated);
-});
-
-it("失われた event が効いたまま ref が在る祖先が上下に2つあれば、固定の拒否が名指す持ち主は上の祖先(ADR 0414 決定9)", async () => {
-  const { b, chain: [upper, lower] } = await lostAncestorAboveLostButPresent("lost-present-two-ancestors", "upper", "lower");
-
-  await expect(pickUp(b, work(b, "C", { parent_id: lower.id }))).rejects.toMatchObject({ taskId: upper.id });
+  expect(getTask(b.db, parent.id)!.workspace).toBeNull();
+  expect(createdShas(b, parent)).toEqual([]);
+  expect(existsSync(join(b.ws.path, ".git", "refs", "heads", "task", parent.id))).toBe(false);
+  expect(git(b.ws.path, "for-each-ref", target)).toBe("");
+  expect(createdShas(b, task)).toEqual([]);
 });
 
 // #3878: 固定の書くループは下の祖先の fork 元を読む(`createTaskBranch`)が、そこで帰り先なしにはならない —— 作り直す2人の間に死んだ祖先は

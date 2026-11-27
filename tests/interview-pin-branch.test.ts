@@ -18,7 +18,6 @@ import {
   CheckoutHostError,
   commitRoomCopy,
   excludeWorkspaceProjectSettings,
-  LostTaskBranchPresentError,
   openInterviewRoom,
   PickupGateError,
   PlaceNotOpenError,
@@ -37,7 +36,7 @@ import {
 } from "../src/workspace.js";
 import { FakeAttributionClient, FakeClock, noRetrospectiveCalls, unusedLanding } from "./fakes.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, restedInterviewRoom, seedZeroPaddedTree, sessionId } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failEventInsert, failGitCommits, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, pickedInterviewRoot, pickUpInterviewRoot, poseAccepted, prepareAtPickup, restedInterviewRoom, seedZeroPaddedTree, sessionId } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 出題の写しと面接室の開き方(ADR 0273 決定1・3)、root と受験者の task の checkout(ADR 0356 決定1・2 / ADR 0276)。
@@ -1704,18 +1703,19 @@ it("出題の head の blob が壊れた面接室を読む監査の pickup は�
   db.close();
 });
 
-it("task の checkout と読み専用の checkout を作った後に固定が拒んだ監査の再 pickup は、拒んだ理由のまま投げ、新しい task の checkout の番地も読み専用の checkout の番地も残さない(ADR 0414 決定6 / ADR 0392 決定2)", async () => {
+it("監査の再 pickup で固定の記録が落ちたら、その理由のまま投げ、新しい task の checkout も読み専用の checkout も残さない(ADR 0414 決定6)", async () => {
   const db = openDb(":memory:");
   const { workspace, base, audit, place } = await auditPickedUp(db);
   releaseWorkspace(db, place, audit, NOW);
-  // 失われた event が効いているのに在る `task/<id>` —— 固定の瞬間(`fixTaskAndUnstartedAncestors`)が拒む
+  // ADR 0428 決定1: 中断した作り直しの形では、固定が event だけを足す。
   appendEvent(db, { taskId: audit.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_branch_lost", sha: git(workspace.path, "rev-parse", `task/${audit.id}`) }, at: NOW });
   const addresses = () => [checkoutAddresses(base, audit.id), checkoutAddresses(base, `${audit.id}.reads`)];
   const before = addresses();
+  const allowInsert = failEventInsert(db, "task_branch_created");
 
-  const failed = await prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base }).catch((err: unknown) => err);
+  await expect(prepareAtPickup(db, workspace, audit, { workspacesBaseDir: base })).rejects.toThrow("task_branch_created write failed");
+  allowInsert();
 
-  expect(failed).toBeInstanceOf(LostTaskBranchPresentError);
   expect(addresses()).toEqual(before);
   db.close();
 });
