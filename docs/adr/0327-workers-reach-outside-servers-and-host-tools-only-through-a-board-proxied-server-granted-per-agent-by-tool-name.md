@@ -1,5 +1,7 @@
 # worker が盤面の外のサーバと母屋の道具に届く形は、盤面が代理する MCP だけ —— 付与は agent が tool 名で持ち、母屋の道具は列挙された tool として見せる
 
+**Status 追記: 決定5 の task と spawn への帰属は、spawn ごとの合札で読む([ADR 0439](0439-a-worker-mcp-call-is-the-workers-only-with-its-spawns-tally-and-the-tally-never-reaches-the-workers-tools.md) 決定7、2026-11-27、issue #3978)。**
+
 2026-10-29 の grilling(issue #2695)で決定。本人の Mac で使っている MCP(GitHub・context-vault・context7)と Mac にしか無い道具(Blender、
 自作スクリプト)を worker に使わせる形が「VM の中に同じ環境を作る」しか無いように見えた。実測すると Mac 側の MCP はどれも Mac に物理的に
 縛られておらず(2本は remote の HTTP、1本は認証なしの stdio)、壁は VM ではなく3つの門 —— MCP 面の宣言(ADR 0108)・worker の資格情報ゼロ

@@ -1,5 +1,7 @@
 # pickup の gate を抜けた資源の故障は観測点によらず資源に帰属し、0ターンで終わった session は資源の停止を先に登録して先頭へ戻る —— Worker MCP 到達性は Harness ごとの資源
 
+**Status 追記: 決定8 の probe は、id を `?probe=` に載せる代わりに、合札と同じ経路(spawn の env と `Authorization: Bearer`)で送る([ADR 0439](0439-a-worker-mcp-call-is-the-workers-only-with-its-spawns-tally-and-the-tally-never-reaches-the-workers-tools.md) 決定4、2026-11-27、issue #3978)** —— probe が成り立つことが、その CLI で合札が届くことの検査になる。
+
 **Status 追記: 決定3 の署名に、exit 時の app-server probe の構造化 `unauthorized`(Codex の 401)が加わる —— 列挙は既に probe 由来の cap を持ち、「transcript の行か exit の事実」の括弧の根拠(復旧が同じ読み手で読む)は帰結「復旧は分類を撃ち直さない」で効いていない。probe の結果から資源の停止を導く持ち主は観測点に依らず1つ([ADR 0348](0348-the-openai-probe-results-resource-stop-has-one-owner-at-any-observation-point-and-the-exit-reread-only-withholds-throttle-writes.md) 決定1・3、2026-11-02、issue #2792 / #2776)。**
 
 **Status 追記: 決定1 の「資源の署名を持たない throw は盤面のバグ」の線に、記録の器の署名(SQLite の code)が加わる —— その throw は資源にも task にも帰属せず、process を終える([ADR 0342](0342-a-record-write-the-board-db-refuses-ends-the-process-from-the-floor-and-a-board-bug-in-a-teardown-step-is-a-failed-teardown.md) 決定1・2、2026-11-01、issue #2837)。**

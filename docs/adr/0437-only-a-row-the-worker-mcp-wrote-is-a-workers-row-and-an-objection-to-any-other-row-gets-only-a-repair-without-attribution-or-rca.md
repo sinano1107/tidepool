@@ -1,5 +1,7 @@
 # worker の行は worker の MCP が書いた行だけで、それ以外の行への異議は帰責も RCA も持たず修理子だけを立てる
 
+**Status 追記: 決定1 の「worker の MCP の扉を通った」は、[ADR 0439](0439-a-worker-mcp-call-is-the-workers-only-with-its-spawns-tally-and-the-tally-never-reaches-the-workers-tools.md) で「その spawn の合札を持つ呼び出し」になる(2026-11-27、issue #3978)** —— 退けた案に書いた扉の封じ込めの隙間は、そこで閉じる。
+
 2026-11-27 の triage と grilling(issue #3974、元は #3936 / #3937)で決定。
 
 異議できる行の書き手は worker だけではない —— 人間は質問への回答と人間が担う task の完了を、盤面の規則は根への告知を書く。
