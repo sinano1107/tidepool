@@ -50,8 +50,8 @@ the next gate on this line first, then relabel every open issue; until then the 
 
 Five tests put an issue on `high` (ADR 0445). Each asks what is lost if the fix lands after real use begins:
 
-1. **Fixing it later needs a backfill or a reinterpretation of rows or registrations that already exist.** No
-   migrations are written, before or after real use. Reshaping an existing table or column counts (renaming,
+1. **Fixing it later needs a backfill or a reinterpretation of rows or registrations that already exist.** What can be
+   foreseen goes in first, so no migration or backfill has to be written after real use. Reshaping an existing table or column counts (renaming,
    removing or moving a column, tightening its type, NOT NULL or CHECK), and so does an additive change whose
    readers treat an old row's missing value as a mismatch or a stop. A new table, a nullable column old rows can
    leave empty, an index, or a loosened constraint does not count. A question counts before it is answered when
