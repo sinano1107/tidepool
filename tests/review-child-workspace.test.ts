@@ -29,7 +29,7 @@ describe("付帯子の review の登録(ADR 0290 決定1・2)", () => {
   });
 
   // ADR 0384 決定1: 子は workspace を入力に持たない —— ADR 0290 決定1 の「同じ名前は受けて保存しない」は人間の扉から消えた
-  it("人間の登録の扉は、祖先と同じ名前でも付帯子の review の workspace を拒み、文は根として登録するよう案内する", async () => {
+  it("人間の登録の扉は、祖先と同じ名前でも付帯子の review の workspace を拒み、文は親の「別の workspace に置く」を案内する", async () => {
     const db = openDb(":memory:");
     const parent = ran(db, register(db, { type: "work", workspace: "reef" }));
 
@@ -40,7 +40,7 @@ describe("付帯子の review の登録(ADR 0290 決定1・2)", () => {
       "webui",
     );
 
-    expect(result).toEqual({ ok: false, failure: { kind: "invalid", error: expect.stringMatching(/register it as a root/) } });
+    expect(result).toEqual({ ok: false, failure: { kind: "invalid", error: expect.stringMatching(/use "place in another workspace" on the parent/) } });
     expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
   });
 
@@ -164,7 +164,7 @@ describe("子の Edit(ADR 0290 決定3 / ADR 0384 決定1)", () => {
     const root = register(db, { type: "review", workspace: "reef" });
 
     for (const child of children) {
-      for (const workspace of ["reef", "", "lagoon"]) expect(() => editTask(db, child, { workspace }, at, "webui")).toThrow(/register it as a root/);
+      for (const workspace of ["reef", "", "lagoon"]) expect(() => editTask(db, child, { workspace }, at, "webui")).toThrow(/use "place in another workspace" on the parent/);
     }
     expect(editTask(db, root, { workspace: "lagoon" }, at, "webui").workspace).toBe("lagoon");
   });

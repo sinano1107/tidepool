@@ -643,9 +643,10 @@ function completionReviewLine(task: BoardScreenTask): string | null {
 // board-registered non-question root for cancel — ADR 0198 / 0211) are enforced
 // server-side on each action; this sheet only offers them, and each action surfaces the domain
 // error as a toast if the line isn't met.
-function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose }: {
+function TaskActionsDialog({ task, onAddChild, onPlace, onEdit, onCancel, onStop, onClose }: {
   task: BoardScreenTask;
   onAddChild: () => void;
+  onPlace: () => void;
   onEdit: () => void;
   onCancel: () => void;
   onStop: () => void;
@@ -661,15 +662,22 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
   const [workbench, setWorkbench] = React.useState<{ path: string; commands: string[] } | null>(null);
   // ADR 0413 決定3: この task を走らせない根 —— 詳細だけが運ぶ
   const [blockingRoot, setBlockingRoot] = React.useState<WireContract['GET /api/tasks/:id']['blocking_root'] | null>(null);
+  // ADR 0384 決定3: 分解元つきの根なら分解元、分解元ならそこから置いた根 —— 詳細だけが運ぶ
+  const [origin, setOrigin] = React.useState<string | null>(null);
+  const [placedRoots, setPlacedRoots] = React.useState<WireContract['GET /api/tasks/:id']['placed_roots']>([]);
   React.useEffect(() => {
     setInterview(null);
     setCheckout(null);
     setHumanStops([]);
     setWorkbench(null);
     setBlockingRoot(null);
+    setOrigin(null);
+    setPlacedRoots([]);
     api('GET /api/tasks/:id', { params: { id: task.id } })
       .then((full) => {
         setHumanStops(full.human_stops);
+        setOrigin(full.origin_task_id);
+        setPlacedRoots(full.placed_roots);
         setBlockingRoot(full.blocking_root ?? null);
         if (full.workbench) setWorkbench({ path: full.workbench, commands: full.workbench_commands ?? [] });
         if (task.type === 'interview') setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' });
@@ -684,6 +692,16 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
       <p style={meta}>{task.id} · {task.type}</p>
       {review && <p style={meta}>{review}</p>}
       {humanStops.map((row) => <p key={row.id} style={meta}>stopped by human · {row.reason}{row.cause && ` · ${row.cause}: ${row.evidence}`}</p>)}
+      {origin && (
+        <p style={meta} data-testid="origin">
+          placed from <IdChip id={origin} style={{ display: 'inline-block', verticalAlign: 'bottom' }} />
+        </p>
+      )}
+      {placedRoots.map((root) => (
+        <p key={root.id} style={meta} data-testid="placed-root">
+          placed in another workspace · <IdChip id={root.id} style={{ display: 'inline-block', verticalAlign: 'bottom' }} /> {root.title} · {root.status}
+        </p>
+      ))}
       {interview && <p style={meta} data-testid="interview-room">interview room: {interview.room}<br />posed head: {interview.head}</p>}
       {checkout && <p style={meta} data-testid="examinee-checkout">checkout: {checkout}</p>}
       {blockingRoot && (
@@ -705,6 +723,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
         ? <Button variant="primary" size="lg" full onClick={onStop}>Stop session</Button>
         : <>
           <Button variant="primary" size="lg" full onClick={onAddChild}>Add child</Button>
+          <Button variant="secondary" size="lg" full onClick={onPlace}>Place in another workspace</Button>
           <Button variant="secondary" size="lg" full onClick={onEdit}>Edit</Button>
         </>}
       <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>
@@ -1077,6 +1096,8 @@ function App() {
   // human decompose (issue #129): the board task an "Add child" dialog is
   // open for, or null when closed — set from a board task-card tap
   const [addChildParent, setAddChildParent] = React.useState<BoardScreenTask | null>(null);
+  // ADR 0384 決定3: 「別の workspace に置く」を開いている分解元
+  const [placeOrigin, setPlaceOrigin] = React.useState<BoardScreenTask | null>(null);
   // issue #130: a board task-card tap opens an action chooser (add child /
   // edit / cancel) for a plausibly-eligible task; the edit and cancel dialogs
   // each track their own open task
@@ -1528,6 +1549,20 @@ function App() {
     }
   };
 
+  // ADR 0384 決定3: 子の form の欄を、分解元の id の下の根の登録へ —— 理由は分解の理由と同じ欄
+  const placeRoot = async (fields: RegisterScreenFields) => {
+    if (!placeOrigin || !('title' in fields)) return;
+    const { type: _type, parent_id: _parent, decompose_reason, review_flag: _review, ...root } = fields;
+    try {
+      const t = await api('POST /api/tasks/:id/place', { params: { id: placeOrigin.id }, body: { ...root, reason: decompose_reason } });
+      say('info', 'placed in another workspace — appended to queue tail', t.id);
+      await refreshFull();
+    } catch (err) {
+      say('danger', 'place in another workspace failed', String((err as Error).message || err));
+      throw err;
+    }
+  };
+
   if (deepLinkQuestionId) {
     return (
       <QuestionDeepLinkView
@@ -1625,6 +1660,11 @@ function App() {
           <RegisterScreen parentTask={addChildParent} onRegister={addChild} onClose={() => setAddChildParent(null)} />
         )}
       </PortalDialog>
+      <PortalDialog open={!!placeOrigin} onClose={() => setPlaceOrigin(null)}>
+        {placeOrigin && (
+          <RegisterScreen parentTask={placeOrigin} place onRegister={placeRoot} onClose={() => setPlaceOrigin(null)} />
+        )}
+      </PortalDialog>
 
       {/* issue #130: the action chooser and the edit/cancel dialogs. Each
           action's real gate is server-side (editTask / cancelTaskDirectly) —
@@ -1635,6 +1675,7 @@ function App() {
           <TaskActionsDialog
             task={actionsTask}
             onAddChild={() => { setAddChildParent(actionsTask); setActionsTask(null); }}
+            onPlace={() => { setPlaceOrigin(actionsTask); setActionsTask(null); }}
             onEdit={() => { setEditTaskCard(actionsTask); setActionsTask(null); }}
             onCancel={() => { setCancelTaskCard(actionsTask); setActionsTask(null); }}
             onStop={() => { setStopTaskCard(actionsTask); setActionsTask(null); }}

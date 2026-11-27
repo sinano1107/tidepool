@@ -38,6 +38,7 @@ import {
   gatedHumanEntryInput,
   humanCompletionInputSchema,
   listMemoryEntriesForHuman,
+  placeThroughHumanDoor,
   registerThroughHumanDoor,
   retryInterviewThroughHumanDoor,
   startWorkThroughHumanDoor,
@@ -143,6 +144,7 @@ import {
   listYourTasks,
   moveTask,
   nextSlotTask,
+  placedRoots,
   presentTask,
   type Task,
   taskHistoryRows,
@@ -297,6 +299,22 @@ const editTaskSchema = z.strictObject({
   risk_flag: z.boolean().optional(),
   review_flag: z.boolean().optional(),
   review_by: z.array(requiredTextSchema).optional(),
+});
+
+// 人間の「別の workspace に置く」の payload(ADR 0384 決定3): 子の欄に理由と必須の workspace を足した根。strict なので parent_id や
+// issue の参照は 400 —— 子でも issue つきでもない
+const placeTaskSchema = z.strictObject({
+  reason: requiredTextSchema,
+  title: requiredTextSchema,
+  purpose: requiredTextSchema,
+  completion_criteria: requiredTextSchema,
+  workspace: requiredTextSchema,
+  assignee: z.string().optional(),
+  risk_flag: z.boolean().optional(),
+  review_by: z.array(requiredTextSchema).optional(),
+  review_tier: z.string().optional(),
+  tier: z.string().optional(),
+  priority: z.string().optional(),
 });
 
 // the direct-cancel payload (issue #130): reason is optional (理由の記入は任意)
@@ -1460,6 +1478,27 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     sendJson(res, result.value);
   });
 
+  router.post("/tasks/:id/place", (req, res) => {
+    const parsed = placeTaskSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
+      return;
+    }
+    const { reason, ...root } = parsed.data;
+    const result = placeThroughHumanDoor(
+      { db, workspace, resolveWorkspace, agentRegistered, resolvesToBuiltIn, pollNow, defaultAgentName, auditorName, interviewerName },
+      req.params.id,
+      { reason, root },
+      () => clock.now(),
+      "webui",
+    );
+    if (!result.ok) {
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), { error: result.failure.error });
+      return;
+    }
+    sendJson(res.status(201), result.value satisfies WireContract["POST /api/tasks/:id/place"]);
+  });
+
   router.post("/tasks/:id/stop", (req, res) => {
     const parsed = z.object({ reason: requiredTextSchema.optional() }).safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -2305,6 +2344,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     sendJson(res, {
       ...presented!,
       human_stops: taskHistoryRows(db, task.id).flatMap(({ id, entry }) => "stopped_by_human" in entry ? [{ id, ...entry.stopped_by_human }] : []),
+      // ADR 0384 決定3: 分解元の側から、ここから別の workspace に置いた根を辿る(根の側は origin_task_id)
+      placed_roots: placedRoots(db, task.id),
       ...(task.type === "question"
         ? questionAnnotations(db, task)
         : { landing_state: landingState(db, task), discards: directCancelDiscards(db, task, blockingRoot) }),

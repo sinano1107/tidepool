@@ -95,6 +95,8 @@ function makeTask(
     priority: null,
     parent_id: null,
     based_on_decision: null,
+    origin_task_id: null,
+    origin_decision: null,
     premise_breach_decision: null,
     sort_key: 1,
     handoff_doc: null,

@@ -122,14 +122,17 @@ interface RegisterScreenProps {
   onRegister: (fields: RegisterScreenFields) => Promise<void>;
   /** 子追加モード —— 未設定ならルート登録。 */
   parentTask?: { id: string; title: string } | null;
+  /** parentTask を分解元に、子でなく別の workspace の根を置く(ADR 0384 決定3)—— workspace を必須で選ぶ。 */
+  place?: boolean;
   /** 子追加のときだけ呼ばれる —— ルート登録は画面に留まるので渡されない。 */
   onClose?: () => void;
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
-function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps) {
+function RegisterScreen({ onRegister, parentTask, place = false, onClose }: RegisterScreenProps) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const childMode = !!parentTask;
+  const placeMode = childMode && place;
   const [source, setSource] = React.useState<'manual' | 'github issue'>('manual');
   const [type, setType] = React.useState<'work' | 'review' | 'interview'>('work');
   const [title, setTitle] = React.useState('');
@@ -233,9 +236,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     ? !TidepoolRules.whyBlank(workspace) && !issueNumberReason
     : interview
       ? ![title, hypothesis, tier].some((value) => TidepoolRules.whyBlank(value)) && targets.length > 0
-      : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
+      : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason)) && (!placeMode || !TidepoolRules.whyBlank(workspace));
   // 欄はサーバーと同じ規則で出す(ADR 0209)。issue 経路は常に work(type state は手入力側で review に切り替えたまま残りうる)
-  const ruleSubject = { type: issueMode ? 'work' : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
+  const ruleSubject = { type: issueMode ? 'work' : type, parent_id: placeMode ? undefined : parentTask?.id, assignee, review_flag: review, risk_flag: risk };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.reviewDesignationCarriesMeaning(ruleSubject);
   // 隠れた欄の値は送らない、誰も選んでいなければキーごと送らない
@@ -273,7 +276,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           // unknown-workspace 400 never fires on a field the human left blank
           ...(assignee ? { assignee } : {}),
           // a child takes no workspace (ADR 0384 決定1) — never send it, even when a draft filled the state
-          ...(!childMode && workspace.trim() ? { workspace: workspace.trim() } : {}),
+          ...((!childMode || placeMode) && workspace.trim() ? { workspace: workspace.trim() } : {}),
           ...(tier ? (type === 'review' ? { review_tier: tier } : { tier }) : {}),
           ...reviewTierField,
           ...reviewByField,
@@ -382,16 +385,18 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const issueWorkspaceOptions = withPlaceholder('', 'select workspace…', candidates.workspaces);
   const primaryAction = issueMode || plainFormActive || drafted
     ? {
-        label: childMode ? 'Add child — appends to queue tail' : 'Register — appends to queue tail',
+        label: placeMode ? 'Place — appends to queue tail' : childMode ? 'Add child — appends to queue tail' : 'Register — appends to queue tail',
         disabled: !ok || busy,
         onClick: submit,
       }
     : { label: draftBusy ? 'Drafting…' : 'Draft fields', disabled: !!TidepoolRules.whyBlank(dump) || draftBusy, onClick: draftFields };
   return (
     <div style={{ padding: '20px 16px' }}>
-      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>{childMode ? 'Add child' : 'Register'}</h1>
+      <h1 style={{ fontSize: 'var(--text-xl)', margin: '0 0 2px' }}>{placeMode ? 'Place in another workspace' : childMode ? 'Add child' : 'Register'}</h1>
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
-        {parentTask
+        {placeMode
+          ? `splitting "${parentTask!.title}" — appears as its own root in the workspace you pick, and lands there`
+          : parentTask
           ? `splitting "${parentTask.title}" — appears as a child, same dump → draft → edit flow`
           : issueMode
             ? "reference a GitHub issue — its title/purpose/completion criteria stay live on GitHub"
@@ -506,11 +511,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
                 if (!canTake(assignee, next)) setAssignee('');
               }} />
             )}
-            {/* a child runs in its parent's workspace and has no workspace field (ADR 0384 決定1) */}
-            {childMode ? assigneeSelect : (
+            {/* a child runs in its parent's workspace and has no workspace field (ADR 0384 決定1); a placed root names one (決定3) */}
+            {childMode && !placeMode ? assigneeSelect : (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 {assigneeSelect}
-                <Select label={interview ? '実環境(root が読む workspace)' : 'Workspace'} options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+                <Select label={interview ? '実環境(root が読む workspace)' : 'Workspace'} options={placeMode ? issueWorkspaceOptions : workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
               </div>
             )}
             {interview && <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>受験者は面接室で解く</span>}

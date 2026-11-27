@@ -127,6 +127,9 @@ export interface Task {
   parent_id: string | null;
   /** Decision-log entry this decomposed child rests on; null outside a decomposition decision. */
   based_on_decision: number | null;
+  /** ADR 0384 決定3: 別の workspace に置かれた根の分解元(分解した task とその分解の判断の event id)。対で持ち、`parent_id` とは同居しない。 */
+  origin_task_id: string | null;
+  origin_decision: number | null;
   /** 開いている前提の破綻が指す分解判断(ADR 0121)。閉じていれば null。 */
   premise_breach_decision: number | null;
   sort_key: number;
@@ -474,6 +477,9 @@ export interface RegisterTaskInput extends Partial<TaskContent>, Partial<Intervi
   meta_review_subject?: "memory" | "routing";
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
+  /** ADR 0384 決定3: 分解元つきの根の分解元 —— 対で渡し、`parent_id` / `based_on_decision` とは渡さない(registerTask が拒む)。 */
+  origin_task_id?: string;
+  origin_decision?: number;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to. Absent for an ordinary task. */
   github_issue_number?: number;
@@ -1553,6 +1559,11 @@ export function registerTask(
   assertNoExamineeChild(db, input);
   assertReturnDestination(db, input);
   assertRepairHasParent(input);
+  // ADR 0384 決定3: 分解元は task と判断の対で、子でない根だけが持つ —— based_on_decision は parent_id と組んで委譲の読み手を動かす
+  if ((input.origin_task_id === undefined) !== (input.origin_decision === undefined) ||
+    (input.origin_task_id !== undefined && (input.parent_id !== undefined || input.based_on_decision !== undefined))) {
+    throw new Error("an origin is a task and its decision together, on a root with no parent and no based_on_decision");
+  }
   assertReviewChildHasExecutor(db, input, actorId);
   // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない。
   // #3421 から本番の呼び手は付帯子の review に workspace を渡さない(人間の扉は ADR 0384 決定1 で先に拒み、盤面の登録は渡さない)ので、
@@ -1602,6 +1613,8 @@ export function registerTask(
     priority: (input.priority as Priority | undefined) ?? null,
     parent_id: input.parent_id ?? null,
     based_on_decision: input.based_on_decision ?? null,
+    origin_task_id: input.origin_task_id ?? null,
+    origin_decision: input.origin_decision ?? null,
     premise_breach_decision: null,
     sort_key: maxKey + 1,
     handoff_doc: null,
@@ -1618,13 +1631,13 @@ export function registerTask(
   db.transaction(() => {
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
-         risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
+         risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, origin_task_id, origin_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option, question_breached_decision, question_broken_probe_reason,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_merge_task_id, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
          question_landing_tip, question_pr_merge_outside_sha, question_pr_merge_outside_kind, question_pr_merge_missing_branches, question_pr_merge_reason,
          question_quarantine_value, question_intake_workspace, question_cli_auth_expiry, question_stop_reason_task_id, github_issue_number, meta_review_subject, interview_target_id, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
-         @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
+         @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @origin_task_id, @origin_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option, @question_breached_decision, @question_broken_probe_reason,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_merge_task_id, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
          @question_landing_tip, @question_pr_merge_outside_sha, @question_pr_merge_outside_kind, @question_pr_merge_missing_branches, @question_pr_merge_reason,
@@ -3333,7 +3346,8 @@ function brokenProbeReported(db: Db, rootId: string): boolean {
 
 /** ADR 0384 決定1: 子は workspace を入力に持たない —— 人間の扉(登録・分解・Edit)が `parent_id` を持つ task の workspace を拒む文。 */
 export const CHILD_TAKES_NO_WORKSPACE =
-  "a task with a parent takes no workspace — it runs in its parent's workspace; to place the work in another workspace, register it as a root (no parent)";
+  "a task with a parent takes no workspace — it runs in its parent's workspace; to put the work in another workspace, " +
+  'use "place in another workspace" on the parent, which registers a root with the parent as its origin';
 
 export interface ChildSpec extends TaskContent {
   review_by?: string[];
@@ -3708,25 +3722,10 @@ export function decomposeTask(
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
-  // ADR 0245 決定1: 受験者は分けない(人間の扉も redecompose もここを通る)
-  if (parent.interview_target_id !== null) {
-    throw new DomainError("this task is not split: complete it as one task and state in its handoff what remains");
-  }
-  // ADR 0253 決定1・5: Interview の root は分けない —— 出題で進む
-  if (interviewTargets(db, parent.id) !== null) {
-    throw new DomainError(
-      probeAccepted(db, parent.id)
-        ? `an Interview root is not decomposed: ${POSED_INTERVIEW_EXITS}`
-        : "an Interview root is not decomposed: pose its probe with pose_probe and, once its audit accepts it, the board registers one answer task per target",
-    );
-  }
-  if (openPremiseBreachChildId(db, parent.id) !== undefined) {
-    throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
-  }
+  assertSplittable(db, parent);
   // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2 / ADR 0301 決定3)—— 別の workspace を明示した子はその系譜でも(ADR 0380 決定5)
   for (const child of input.children) assertReturnDestination(db, { type: "work", parent_id: parent.id, workspace: child.workspace });
-  // ADR 0374 Status 追記(決定16): 人間担当の完了時レビューの修理子は、省略すると元の実行者へ戻す。
-  const defaultToHuman = parent.type === "review" && isIntegrationReview(db, parent.id) && reviewedTaskExecutor(db, parent) === HUMAN_ACTOR_ID;
+  const defaultToHuman = repairsGoToHuman(db, parent);
   input = {
     ...input,
     children: input.children.map((child) => {
@@ -3836,6 +3835,30 @@ export function decomposeTask(
   return children;
 }
 
+/** ADR 0374 Status 追記(決定16): 人間担当の完了時レビューが分けた修理は、assignee を省略すると元の実行者(人間)へ戻す。 */
+function repairsGoToHuman(db: Db, parent: Task): boolean {
+  return parent.type === "review" && isIntegrationReview(db, parent.id) && reviewedTaskExecutor(db, parent) === HUMAN_ACTOR_ID;
+}
+
+/** 分解の判断を書ける task か —— agent・人間の分解と人間の「別の workspace に置く」が共有する(ADR 0384 決定3)。 */
+function assertSplittable(db: Db, parent: Task): void {
+  // ADR 0245 決定1: 受験者は分けない(人間の扉も redecompose もここを通る)
+  if (parent.interview_target_id !== null) {
+    throw new DomainError("this task is not split: complete it as one task and state in its handoff what remains");
+  }
+  // ADR 0253 決定1・5: Interview の root は分けない —— 出題で進む
+  if (interviewTargets(db, parent.id) !== null) {
+    throw new DomainError(
+      probeAccepted(db, parent.id)
+        ? `an Interview root is not decomposed: ${POSED_INTERVIEW_EXITS}`
+        : "an Interview root is not decomposed: pose its probe with pose_probe and, once its audit accepts it, the board registers one answer task per target",
+    );
+  }
+  if (openPremiseBreachChildId(db, parent.id) !== undefined) {
+    throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
+  }
+}
+
 /** Whether `parentId` already carries a child an agent registered (issue
  *  #129): an agent's only path to registering a child at all is the
  *  `decompose` MCP tool, so "a child whose own `task_registered` event was
@@ -3900,6 +3923,8 @@ export function assertUnsettledNotInProgress(task: Task, verb: string): void {
  *  running (ADR 0237). Direct rearrangement here would erase the fix-forward
  *  signal that route depends on. */
 function assertHumanDecomposable(db: Db, parent: Task): void {
+  // ADR 0253 決定5 / ADR 0111 決定6: probe の著者は常に agent
+  if (interviewTargets(db, parent.id) !== null) throw new DomainError("a human does not split an Interview root — the root's agent poses the probe");
   assertUnsettledNotInProgress(parent, "decomposed by a human");
   if (hasAgentRegisteredChild(db, parent.id)) {
     throw new DomainError(
@@ -3963,8 +3988,6 @@ export function humanDecomposeTask(
   now: Date,
   origin: EventOrigin,
 ): Task[] {
-  // ADR 0253 決定5 / ADR 0111 決定6: probe の著者は常に agent
-  if (interviewTargets(db, parent.id) !== null) throw new DomainError("a human does not split an Interview root — the root's agent poses the probe");
   assertHumanDecomposable(db, parent);
   return decomposeTask(
     db,
@@ -3977,6 +4000,27 @@ export function humanDecomposeTask(
     undefined,
     origin,
   );
+}
+
+/** 人間の「別の workspace に置く」(ADR 0384 決定3): 子を足す代わりに、分解元を持つ根を承認なしで登録する。分解元の門と判断は人間の
+ *  分解と同じ —— 理由は分解元の判断ログの1行になり、根はその task と判断を分解元に持つ。根は自分の workspace の保護ブランチから切られて
+ *  自分で着地する(中身の読み手は `parent_id` だけを読む)ので、登録の床は通らない(ADR 0384 帰結)。分解元の status は変えない ——
+ *  分解元が根を待つのは #3424 の委譲の読み手。 */
+export function placeInAnotherWorkspace(
+  db: Db,
+  parent: Task,
+  input: { reason: string; root: ChildSpec & { workspace: string } },
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  assertHumanDecomposable(db, parent);
+  assertSplittable(db, parent);
+  const root: RegisterTaskInput = { type: "work", ...input.root };
+  if (repairsGoToHuman(db, parent)) root.assignee ??= HUMAN_ACTOR_ID;
+  return db.transaction(() => {
+    const decision = logDecision(db, parent, input.reason, HUMAN_ACTOR_ID, now, origin);
+    return registerTask(db, { ...root, origin_task_id: parent.id, origin_decision: decision }, now, HUMAN_ACTOR_ID, origin);
+  })();
 }
 
 /** The fields a human may overwrite on a registered task (issue #130,
@@ -4642,10 +4686,11 @@ export function getRegistrant(db: Db, taskId: string): string {
   return latestEventOfTask(db, taskId, "task_registered")!.actor_id;
 }
 
-/** 文面の書き手(GLOSSARY.md の Registrant / ADR 0197): 分解判断に乗る task ならその分解判断の書き手、
- *  無ければ登録者。承認で実体化した子は登録者が human でも、書き手は分解した agent。 */
+/** 文面の書き手(GLOSSARY.md の Registrant / ADR 0197): 分解判断に乗る task —— 子か分解元つきの根(ADR 0384 決定4・5)—— ならその
+ *  分解判断の書き手、無ければ登録者。承認で実体化した子は登録者が human でも、書き手は分解した agent。 */
 export function getTextAuthor(db: Db, taskId: string): string {
-  const decision = getTask(db, taskId)!.based_on_decision;
+  const task = getTask(db, taskId)!;
+  const decision = task.based_on_decision ?? task.origin_decision;
   return decision === null ? getRegistrant(db, taskId) : getEvent(db, decision)!.actor_id;
 }
 
@@ -5199,6 +5244,14 @@ export function listChildren(db: Db, parentId: string): Task[] {
     .prepare(`SELECT *, ${taskTierNamesSql("tasks")} FROM tasks WHERE parent_id = ? ORDER BY sort_key`)
     .all(parentId) as TaskRow[];
   return rows.map(rowToTask);
+}
+
+/** この task を分解元に持つ根(ADR 0384 決定3)の id・title・status を盤面の順に —— task 詳細が分解元の側から並べる。 */
+export function placedRoots(db: Db, originId: string): Array<Pick<Task, "id" | "title" | "status">> {
+  const rows = db
+    .prepare(`SELECT *, ${taskTierNamesSql("tasks")} FROM tasks WHERE origin_task_id = ? ORDER BY sort_key`)
+    .all(originId) as TaskRow[];
+  return rows.map(rowToTask).map(({ id, title, status }) => ({ id, title, status }));
 }
 
 /** Interview の root の答案の task(受験者)全部を、対象 → root の結びで盤面の順に(ADR 0267 決定1)。 */

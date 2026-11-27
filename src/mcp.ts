@@ -694,7 +694,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) =>
       runVerb(deps, attributedTaskId, async (task) => {
         const read = readPosition("get_current_task", input);
-        const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
+        // ADR 0384 決定4・5: 分解元つきの根は分解元の handoff_doc と history を親の欄で受ける
+        const parentId = task.parent_id ?? task.origin_task_id;
+        const parent = parentId ? (getTask(deps.db, parentId) ?? null) : null;
         // 親の history の後に task の history を、decision の子ごとの行で1列に詰める(ADR 0195)。境目の鍵は行の event id
         const rows = [
           ...(parent ? taskHistoryRows(deps.db, parent.id, task.id).map((row) => ({ ...withReadCheckout(deps.db, task.id, row), list: "parent.history" })) : []),

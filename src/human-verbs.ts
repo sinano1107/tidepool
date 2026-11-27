@@ -111,6 +111,7 @@ import {
   openPrPromotionQuestionIds,
   PR_PROMOTION_FAILURE_OPTIONS,
   type ProposalAmendment,
+  placeInAnotherWorkspace,
   presentTask,
   QuestionClosedError,
   type RegisterTaskInput,
@@ -283,6 +284,30 @@ export function decomposeThroughHumanDoor(
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
     }
+    throw err;
+  }
+}
+
+/** 人間の「別の workspace に置く」(ADR 0384 決定3): 根の登録と同じ registry の検査を通し、分解元を持つ根を承認なしで登録する。 */
+export function placeThroughHumanDoor(
+  deps: DecomposeThroughHumanDoorDeps & Pick<RegisterThroughHumanDoorDeps, "defaultAgentName" | "auditorName" | "interviewerName">,
+  taskId: string,
+  input: { reason: string; root: ChildSpec & { workspace: string } },
+  now: () => Date,
+  origin: EventOrigin,
+): HumanVerbResult<BoardTask> {
+  try {
+    const parent = getTask(deps.db, taskId);
+    if (!parent) return { ok: false, failure: { kind: "not_found", error: "origin task not found" } };
+    if (whyBlank(input.reason)) throw new DomainError("placing work in another workspace requires a reason");
+    assertWorkspaceKnown(input.root.workspace, deps.resolveWorkspace, deps.workspace);
+    assertAssigneeCanTake(deps, input.root.assignee, "work");
+    assertReviewersKnown(deps.agentRegistered, input.root.review_by);
+    const root = placeInAnotherWorkspace(deps.db, parent, input, now(), origin);
+    deps.pollNow();
+    return { ok: true, value: presentTask(deps.db, root, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
+  } catch (err) {
+    if (err instanceof DomainError) return { ok: false, failure: { kind: "domain_error", error: err.message } };
     throw err;
   }
 }

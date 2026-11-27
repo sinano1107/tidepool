@@ -1192,9 +1192,10 @@ function InterviewTargetsField({ value, onChange, providers }) {
     "Add target"
   ));
 }
-function RegisterScreen({ onRegister, parentTask, onClose }) {
+function RegisterScreen({ onRegister, parentTask, place = false, onClose }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const childMode = !!parentTask;
+  const placeMode = childMode && place;
   const [source, setSource] = React.useState("manual");
   const [type, setType] = React.useState("work");
   const [title, setTitle] = React.useState("");
@@ -1273,8 +1274,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const filteredIssues = issueNumber.trim() ? issues.filter((i) => String(i.number).includes(issueNumber.trim()) || i.title.toLowerCase().includes(issueNumber.trim().toLowerCase())) : issues;
   const issueNumberReason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(issueNumber));
   const interview = !childMode && type === "interview";
-  const ok = issueMode ? !TidepoolRules.whyBlank(workspace) && !issueNumberReason : interview ? ![title, hypothesis, tier].some((value) => TidepoolRules.whyBlank(value)) && targets.length > 0 : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
-  const ruleSubject = { type: issueMode ? "work" : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
+  const ok = issueMode ? !TidepoolRules.whyBlank(workspace) && !issueNumberReason : interview ? ![title, hypothesis, tier].some((value) => TidepoolRules.whyBlank(value)) && targets.length > 0 : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason)) && (!placeMode || !TidepoolRules.whyBlank(workspace));
+  const ruleSubject = { type: issueMode ? "work" : type, parent_id: placeMode ? void 0 : parentTask?.id, assignee, review_flag: review, risk_flag: risk };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
   const showReviewBy = TidepoolRules.reviewDesignationCarriesMeaning(ruleSubject);
   const reviewByField = showReviewBy && reviewBy.length ? { review_by: reviewBy } : {};
@@ -1310,7 +1311,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     // unknown-workspace 400 never fires on a field the human left blank
     ...assignee ? { assignee } : {},
     // a child takes no workspace (ADR 0384 決定1) — never send it, even when a draft filled the state
-    ...!childMode && workspace.trim() ? { workspace: workspace.trim() } : {},
+    ...(!childMode || placeMode) && workspace.trim() ? { workspace: workspace.trim() } : {},
     ...tier ? type === "review" ? { review_tier: tier } : { tier } : {},
     ...reviewTierField,
     ...reviewByField,
@@ -1409,11 +1410,11 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const workspaceOptions = withPlaceholder("", "(default workspace)", candidates.workspaces);
   const issueWorkspaceOptions = withPlaceholder("", "select workspace\u2026", candidates.workspaces);
   const primaryAction = issueMode || plainFormActive || drafted ? {
-    label: childMode ? "Add child \u2014 appends to queue tail" : "Register \u2014 appends to queue tail",
+    label: placeMode ? "Place \u2014 appends to queue tail" : childMode ? "Add child \u2014 appends to queue tail" : "Register \u2014 appends to queue tail",
     disabled: !ok || busy,
     onClick: submit
   } : { label: draftBusy ? "Drafting\u2026" : "Draft fields", disabled: !!TidepoolRules.whyBlank(dump) || draftBusy, onClick: draftFields };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, childMode ? "Add child" : "Register"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, parentTask ? `splitting "${parentTask.title}" \u2014 appears as a child, same dump \u2192 draft \u2192 edit flow` : issueMode ? "reference a GitHub issue \u2014 its title/purpose/completion criteria stay live on GitHub" : plainFormActive ? "the LLM is unreachable \u2014 fill the fields yourself" : "dump it \u2014 the LLM drafts the fields, you confirm"), childMode && /* @__PURE__ */ React.createElement(Card, { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, placeMode ? "Place in another workspace" : childMode ? "Add child" : "Register"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, placeMode ? `splitting "${parentTask.title}" \u2014 appears as its own root in the workspace you pick, and lands there` : parentTask ? `splitting "${parentTask.title}" \u2014 appears as a child, same dump \u2192 draft \u2192 edit flow` : issueMode ? "reference a GitHub issue \u2014 its title/purpose/completion criteria stay live on GitHub" : plainFormActive ? "the LLM is unreachable \u2014 fill the fields yourself" : "dump it \u2014 the LLM drafts the fields, you confirm"), childMode && /* @__PURE__ */ React.createElement(Card, { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
     Input,
     {
       label: "Reason for splitting this",
@@ -1456,7 +1457,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     const next = e.target.value === "review" || e.target.value === "interview" ? e.target.value : "work";
     setType(next);
     if (!canTake(assignee, next)) setAssignee("");
-  } }), childMode ? assigneeSelect : /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: interview ? "\u5B9F\u74B0\u5883(root \u304C\u8AAD\u3080 workspace)" : "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), interview && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "\u53D7\u9A13\u8005\u306F\u9762\u63A5\u5BA4\u3067\u89E3\u304F"), /* @__PURE__ */ React.createElement(Select, { label: interview ? "Measured tier" : "Tier", options: tierOptions(tiers, interview ? "choose the tier to measure\u2026" : "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), interview && /* @__PURE__ */ React.createElement(Select, { label: "Root tier", options: tierOptions(tiers, "(the higher of the measured tier and the board judgement tier)"), value: reviewTier, onChange: (e) => setReviewTier(e.target.value) }), riskCheckbox, showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) }), reviewTierSelect, reviewerPicker, interview && /* @__PURE__ */ React.createElement(InterviewTargetsField, { value: targets, onChange: setTargets, providers })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
+  } }), childMode && !placeMode ? assigneeSelect : /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: interview ? "\u5B9F\u74B0\u5883(root \u304C\u8AAD\u3080 workspace)" : "Workspace", options: placeMode ? issueWorkspaceOptions : workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), interview && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "\u53D7\u9A13\u8005\u306F\u9762\u63A5\u5BA4\u3067\u89E3\u304F"), /* @__PURE__ */ React.createElement(Select, { label: interview ? "Measured tier" : "Tier", options: tierOptions(tiers, interview ? "choose the tier to measure\u2026" : "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), interview && /* @__PURE__ */ React.createElement(Select, { label: "Root tier", options: tierOptions(tiers, "(the higher of the measured tier and the board judgement tier)"), value: reviewTier, onChange: (e) => setReviewTier(e.target.value) }), riskCheckbox, showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) }), reviewTierSelect, reviewerPicker, interview && /* @__PURE__ */ React.createElement(InterviewTargetsField, { value: targets, onChange: setTargets, providers })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: togglePlainForm,
@@ -4611,7 +4612,7 @@ function completionReviewLine(task) {
   })) return null;
   return `review \u2192 ${task.review_by?.length ? task.review_by.join(", ") : "board auditor"}`;
 }
-function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose }) {
+function TaskActionsDialog({ task, onAddChild, onPlace, onEdit, onCancel, onStop, onClose }) {
   const { Button, IdChip } = window.TidepoolDesignSystem_8a0ead;
   const review = completionReviewLine(task);
   const [interview, setInterview] = React.useState(null);
@@ -4619,14 +4620,20 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
   const [humanStops, setHumanStops] = React.useState([]);
   const [workbench, setWorkbench] = React.useState(null);
   const [blockingRoot, setBlockingRoot] = React.useState(null);
+  const [origin, setOrigin] = React.useState(null);
+  const [placedRoots, setPlacedRoots] = React.useState([]);
   React.useEffect(() => {
     setInterview(null);
     setCheckout(null);
     setHumanStops([]);
     setWorkbench(null);
     setBlockingRoot(null);
+    setOrigin(null);
+    setPlacedRoots([]);
     api("GET /api/tasks/:id", { params: { id: task.id } }).then((full) => {
       setHumanStops(full.human_stops);
+      setOrigin(full.origin_task_id);
+      setPlacedRoots(full.placed_roots);
       setBlockingRoot(full.blocking_root ?? null);
       if (full.workbench) setWorkbench({ path: full.workbench, commands: full.workbench_commands ?? [] });
       if (task.type === "interview") setInterview({ room: full.interview_room ?? "not opened yet", head: full.posed_head ?? "not posed yet" });
@@ -4635,10 +4642,10 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
     });
   }, [task.id]);
   const meta = { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px", overflowWrap: "anywhere" };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason, row.cause && ` \xB7 ${row.cause}: ${row.evidence}`)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), blockingRoot && /* @__PURE__ */ React.createElement("p", { style: { ...meta, color: "var(--text-secondary)" }, "data-testid": "blocking-root" }, BLOCKING_ROOT_DETAIL_COPY[blockingRoot.kind](blockingRoot.pr_number, /* @__PURE__ */ React.createElement(IdChip, { id: blockingRoot.task_id, style: { display: "inline-block", verticalAlign: "bottom" } }))), workbench && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: meta }, "workbench: ", workbench.path), workbench.commands.map((command) => /* @__PURE__ */ React.createElement("div", { key: command, style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("code", { style: { ...meta, margin: 0, flex: 1, userSelect: "all" } }, command), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `copy ${command}`, onClick: () => {
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason, row.cause && ` \xB7 ${row.cause}: ${row.evidence}`)), origin && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "origin" }, "placed from ", /* @__PURE__ */ React.createElement(IdChip, { id: origin, style: { display: "inline-block", verticalAlign: "bottom" } })), placedRoots.map((root) => /* @__PURE__ */ React.createElement("p", { key: root.id, style: meta, "data-testid": "placed-root" }, "placed in another workspace \xB7 ", /* @__PURE__ */ React.createElement(IdChip, { id: root.id, style: { display: "inline-block", verticalAlign: "bottom" } }), " ", root.title, " \xB7 ", root.status)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), blockingRoot && /* @__PURE__ */ React.createElement("p", { style: { ...meta, color: "var(--text-secondary)" }, "data-testid": "blocking-root" }, BLOCKING_ROOT_DETAIL_COPY[blockingRoot.kind](blockingRoot.pr_number, /* @__PURE__ */ React.createElement(IdChip, { id: blockingRoot.task_id, style: { display: "inline-block", verticalAlign: "bottom" } }))), workbench && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: meta }, "workbench: ", workbench.path), workbench.commands.map((command) => /* @__PURE__ */ React.createElement("div", { key: command, style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("code", { style: { ...meta, margin: 0, flex: 1, userSelect: "all" } }, command), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `copy ${command}`, onClick: () => {
     navigator.clipboard?.writeText(command).catch(() => {
     });
-  } }, "Copy")))), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit")), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
+  } }, "Copy")))), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onPlace }, "Place in another workspace"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit")), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
 }
 function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
@@ -4868,6 +4875,7 @@ function App() {
   const [toast, setToast] = React.useState(null);
   const [wash, setWash] = React.useState(null);
   const [addChildParent, setAddChildParent] = React.useState(null);
+  const [placeOrigin, setPlaceOrigin] = React.useState(null);
   const [actionsTask, setActionsTask] = React.useState(null);
   const [editTaskCard, setEditTaskCard] = React.useState(null);
   const [cancelTaskCard, setCancelTaskCard] = React.useState(null);
@@ -5212,6 +5220,18 @@ function App() {
       throw err;
     }
   };
+  const placeRoot = async (fields) => {
+    if (!placeOrigin || !("title" in fields)) return;
+    const { type: _type, parent_id: _parent, decompose_reason, review_flag: _review, ...root } = fields;
+    try {
+      const t = await api("POST /api/tasks/:id/place", { params: { id: placeOrigin.id }, body: { ...root, reason: decompose_reason } });
+      say("info", "placed in another workspace \u2014 appended to queue tail", t.id);
+      await refreshFull();
+    } catch (err) {
+      say("danger", "place in another workspace failed", String(err.message || err));
+      throw err;
+    }
+  };
   if (deepLinkQuestionId) {
     return /* @__PURE__ */ React.createElement(
       QuestionDeepLinkView,
@@ -5257,12 +5277,16 @@ function App() {
     }
   ) : /* @__PURE__ */ React.createElement("div", { style: { padding: "64px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 28, marginBottom: 6 } }, "\u{1F41A}"), /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)", marginBottom: 8 } }, "Low tide. Go enjoy your coffee."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "the pool refills as tasks come in."))), tab === "board" && /* @__PURE__ */ React.createElement(BoardScreen, { data, onOpenTask: openTask }), tab === "queue" && /* @__PURE__ */ React.createElement(QueueScreen, { data, paused: data.paused, onTogglePause: togglePause, spendDown: data.spendDown, onSpendDown: setSpendDown, onFront: moveFront, onDoneHuman: doneHuman, onReorder: reorder }), tab === "register" && /* @__PURE__ */ React.createElement(RegisterScreen, { onRegister: register }), tab === "settings" && /* @__PURE__ */ React.createElement(SettingsScreen, { say, memoryFocus, registerLeaveGuard: (fn) => {
     leaveGuard.current = fn;
-  } }))), toast && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 86, left: "50%", transform: "translateX(-50%)", zIndex: 50, width: "calc(100% - 32px)", maxWidth: 408 } }, /* @__PURE__ */ React.createElement("div", { className: toast.leaving ? "tp-toast-out" : "tp-toast-in" }, /* @__PURE__ */ React.createElement(Toast, { kind: toast.kind, detail: toast.detail, onDismiss: dismissToast }, toast.msg))), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!addChildParent, onClose: () => setAddChildParent(null) }, addChildParent && /* @__PURE__ */ React.createElement(RegisterScreen, { parentTask: addChildParent, onRegister: addChild, onClose: () => setAddChildParent(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!actionsTask, onClose: () => setActionsTask(null) }, actionsTask && /* @__PURE__ */ React.createElement(
+  } }))), toast && /* @__PURE__ */ React.createElement("div", { style: { position: "fixed", bottom: 86, left: "50%", transform: "translateX(-50%)", zIndex: 50, width: "calc(100% - 32px)", maxWidth: 408 } }, /* @__PURE__ */ React.createElement("div", { className: toast.leaving ? "tp-toast-out" : "tp-toast-in" }, /* @__PURE__ */ React.createElement(Toast, { kind: toast.kind, detail: toast.detail, onDismiss: dismissToast }, toast.msg))), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!addChildParent, onClose: () => setAddChildParent(null) }, addChildParent && /* @__PURE__ */ React.createElement(RegisterScreen, { parentTask: addChildParent, onRegister: addChild, onClose: () => setAddChildParent(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!placeOrigin, onClose: () => setPlaceOrigin(null) }, placeOrigin && /* @__PURE__ */ React.createElement(RegisterScreen, { parentTask: placeOrigin, place: true, onRegister: placeRoot, onClose: () => setPlaceOrigin(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!actionsTask, onClose: () => setActionsTask(null) }, actionsTask && /* @__PURE__ */ React.createElement(
     TaskActionsDialog,
     {
       task: actionsTask,
       onAddChild: () => {
         setAddChildParent(actionsTask);
+        setActionsTask(null);
+      },
+      onPlace: () => {
+        setPlaceOrigin(actionsTask);
         setActionsTask(null);
       },
       onEdit: () => {
