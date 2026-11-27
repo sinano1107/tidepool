@@ -206,10 +206,10 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
   });
 });
 
-describe("buildSandboxSettings の interview の root の床(ADR 0273 決定2)", () => {
+describe("buildSandboxSettings の interview の root の床(ADR 0273 決定2 / ADR 0426 決定2)", () => {
   const ROOM = "/home/pi/tidepool-workspaces/0b7c-root";
-  const REAL_ENV = "/home/pi/work/tidepool";
-  const OLD_ROOM = "/home/pi/tidepool-workspaces/9a1e-old-root";
+  const REAL_ENV = "/home/pi/tidepool-workspaces/0b7c-root.real-environment/42";
+  const OLD_ROOM = "/home/pi/tidepool-workspaces/0b7c-root.reads/42/9a1e-old-root";
   const settingsOf = (taskType: "work" | "interview", readPaths?: string[]) =>
     buildSandboxSettings({ taskType, workspacePath: ROOM, ...(readPaths && { readPaths }), ...HOST });
 
@@ -220,7 +220,7 @@ describe("buildSandboxSettings の interview の root の床(ADR 0273 決定2)",
     expect(settings.sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([ROOM, REAL_ENV, OLD_ROOM]));
     expect(settings.permissions).toEqual({
       deny: settingsOf("work").permissions.deny,
-      allow: ["Read(//home/pi/work/tidepool/**)", "Read(//home/pi/tidepool-workspaces/9a1e-old-root/**)"],
+      allow: [`Read(/${REAL_ENV}/**)`, `Read(/${OLD_ROOM}/**)`],
     });
   });
 

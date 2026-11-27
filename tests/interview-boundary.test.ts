@@ -9,7 +9,7 @@ import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execu
 import { buildMemoryInjection } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue, workspaceContainmentValue } from "../src/quarantine.js";
-import { getTask } from "../src/tasks.js";
+import { getTask, sessionRealEnvironmentCheckout } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
@@ -234,7 +234,7 @@ it("root の tools/list の complete_interview の説明は、旧本文の採点
   }
 });
 
-it("root の get_current_task は仮説・測る仕事・根拠の id・測る段の名前と説明・実環境の許可ドメインを構造で載せる(ADR 0273 決定9)", async () => {
+it("root の get_current_task は仮説・測る仕事・根拠の id・測る段・実環境を読む checkout の在り処と許可ドメインを載せる(ADR 0273 決定9 / ADR 0426 決定3)", async () => {
   const workspace = { ...(await makeWorkspace("reef")), allowed_domains: ["registry.npmjs.org"], review_allowed_commands: ["npm test"] };
   t = await boot({ workspace });
   const evidence = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
@@ -246,24 +246,25 @@ it("root の get_current_task は仮説・測る仕事・根拠の id・測る�
     measured_work: "a config parser",
     evidence_task_ids: [evidence.id],
     measured_tier: { name: "frontier", description: expect.any(String) },
-    real_environment: realpathSync(workspace.path),
+    real_environment: sessionRealEnvironmentCheckout(t.db, root.id)!.path,
     allowed_domains: ["registry.npmjs.org"],
   });
 });
 
-it("実環境の名前が registry から消えた(drift)root の get_current_task は、実環境を載せず許可ドメインを空にし、Quarantine を立てない(ADR 0363 決定2)", async () => {
+it("実環境の名前が registry から消えた(drift)root の get_current_task は、記録した在り処を載せて許可ドメインを空にし、Quarantine を立てない(ADR 0426 決定3 / ADR 0363 決定2)", async () => {
   const workspace = { ...(await makeWorkspace("reef")), allowed_domains: ["registry.npmjs.org"] };
   const registry = driftable(workspace);
   t = await boot({ workspace, resolveWorkspace: registry.resolveWorkspace });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   await runNow(t, root.id);
+  const realEnvironment = sessionRealEnvironmentCheckout(t.db, root.id)!.path;
   registry.drifted = true;
 
   const read: any = await callAsTask(t, root.id, "get_current_task", {});
 
   expect(read.isError).toBeFalsy();
   const { interview } = JSON.parse(read.content[0].text);
-  expect(interview).not.toHaveProperty("real_environment");
+  expect(interview.real_environment).toBe(realEnvironment);
   expect(interview.allowed_domains).toEqual([]);
   expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
 });
@@ -382,7 +383,6 @@ it("root の envelope は実環境の在り処を持ち、retry の新しい roo
   const read = JSON.parse((await callAsTask(t, measured.id, "read_evidence_history", { task_id: first.id })).content[0].text);
   expect(read.interview_room).toEqual(readCheckoutAt(measured.id, first.id));
   expect(read.interview_room).not.toBe(roomOf(first.id));
-  expect(JSON.parse((await callAsTask(t, measured.id, "get_current_task", {})).content[0].text).interview.real_environment).toBe(realpathSync(workspacePath));
 
   const retried = (await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, {})).json;
   await api(t.baseUrl, "POST", `/api/tasks/${retried.id}/move`, { after: null });
@@ -1283,7 +1283,7 @@ it("出題の gate は面接室の写しを head に記録し、立った監査�
   expect(rootTier).toBe(tierIdOf(t.db, "frontier"));
   expect((await tools(auditId)).sort()).toEqual([...AUDIT_VERBS].sort());
   const envelope = JSON.parse((await callAsTask(t, auditId, "get_current_task", {})).content[0].text);
-  expect(envelope.interview_audit).toMatchObject({ head, interview_room: readCheckoutAt(auditId, root.id), hypothesis: INTERVIEW.hypothesis });
+  expect(envelope.interview_audit).toMatchObject({ head, interview_room: readCheckoutAt(auditId, root.id), hypothesis: INTERVIEW.hypothesis, real_environment: lastCheckoutOf(auditId) });
   // 帰り先の無い系譜の監査に権限の1行は足さない(ADR 0301 決定5)
   expect(envelope.interview_audit).not.toHaveProperty("notice");
 });

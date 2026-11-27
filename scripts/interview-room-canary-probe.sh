@@ -8,9 +8,9 @@
 # THIS IS TIDEPOOL'S OWN REGRESSION CHECK. The board's owner runs it to confirm
 # that, from this directory, a session can still read a second checkout (the
 # "real environment"), cannot write to it, and can work and commit here, after a
-# CLI or OS update. The write into the real environment and the read of the home
-# file are EXPECTED to be refused by the operating system; a refusal is the
-# passing result, and the refusal's wording is the data being collected. The
+# CLI or OS update. The write into the real environment and the reads of the
+# named workspace and home file are EXPECTED to be refused by the operating
+# system. The refusal's wording is the data being collected. The
 # other lines are ordinary work the same session must be able to do. Each line is
 # attempted exactly once and whatever comes back is printed. Nothing here tries to
 # get around a refusal or retries.
@@ -33,6 +33,7 @@ row real-env-log git -C "$REAL_ENV" log -1 --format=%H
 row real-env-cat cat "$REAL_FILE"
 # expected: refused by the OS
 row real-env-write sh -c 'echo x > "$1"' _ "$REAL_WRITE"
+row named-env-read cat "$NAMED_FILE"
 # expected: succeed (work and commit here)
 row room-git sh -c 'echo ok > interview-room.txt && git add interview-room.txt && git commit -qm interview-room-canary && git log -1 --format=%s'
 # expected: refused by the OS

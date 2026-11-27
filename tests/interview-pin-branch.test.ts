@@ -11,7 +11,7 @@ import { namePickupPredicates, taskRoomPickupPredicates } from "../src/pickup-pr
 import { openQuarantineQuestion, type QuarantineChecks, registerQuarantine } from "../src/quarantine.js";
 import { refireRetrospectiveCalls } from "../src/retrospective.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeAudit, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task, unsettledOpenersOf } from "../src/tasks.js";
+import { cancelTaskDirectly, completeAudit, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, sessionRealEnvironmentCheckout, type Task, unsettledOpenersOf } from "../src/tasks.js";
 import { acceptTeardownQuarantine, runTeardown, teardownStep } from "../src/teardown.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import {
@@ -190,9 +190,9 @@ it("repo 完成後・event 前に落ちた面接室は、既存の HEAD と作�
   db.close();
 });
 
-it("root の走る場所は面接室の外の task の checkout で、実環境を path でなく場所(名前・repo・保護ブランチを持つ WorkspaceConfig、在り処は実体の綴り)として読む —— 面接室の HEAD は root の session の前・中・後で main(issue #2223 / ADR 0356 決定1 / ADR 0276 決定1)", async () => {
+it("root は面接室の外の task の checkout で走り、面接室の HEAD は session の前・中・後で main(ADR 0356 決定1 / ADR 0276 決定1)", async () => {
   const db = openDb(":memory:");
-  const workspace = { ...(await makeWorkspace("reads-real")), repo: "https://github.com/acme/reads-real.git", branch: "main" };
+  const workspace = await makeWorkspace("reads-real");
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
   openTestInterviewRoom(db, root);
   const room = recordedInterviewRoom(db, root.id)!;
@@ -200,7 +200,7 @@ it("root の走る場所は面接室の外の task の checkout で、実環境�
 
   const { place } = await pickUpInterviewRoot(db, root, workspace);
 
-  expect(place).toMatchObject({ name: root.id, namedPlace: room, reads: [{ ...workspace, path: realpathSync(workspace.path) }] });
+  expect(place).toMatchObject({ name: root.id, namedPlace: room });
   expect(place.path.startsWith(`${room.path}/`)).toBe(false);
   expect(place.path.startsWith(`${room.path}.checkout/`)).toBe(true);
   expect(git(room.path, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
@@ -220,11 +220,11 @@ it("root の走る場所は面接室の外の task の checkout で、実環境�
 
 it("Interview の root と受験者は alternates を書いても面接室の objects を読みに開かない(ADR 0360 決定2)", async () => {
   const db = openDb(":memory:");
-  const { workspace, root, room, base, place } = await pickedRoot(db, "read-paths-real");
+  const { root, room, base, place } = await pickedRoot(db, "read-paths-real");
   const objects = join(room.path, ".git", "objects");
   const rootAlternates = join(place.path, ".git", "objects", "info", "alternates");
   writeFileSync(rootAlternates, `${objects}\n`);
-  expect(runPlaceReadPaths(place)).toEqual([realpathSync(workspace.path)]);
+  expect(runPlaceReadPaths(place)).toEqual([sessionRealEnvironmentCheckout(db, root.id)!.path]);
   rmSync(rootAlternates);
   const [examinee] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", commitRoomCopy(db, place, root.id)) as [Task];
   releaseWorkspace(db, place, root, NOW);
@@ -698,7 +698,7 @@ it("却下の後に出し直した root の、却下した監査の行への RCA
   db.close();
 });
 
-it("retry の新しい root の pickup は、読む面接室(根拠の Interview の面接室・旧い root の面接室)ごとにその面接室の出題の head だけを持つ読み専用の checkout を作り、実環境も reads に残る(ADR 0361 決定1)", async () => {
+it("retry の新しい root の pickup は実環境と各面接室(根拠の Interview・旧い root)に別々の読み専用の checkout を作る(ADR 0361 決定1 / ADR 0426 決定2)", async () => {
   const db = openDb(":memory:");
   const evidence = await posedInRoom(db);
   const { workspace } = evidence;
@@ -715,7 +715,7 @@ it("retry の新しい root の pickup は、読む面接室(根拠の Interview
   const { place } = await pickUpInterviewRoot(db, again, workspace);
 
   expect(place.reads.map((read) => read.name)).toEqual([workspace.name, evidence.root.id, first.id]);
-  expect(place.reads[0]!.path).toBe(realpathSync(workspace.path));
+  expect(place.reads[0]).toEqual(sessionRealEnvironmentCheckout(db, again.id));
   expect(place.reads.slice(1).map((read) => git(read.path, "for-each-ref", "--format=%(refname) %(objectname)"))).toEqual([
     `refs/heads/main ${evidence.head}`,
     `refs/heads/main ${firstHead}`,

@@ -1009,7 +1009,7 @@ export async function prepareAtPickup(
   fillEmptyWorkspace(db, task.id, workspace.name);
   const workspacesBaseDir = board.workspacesBaseDir ?? (await tempDir("tidepool-task-checkouts-"));
   // 既定は registry の無い盤面(最初の撮りの確認は掛からない、ADR 0373 決定13)
-  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, workspacesBaseDir, now: () => now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
+  await prepareWorkspaceAtPickup(db, workspace, task, { ...board, realEnvironment: board.real, workspacesBaseDir, now: () => now, resolveRegistered: board.resolveRegistered, defaultWorkspaceName: board.defaultWorkspaceName });
   return taskCheckoutPath(db, task.id) !== undefined ? taskRunPlace(db, task, board.real ?? workspace) : { ...workspace, reads: [] };
 }
 
@@ -1047,7 +1047,7 @@ export function recordCheckoutAtWorkspace(
   const rootId = interviewRootIdOf(db, task);
   if (rootId !== undefined) {
     // Interview の場所は面接室から開く(ADR 0356 決定1)—— 面接室を開いていない adapter の盤面では何もしない
-    if (interviewRoomPath(db, rootId) !== undefined) openTestInterviewCheckout(db, task);
+    if (interviewRoomPath(db, rootId) !== undefined) openTestInterviewCheckout(db, task, defaultWorkspace);
     return;
   }
   let place: WorkspaceConfig;
@@ -1065,12 +1065,13 @@ export function recordCheckoutAtWorkspace(
  *  記録された面接室ごとに、空の dir を開いた event の `reads` に置く。 */
 function standInReadCheckouts(db: Db, task: Task): { reads?: ReadCheckout[] } {
   const rooms = openedPlaceNames(db, task.id, undefined).filter((name) => name !== interviewRootIdOf(db, task) && interviewRoomPath(db, name) !== undefined);
-  const reads = rooms.map((name) => {
-    const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-read-checkout-")));
-    onTestFinished(() => rm(path, { recursive: true, force: true }));
-    return { name, path };
-  });
-  return reads.length > 0 ? { reads } : {};
+  return rooms.length > 0 ? { reads: rooms.map(standInReadCheckout) } : {};
+}
+
+function standInReadCheckout(name: string): ReadCheckout {
+  const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-read-checkout-")));
+  onTestFinished(() => rm(path, { recursive: true, force: true }));
+  return { name, path };
 }
 
 /** 行の無い場所で準備が撮る最初の撮り(ADR 0351 決定2)の代わり —— 行があれば何もしない。行は基準と同じ綴り(HEAD は指し先、refname 順)で書く。 */
@@ -1153,16 +1154,18 @@ export interface GitCall {
 /** PATH の本物の git の前に置く shim。呼び出しごとに argv と env を記録し、`route` の URL を書き換え(盤面の網に出る git は
  *  checkout の insteadOf を読まない、ADR 0339 決定5 —— 盤面が組んだ URL の往復を local の bare へ回す)、`fake` の verb は本物へ
  *  渡さず exit 0 で答える(`ls-remote` には `lsRemote` の行を返す)。`fails` の引数を持つ呼び出しは本物へ渡さず、その stderr を出して
- *  exit 128 で落ちる(相手の答えや網の失敗を作る)。それ以外は本物へ渡す。
+ *  exit 128 で落ちる(相手の答えや網の失敗を作る)。3番目に cwd を渡すとその場所だけで落ちる。それ以外は本物へ渡す。
  *  テスト自身の git の呼び出しも通るので、URL を引数に渡すテストの git の**後に**入れる。テストの終わりに PATH を戻す。 */
 export async function shimGit(
-  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string; fails?: [argument: string, stderr: string] } = {},
+  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string; fails?: [argument: string, stderr: string, cwd?: string] } = {},
 ): Promise<() => GitCall[]> {
   const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
   const dir = await tempDir("tidepool-git-shim-");
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
   const [from, to] = options.route ?? [];
+  const failCwd = options.fails?.[2];
+  const inFailCwd = failCwd === undefined ? "true" : `[ "$PWD" = '${failCwd.replaceAll("'", "'\"'\"'")}' ]`;
   const fake = (options.fake ?? []).map((verb) => `*" ${verb} "*`).join("|");
   writeFileSync(
     join(dir, "git"),
@@ -1172,7 +1175,7 @@ export async function shimGit(
       `{ echo ---; for a in "$@"; do echo "arg=$a"; done; [ -f "$alt" ] && echo "alternates=$(cat "$alt")"; ` +
       `echo "env.GH_TOKEN=\${GH_TOKEN-}"; echo "env.GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}"; ` +
       `echo "env.GIT_OBJECT_DIRECTORY=\${GIT_OBJECT_DIRECTORY-}"; } >> "${log}"\n` +
-      (options.fails ? `case " $* " in *" ${options.fails[0]} "*) printf '%s\\n' '${options.fails[1]}' >&2; exit 128;; esac\n` : "") +
+      (options.fails ? `case " $* " in *" ${options.fails[0]} "*) if ${inFailCwd}; then printf '%s\\n' '${options.fails[1]}' >&2; exit 128; fi;; esac\n` : "") +
       (fake ? `case " $* " in ${fake}) case " $* " in *" ls-remote "*) printf '%s' '${options.lsRemote ?? ""}';; esac; exit 0;; esac\n` : "") +
       `exec "${real}" "$@"\n`,
     { mode: 0o755 },
@@ -1464,7 +1467,7 @@ export async function pickedInterviewRoot(db: Db, name: string, at: Date, target
 
 /** setup のみ: Interview の root・受験者の pickup が面接室から開く task の checkout の代わりに、空コミットだけの repo を在り処として
  *  残す(ADR 0356 決定1・2)—— 盤面の pickup を通らずに root や受験者を adapter で走らせるテストが置く。面接室は先に開いておく。 */
-export function openTestInterviewCheckout(db: Db, task: Task): string {
+export function openTestInterviewCheckout(db: Db, task: Task, defaultWorkspace?: string): string {
   const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-interview-checkout-")));
   onTestFinished(() => rm(path, { recursive: true, force: true }));
   git(path, "init", "--quiet", "--initial-branch=main");
@@ -1476,7 +1479,10 @@ export function openTestInterviewCheckout(db: Db, task: Task): string {
     standInFirstCapture(db, room);
     standInTaskBranch(db, room, task.id);
   }
-  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task) }, at: new Date(0) });
+  const real = task.type === "interview" && (task.workspace ?? defaultWorkspace);
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: {
+    kind: "task_checkout_opened", path, ...standInReadCheckouts(db, task), ...(real && { real_environment: standInReadCheckout(real) }),
+  }, at: new Date(0) });
   return path;
 }
 

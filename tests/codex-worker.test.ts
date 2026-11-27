@@ -20,7 +20,7 @@ import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues, UNCLOSED_SESSION_
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { RegistryUnreadableError } from "../src/registry-unreadable.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, sessionReadCheckoutOf, type Task, taskCheckoutPath } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, sessionReadCheckoutOf, sessionRealEnvironmentCheckout, type Task, taskCheckoutPath } from "../src/tasks.js";
 import { acceptTeardownQuarantine, acceptUnclosedSession } from "../src/teardown.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -726,7 +726,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   // 旧: root は面接室を cwd にして面接室に書けた(ADR 0273 決定2)。ADR 0356 決定1 の後は面接室から開いた task の checkout で走り、面接室は盤面だけが書く
   // 旧(ADR 0361 決定1 の前): 開ける面接室は面接室の path が read で載った
-  it("Interview の root は自分の task の checkout を cwd と -C にして work の profile でそこに書け(.git の行も work と同じ)、実環境と開ける面接室(根拠の Interview の root のもの)の読み専用の checkout は read で載り、面接室の path は自分のものも根拠のものも載らない(ADR 0273 決定2 / ADR 0356 決定1 / ADR 0361 決定1)", async () => {
+  it("Interview の root は自分の task の checkout を cwd と -C にし、実環境と開ける面接室の読み専用の checkout を read で載せる(ADR 0273 決定2 / ADR 0356 決定1 / ADR 0361 決定1 / ADR 0426 決定2)", async () => {
     const f = await fixture();
     const evidence = interviewRoot(f.db);
     const root = registerTask(f.db, { type: "interview", assignee: "codex-agent", title: "interview", hypothesis: "h", tier: "standard", evidence_task_ids: [evidence.id], interview_targets: [SOL] }, new Date(0), ...HUMAN_WEBUI);
@@ -746,7 +746,7 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(checkout)}="write"`,
       `${JSON.stringify(join(checkout, ".git"))}="write"`,
       `${JSON.stringify(join(checkout, ".git", "hooks"))}="read"`,
-      `${JSON.stringify(f.workspace)}="read"`,
+      `${JSON.stringify(sessionRealEnvironmentCheckout(f.db, root.id)!.path)}="read"`,
       `${JSON.stringify(sessionReadCheckoutOf(f.db, root.id, evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
     for (const id of [root.id, evidence.id]) expect(rows).not.toContain(JSON.stringify(roomOf(id)));

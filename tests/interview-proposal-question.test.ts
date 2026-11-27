@@ -3,10 +3,10 @@ import type { AgentView } from "../src/agent-create.js";
 import { appendEvent } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { registerMetaReview } from "../src/meta-review.js";
-import { registerTask } from "../src/tasks.js";
+import { registerTask, sessionRealEnvironmentCheckout } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, callAsTask, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, interviewExaminee, makeWorkspace, managementMcpClient, runNow, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, callAsTask, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, managementMcpClient, runNow, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の Interview の提案 question(#921 / ADR 0199 決定5 / ADR 0258 / ADR 0273 決定9)のサーバ境界: 提案 verb の op
  *  interview、approve が人間の扉で登録する interview root と修正値、pin の陳腐化、registry から消えた実環境、shadow 行の workspace 欄、
@@ -121,6 +121,7 @@ it("interview の提案は meta-review の子に approve / reject の question �
 
 it("approve の修正値は仮説・測る仕事・対象の effort・実環境を差し替え、実環境は根拠の workspace に縛られない", async () => {
   const reviewId = await boardWithRoutingReview();
+  commitWork(spaces.get("lagoon")!.path, "lagoon.txt", "the amended workspace\n");
   const { eventId } = session("reef");
   const { question_id } = await call(reviewId, "propose_routing_change", proposal([eventId]));
   const amendment = { hypothesis: "opus at effort max is enough for migrations", measured_work: "data backfills", targets: [OPUS_MAX, { ...OPUS, effort: "medium" }], workspace: "lagoon" };
@@ -138,7 +139,11 @@ it("approve の修正値は仮説・測る仕事・対象の effort・実環境�
   await runNow(t, root.id);
   const current = JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text);
   expect(current.interview_targets).toEqual(amendment.targets);
-  expect(current.interview).toMatchObject({ hypothesis: amendment.hypothesis, measured_work: amendment.measured_work, real_environment: expect.stringContaining("tidepool-lagoon-") });
+  expect(current.interview).toMatchObject({
+    hypothesis: amendment.hypothesis, measured_work: amendment.measured_work,
+    real_environment: sessionRealEnvironmentCheckout(t.db, root.id)!.path,
+  });
+  expect(git(current.interview.real_environment, "show", "HEAD:lagoon.txt")).toBe("the amended workspace");
 });
 
 it("effort の述語に外れる修正値は登録の扉で回答ごと断られ、何も登録されない(修正値の形は tests/execution-setting.test.ts)", async () => {

@@ -44,7 +44,7 @@ import {
 } from "../src/registry.js";
 import { RegistryUnreadableError } from "../src/registry-unreadable.js";
 import { Slot } from "../src/slot.js";
-import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, sessionReadCheckoutOf, type Task } from "../src/tasks.js";
+import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, sessionReadCheckoutOf, sessionRealEnvironmentCheckout, type Task } from "../src/tasks.js";
 import { acceptTeardownQuarantine, sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -1908,13 +1908,14 @@ describe("ClaudeCodeWorker", () => {
   });
 
   // 旧: root は面接室を cwd にして面接室に書けた(ADR 0273 決定1・2)。ADR 0356 決定1 の後は面接室から開いた task の checkout が cwd で、面接室は読みにも開かない
-  it("Interview の root は自分の task の checkout を cwd に acceptEdits で走り、そこに書けて実環境を読みに開き Read の許可も足し、面接室は開かない。受験者は自分の task の checkout を cwd に走り、面接室も実環境も開かず、許可ドメインは実環境の宣言のまま(ADR 0273 決定1・2・8 / ADR 0356 決定1・2)", async () => {
+  it("Interview の root は自分の task の checkout を cwd に acceptEdits で走り、実環境の読み専用の checkout を開き Read の許可も足す。受験者は自分の task の checkout を cwd に走り、実環境を開かずに許可ドメインだけを受け取る(ADR 0273 決定1・2・8 / ADR 0356 決定1・2 / ADR 0426 決定2)", async () => {
     const real = await realpath(await tempDir("tidepool-claude-real-env-"));
     const { worker, setting, slot, calls, logDir, db } = await makeWorker({ "workspaces.yaml": `tidepool:\n  path: ${real}\n  allowed_domains:\n    - registry.npmjs.org\n` });
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
     const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     openTestInterviewRoom(db, root);
-    const rootCheckout = openTestInterviewCheckout(db, root);
+    const rootCheckout = openTestInterviewCheckout(db, root, "tidepool");
+    const read = sessionRealEnvironmentCheckout(db, root.id)!.path;
     slot.occupy(root.id, sessionId(db, root.id));
     worker.start(root, sessionId(db, root.id), setting(root));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -1931,9 +1932,9 @@ describe("ClaudeCodeWorker", () => {
     expect(rootCall.args[rootCall.args.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
     const rootSandbox = sandboxSettings(rootCall.args, logDir);
     expect(rootSandbox.filesystem.allowWrite).toEqual([rootCheckout, rootCall.env.TMPDIR]);
-    expect(rootSandbox.filesystem.allowRead).toContain(real);
+    expect(rootSandbox.filesystem.allowRead).toContain(read);
     expect(rootSandbox.filesystem.allowRead).not.toContain(room);
-    expect(JSON.parse(readFileSync(rootCall.args[rootCall.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toEqual([`Read(/${real}/**)`]);
+    expect(JSON.parse(readFileSync(rootCall.args[rootCall.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toEqual([`Read(/${read}/**)`]);
     const childSandbox = sandboxSettings(childCall.args, logDir);
     expect(childSandbox.filesystem.allowRead).not.toContain(real);
     expect(childSandbox.filesystem.allowRead).not.toContain(room);

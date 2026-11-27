@@ -1,6 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { permissionConfig } from "../src/codex-worker.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -8,10 +9,14 @@ import { buildSandboxSettings } from "../src/sandbox.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, sessionRealEnvironmentCheckout, type Task, taskCheckoutPath } from "../src/tasks.js";
 import {
+  CheckoutHostError,
   holdsBaseline,
   KEPT_TASK_CHECKOUT,
+  openInterviewRoom,
+  PickupGateError,
+  pickupGate,
   RefsMovedError,
   recordTaskCheckoutTip,
   redoOwedReleases,
@@ -21,7 +26,7 @@ import {
   type WorkspaceConfig,
 } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { checkoutTaskBranch, commitWork, completionTreePaths, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, prepareAtPickup, quarantineQuestion, seedOtherTaskBranch, seedTaskBranch, seedZeroPaddedTree, withHistoryOnlyBlob } from "./harness.js";
+import { checkoutTaskBranch, commitWork, completionTreePaths, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, pickUpInterviewRoot, prepareAtPickup, quarantineQuestion, seedOtherTaskBranch, seedTaskBranch, seedZeroPaddedTree, sessionId, shimGit, withHistoryOnlyBlob } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // task の checkout(ADR 0356): work / review の worker は名前の場所でなく、pickup ごとに作って解放で消す自分の repo で走る。
@@ -46,6 +51,182 @@ async function pickedUp(name: string, type: "work" | "review" | "memory_repair" 
 
 const objectsOf = (named: WorkspaceConfig) => realpathSync(join(named.path, ".git", "objects"));
 const subjects = (named: WorkspaceConfig, ref: string) => git(named.path, "log", "--format=%s", ref).split("\n");
+
+function registerInterview(workspace: WorkspaceConfig): Task {
+  return registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", workspace: workspace.name, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, NOW, ...HUMAN_WEBUI);
+}
+
+it("Interview の root は追従後の休止位置とその履歴だけを複製した checkout を読み、両 provider は名前の場所と objects を開かない(ADR 0426 決定1・2)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("interview-resting-copy");
+  db = openDb(":memory:");
+  const root = registerInterview(workspace);
+  const other = seedOtherTaskBranch(db, workspace, register().id);
+  const prior = git(workspace.path, "rev-parse", "HEAD");
+  git(workspace.path, "tag", "before-landing", prior);
+  publish("landed.txt", "landed on the remote\n", "remote landing");
+  const resting = git(workspace.repo!, "rev-parse", "refs/heads/main");
+  const base = await tempDir("interview-resting-checkouts-");
+  const readsAtPickup = await pickupGate(db, workspace, root, base, () => NOW);
+  openInterviewRoom(db, root, base, NOW);
+  const { place } = await pickUpInterviewRoot(db, root, workspace, { reads: readsAtPickup });
+
+  const reads = runPlaceReadPaths(place);
+  expect(reads).toHaveLength(1);
+  const read = sessionRealEnvironmentCheckout(db, root.id)!.path;
+  const named = realpathSync(workspace.path);
+  expect(reads).toEqual([read]);
+  expect(read).not.toBe(named);
+  expect(git(read, "log", "--format=%H", "-2").split("\n")).toEqual([resting, prior]);
+  expect(readFileSync(join(read, "landed.txt"), "utf8")).toBe("landed on the remote\n");
+  expect(git(read, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/main");
+  expect(() => git(read, "cat-file", "-e", other)).toThrow();
+  expect(existsSync(join(read, ".git", "objects", "info", "alternates"))).toBe(false);
+  git(read, "fsck", "--no-progress", "--no-dangling");
+
+  const sandbox = buildSandboxSettings({ taskType: "interview", workspacePath: place.path, readPaths: reads, taskTemp: "/tmp/t", configDir: "/tmp/c", lib64: false });
+  expect(sandbox.sandbox.filesystem.allowRead).toContain(read);
+  expect(sandbox.sandbox.filesystem.allowRead).not.toContain(named);
+  expect(sandbox.sandbox.filesystem.allowRead).not.toContain(objectsOf(workspace));
+
+  const filesystem = permissionConfig("interview", place.path, "/tmp/t", "/usr/bin/codex", [], reads).find((line) => line.includes(".filesystem="))!;
+  expect(filesystem).toContain(`${JSON.stringify(read)}="read"`);
+  expect(filesystem).not.toContain(JSON.stringify(named));
+  expect(filesystem).not.toContain(JSON.stringify(objectsOf(workspace)));
+});
+
+it("Interview の root は Git が複製を始める直前に保護 ref が動いても、休止位置で確かめた head を読む(ADR 0426 決定1)", async () => {
+  const workspace = await makeWorkspace("interview-resting-moved-ref");
+  const resting = git(workspace.path, "rev-parse", "HEAD");
+  db = openDb(":memory:");
+  const root = pickupTask(db, registerInterview(workspace), "deckhand", NOW)!;
+  const moved = seedOtherTaskBranch(db, workspace, register().id);
+  const base = await tempDir("interview-resting-checkouts-");
+  const reads = await pickupGate(db, workspace, root, base, () => NOW);
+  openInterviewRoom(db, root, base, NOW);
+
+  // fetch を始めるときだけ名前の場所で帯域外の書き込みを起こす。
+  const shim = await tempDir("interview-resting-move-ref-");
+  const gitBinary = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  const read = join(realpathSync(base), `${root.id}.real-environment`, String(sessionId(db, root.id)));
+  const quote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+  vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
+  onTestFinished(() => { vi.unstubAllEnvs(); });
+  writeFileSync(join(shim, "git"), `#!/bin/sh
+real_git=${quote(gitBinary)}
+case " $* " in
+  *" fetch "*)
+    if [ "$PWD" = ${quote(read)} ]; then
+      "$real_git" -C ${quote(workspace.path)} update-ref refs/heads/main ${quote(moved)} || exit
+    fi;;
+esac
+exec "$real_git" "$@"
+`, { mode: 0o755 });
+
+  await pickUpInterviewRoot(db, root, workspace, { reads });
+
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(moved);
+  expect(git(sessionRealEnvironmentCheckout(db, root.id)!.path, "rev-parse", "HEAD")).toBe(resting);
+});
+
+it.each(["fetch", "checkout", "mkdir"] as const)("Interview の root が実環境の読み専用の checkout を作れない(%s)と、失敗の場所を区別して作りかけを消す(ADR 0426 決定2 / ADR 0386 決定3)", async (stage) => {
+  const workspace = await makeWorkspace("interview-resting-failure");
+  withHistoryOnlyBlob(workspace);
+  db = openDb(":memory:");
+  const root = pickupTask(db, registerInterview(workspace), "deckhand", NOW)!;
+  const base = await tempDir("interview-resting-checkouts-");
+  const reads = await pickupGate(db, workspace, root, base, () => NOW);
+  openInterviewRoom(db, root, base, NOW);
+  const readParent = join(base, `${root.id}.real-environment`);
+  let failedObject = "fixture could not materialize the tree";
+  if (stage === "fetch") {
+    const blob = git(workspace.path, "rev-parse", "HEAD^:old.txt");
+    rmSync(join(objectsOf(workspace), blob.slice(0, 2), blob.slice(2)));
+    failedObject = blob;
+  } else if (stage === "checkout") {
+    const read = join(realpathSync(base), basename(readParent), String(sessionId(db, root.id)));
+    await shimGit({ fails: ["read-tree", failedObject, read] });
+  } else {
+    writeFileSync(readParent, "not a directory\n");
+  }
+
+  const failed = await pickUpInterviewRoot(db, root, workspace, { reads }).catch((err: unknown) => err);
+
+  if (stage === "mkdir") {
+    expect(failed).toBeInstanceOf(CheckoutHostError);
+    expect(readFileSync(readParent, "utf8")).toBe("not a directory\n");
+  } else {
+    expect(failed).toBeInstanceOf(PickupGateError);
+    expect((failed as PickupGateError).place.name).toBe(workspace.name);
+    expect((failed as PickupGateError).message).toContain("The check that failed: the protected branch `main`");
+    expect((failed as PickupGateError).message).toContain(failedObject);
+    expect(existsSync(readParent)).toBe(false);
+  }
+  expect(taskCheckoutPath(db, root.id)).toBeUndefined();
+  expect(existsSync(join(base, `${root.id}.checkout`))).toBe(false);
+  expect(git(join(base, root.id), "branch", "--list", `task/${root.id}`)).toBe("");
+});
+
+it.each(["file", "repo", "symlink", "parent symlink"] as const)("Interview の root は実環境の読み専用の checkout の番地に先にある %s を保ち、host 側の失敗で止まる(ADR 0426 決定2)", async (entry) => {
+  const workspace = await makeWorkspace("interview-resting-collision");
+  const existing = await makeWorkspace("interview-existing-checkout");
+  commitWork(existing.path, "occupied.txt", "retain this repository\n");
+  const existingHead = git(existing.path, "rev-parse", "HEAD");
+  db = openDb(":memory:");
+  const root = pickupTask(db, registerInterview(workspace), "deckhand", NOW)!;
+  const base = await tempDir("interview-resting-checkouts-");
+  const reads = await pickupGate(db, workspace, root, base, () => NOW);
+  openInterviewRoom(db, root, base, NOW);
+  const parent = join(base, `${root.id}.real-environment`);
+  const pickup = String(sessionId(db, root.id));
+  const read = join(parent, pickup);
+  if (entry === "parent symlink") {
+    symlinkSync(existing.path, parent);
+  } else {
+    mkdirSync(parent);
+    if (entry === "file") writeFileSync(read, "existing file\n");
+    if (entry === "repo") renameSync(existing.path, read);
+    if (entry === "symlink") symlinkSync(existing.path, read);
+  }
+
+  const failed = await pickUpInterviewRoot(db, root, workspace, { reads }).catch((err: unknown) => err);
+
+  expect(failed).toBeInstanceOf(CheckoutHostError);
+  expect(taskCheckoutPath(db, root.id)).toBeUndefined();
+  expect(existsSync(join(base, `${root.id}.checkout`))).toBe(false);
+  if (entry === "file") expect(readFileSync(read, "utf8")).toBe("existing file\n");
+  if (entry === "repo") expect(git(read, "rev-parse", "HEAD")).toBe(existingHead);
+  if (entry === "symlink") {
+    expect(readlinkSync(read)).toBe(existing.path);
+    expect(git(existing.path, "rev-parse", "HEAD")).toBe(existingHead);
+  }
+  if (entry === "parent symlink") {
+    expect(readlinkSync(parent)).toBe(existing.path);
+    expect(existsSync(join(existing.path, pickup))).toBe(false);
+  }
+});
+
+it("Interview の root の実環境を読む checkout は解放で消え、再 pickup は別の番地を記録する(ADR 0426 決定2 / ADR 0361 決定1)", async () => {
+  const workspace = await makeWorkspace("interview-resting-release");
+  db = openDb(":memory:");
+  const root = registerInterview(workspace);
+  const base = await tempDir("interview-resting-checkouts-");
+  const alias = join(await tempDir("interview-resting-alias-"), "base");
+  symlinkSync(base, alias);
+  openInterviewRoom(db, root, alias, NOW);
+  const { place } = await pickUpInterviewRoot(db, root, workspace, { workspacesBaseDir: alias });
+  const first = sessionRealEnvironmentCheckout(db, root.id)!.path;
+  expect(first.startsWith(`${realpathSync(base)}/`)).toBe(true);
+
+  releaseWorkspace(db, place, root, NOW);
+  expect(existsSync(first)).toBe(false);
+  expect(existsSync(dirname(first))).toBe(false);
+
+  const { place: resumed } = await pickUpInterviewRoot(db, root, workspace);
+  const second = sessionRealEnvironmentCheckout(db, root.id)!.path;
+  expect(second).not.toBe(first);
+  expect(runPlaceReadPaths(resumed)).toEqual([second]);
+  expect(existsSync(second)).toBe(true);
+});
 
 it("pickup は規約の番地(基点 / task id / pickup の event id)に task の checkout を開き、名前の場所の HEAD と tree は動かない(ADR 0356 決定1・2)", async () => {
   const named = await makeWorkspace("task-checkout-open");
