@@ -99,7 +99,6 @@ import {
   DeclaredRepoMismatchError,
   FirstCaptureRefusedError,
   FirstCaptureRegistryReadError,
-  LostTaskBranchPresentError,
   NoReturnLineageError,
   openInterviewRoom,
   PickupGateError,
@@ -322,8 +321,6 @@ const IN_FLIGHT: PollOutcome = { outcome: "blocked", reason: "another poll is in
  *  準備の catch は名前の場所を quarantine せずに投げ直し、spawn failure の記録が kind を写す(出口は abandon だけ)。 */
 const TASK_FAILURES = [
   [UnhideableTaskSettingsError, "unhideable-task-settings"],
-  // ADR 0392 決定2: 失われた event が効いたまま在る `task/<id>`
-  [LostTaskBranchPresentError, "lost-task-branch-present"],
   // ADR 0421 決定3: 帰り先の無い系譜の task の fork 元
   [NoReturnLineageError, "no-return-lineage"],
 ] as const;
