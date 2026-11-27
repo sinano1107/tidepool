@@ -1,5 +1,7 @@
 # 盤面 DB が書きを拒んだ記録の書き込みは床から process を終え、後始末の step の中の盤面のバグは落ちた後始末である —— memory の印は書き込みの後
 
+**Status 追記: 決定1 の「後始末の step の中の盤面のバグは落ちた後始末」は、step の中で名前の場所の Quarantine に畳む catch にも届く —— 型で名指された資源の故障だけが資源を止め、型の付かない失敗は落ちた後始末へ行く([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定2・3、2026-11-27、issue #3938)。**
+
 **Status 追記: 決定1 の (A) は「盤面 DB が操作を拒む」に広がり、読みの拒否も入る。判定は底でなく `openDb` が返す handle が投げた所でし、同期で終える —— 決定3 の底の分類と `uncaughtException` の受け手、決定4 の境界の catch の投げ直しは消える。決定2 の「`in_progress` 行の無い盤面は起動が通る」は `READONLY` にだけ残る([ADR 0389](./0389-the-board-db-handle-classifies-a-refusal-where-it-is-thrown-and-ends-the-process-synchronously-reads-included.md)、2026-11-21、issue #2868)。**
 
 **Status 追記: 決定5 の列挙から「帳簿」(board-call の `unreclaimed`)を外す。帳簿は記録に書けたことの印ではなく「回収 timeout まで空を観測できなかった容器」という盤面の観測で、投げた手を撃ち直す runner の無い箇所では唯一の写しになるので、観測の時点(書き込みの前)に置く。pickup の門と読み口もそれを読む([ADR 0347](0347-the-board-call-reclaim-ledger-is-set-at-observation-and-the-pickup-gate-and-queue-read-it.md)、2026-11-02、issue #2859)。**

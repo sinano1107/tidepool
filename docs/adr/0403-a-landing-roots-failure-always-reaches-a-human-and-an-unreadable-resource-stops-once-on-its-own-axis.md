@@ -1,5 +1,7 @@
 # 着地の根の失敗は必ず人間に届き、読めない資源はその資源の軸で1回だけ止まる
 
+**Status 追記: 決定3 の昇格失敗 question は、無人 merge の最後の同期区間で型の付かない失敗にも立つ —— `merge_failed` にしない([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定8、2026-11-27、issue #3938)。**
+
 **Status 追記: 決定3 の失敗 question は、門が閉じている間は立てない —— 収束が根に書く question は書く直前に門 → workspace の Quarantine を読み、門が閉じていれば待ちを刻んで止まる。門が開いた後の収束が撃ち直し、失敗が続けばそこで立てる([ADR 0429](0429-convergence-reads-one-stop-right-before-it-writes-any-question-on-a-root-and-a-stopped-pr-creation-defers-its-record.md) 決定1、2026-11-26、issue #3879)。**
 
 2026-11-23 の grilling(issue #3554、#3671 を畳んだ)で決定。収束は、失敗した根に昇格失敗 question を立てて人間に見せる。ところが

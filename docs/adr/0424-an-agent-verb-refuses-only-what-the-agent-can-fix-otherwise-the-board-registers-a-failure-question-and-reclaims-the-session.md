@@ -1,5 +1,7 @@
 # agent の verb が拒否文を返すのは agent が自分で直せる失敗だけ —— 直せない失敗は盤面が failure question を登録して session を回収し、資源の停止は今の観測者に残す
 
+**Status 追記: 決定5 の「型は足さない」は verb の側に限る。無人の過程の側では、git の道具の失敗と名前の場所の状態の観測が型を持ち、資源を止めるのはその型だけになる。verb はその型でも拒否文を分けない([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定3・4、2026-11-27、issue #3938)。**
+
 2026-11-26 の triage → grilling(issue #3861、#3814 の ponytail-review の派生)で決定。`pose_probe` と `complete_task` の catch-all は、
 名前の場所の側の失敗も host の失敗も盤面の不変条件の破れも「Retry or escalate」の1文で root / worker に返していた。verb の時点の
 失敗を「拒むだけ」とした決定は3つの理由に立っていた。ADR 0359 決定4 は「verb の時点の失敗は資源の署名を持たない」を理由にしたが、

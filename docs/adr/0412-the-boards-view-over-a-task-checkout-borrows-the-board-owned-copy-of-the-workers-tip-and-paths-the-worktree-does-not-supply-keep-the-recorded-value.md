@@ -1,5 +1,7 @@
 # task の checkout を読む盤面の view は盤面所有の写しを借りる —— worktree が供給しない path は記録の値のまま
 
+**Status 追記: 決定2 の alternates の門は型を付けないまま、無人の過程では盤面のバグとして段ごとの帰属の分からない失敗の行き先(後始末なら落ちた後始末)へ行き、名前の場所の Quarantine にはならない([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定2・6、2026-11-27、issue #3938)。**
+
 **Status 追記: 追記(#3814)の「同じ秒の出題し直しは面接室のその写しの object の損傷を見つけない(ADR 0398 決定3 の限界)」は、閉包の中については限界でなくなる —— ADR 0398 決定3 は閉包の中では ADR 0411 決定4 が置き換えており、同じ commit の運び直しもその閉包の中の損傷を入れ直す([ADR 0425](0425-carrying-reaches-the-reinsertion-before-damage-inside-the-closure-in-the-named-place-fails-it-even-when-the-carried-commit-is-already-there.md) 決定2、2026-11-26、issue #3862)。**
 
 **Status 追記: Consequences の「完了の門が view の失敗を名指さず拒むだけなのは ADR 0359 決定4 のまま」は変わった —— worker の段の失敗は直し方を言う拒否文、それ以外は failure question と session の回収([ADR 0424](0424-an-agent-verb-refuses-only-what-the-agent-can-fix-otherwise-the-board-registers-a-failure-question-and-reclaims-the-session.md) 決定2・3、2026-11-26、issue #3861)。**

@@ -1,5 +1,7 @@
 # poll の想定外の例外は盤面を落とさない —— 何も握っていなければ行で報せて次の poll に任せ、続けば撃ち直しで確かめる question を立て、slot を握っていれば worker が走らなかった pickup として後始末へ入る
 
+**Status 追記: 決定3 の「slot を握った後の想定外の例外は `spawn_failed`」は、pickup の準備と worker の準備の catch で型の付かない失敗にも届く —— 名前の場所の Quarantine に畳まない([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定2、2026-11-27、issue #3938)。**
+
 **Status 追記: registry が読めずに投げた poll は、registry の Quarantine(`registryUnreadable`)が開いていれば決定1 の行にも決定2 の計測にも数えない —— 止まりは registry の読み込みの1点が立て、人間には盤面全体の停止として届く([ADR 0403](0403-a-landing-roots-failure-always-reaches-a-human-and-an-unreadable-resource-stops-once-on-its-own-axis.md) 決定5、2026-11-23、issue #3554)。**
 
 **Status 追記: 決定4 の床の (A) の枝は消え、床は「log して続ける」に戻る —— 盤面 DB の拒否は `openDb` が返す handle が投げた所で同期に process を終えるので、床に届かない([ADR 0389](./0389-the-board-db-handle-classifies-a-refusal-where-it-is-thrown-and-ends-the-process-synchronously-reads-included.md)、2026-11-21、issue #2868)。**
