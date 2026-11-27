@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, type TaskScopedPayload } from "../src/events.js";
 import { startWorkThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
 import { createLanding, type Landing, landingState } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
@@ -11,14 +11,16 @@ import { questionKindOf } from "../src/question-kind.js";
 import { startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { getTask, hasTaskBranch, listBoard, listChildren, logDecision, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, fillEmptyWorkspace, getTask, hasTaskBranch, listBoard, listChildren, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { commitTriage, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { refreshProtectedBranch, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
 import {
+  answerPromotion,
+  answerWorkspaceQuarantine,
   attachUnsettledChild,
   boardEvents,
   commitThroughTaskCheckout,
@@ -31,11 +33,14 @@ import {
   mergeOnGitHub,
   openBoard,
   openLocalMergeQuestions,
+  promotionFailures,
   type RegisteredReef,
   recordPrOpenedOutsideConvergence,
   reefWithPrRootAndChild,
   registeredReef,
   reRegister,
+  settleRepairNotMergedBack,
+  tearDownRepair,
 } from "./landing-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -187,7 +192,7 @@ it("ブランチを失って死んだ祖先の下に既に在る work の子も�
 });
 
 /** `reefWithPrRootAndChild` の根の PR は GitHub で merge された。`observed` では盤面が外の merge を観測したが収束はまだ着地を終えていない ——
- *  削除の扉は根も子も終え、根だけが到達の記録(`pr_merge_observed`)を持つ。`landed` では収束が内容で根の着地を終えた(`landing_finished`)。 */
+ *  削除の扉はこの根を拒む(ADR 0434 決定2)。`landed` では収束が内容で根の着地を終えた(`landing_finished`、到達の記録)。 */
 async function mergedRootAndChild(kind: "observed" | "landed" = "observed") {
   const c = await reefWithPrRootAndChild(kind === "observed" ? "escalate" : "external");
   await mergeOnGitHub(c.workspace, c.root.id);
@@ -201,21 +206,16 @@ async function mergedRootAndChild(kind: "observed" | "landed" = "observed") {
   return c;
 }
 
-it("削除の前に自身の到達の記録を持つ根は帰り先の無い系譜に数えず修理が立ち、その記録を継がない done の子は数える", async () => {
-  const c = await mergedRootAndChild();
-
-  await c.door();
-
-  expect(landingState(c.db, getTask(c.db, c.child.id)!)).toBe("workspace_deleted");
-  expect(getTask(c.db, workChild(c.db, c.clock, c.root.id).id)!.status).toBe("todo");
-  expect(() => workChild(c.db, c.clock, c.child.id)).toThrow(`no work task grows here: ${deletedReason(c.child)}`);
-});
-
 it.each([
   ["収束が着地を終えた根", "landed"],
-  ["削除の前に merge の観測を持つ根", "observed"],
+  // ADR 0434 決定2: 内容の届いた merge 済みの根も、観測の直後は扉が拒み、収束が読み終えた後に通る
+  ["merge を観測した直後は扉が拒み、収束が内容の届いたことを読み終えた根", "observed"],
 ] as const)("fresh clone で登録し直した名前で、%s の下に足した子は拾われて保護ブランチから分かれ、失われた event は書かれない", async (_root, kind) => {
   const c = await mergedRootAndChild(kind);
+  if (kind === "observed") {
+    await expect(c.door()).rejects.toMatchObject({ reasons: [{ code: "merged_pr_landing_unfinished", task_ids: [c.root.id] }] });
+    await c.landing.converge();
+  }
   const fresh = await reRegisterOnFreshClone(c);
   const added = workChild(c.db, c.clock, c.root.id);
 
@@ -229,7 +229,7 @@ it.each([
   expect(listBoard(c.db).filter((t) => t.type === "question" && t.status === "todo")).toEqual([]);
 });
 
-it("着地が終わっていない着地済みの祖先のブランチが名前の場所に無い場合は、今どおり基準との比較が先に止める", async () => {
+it("merge を観測して着地が終わっていない祖先のブランチが名前の場所に無い場合は、今どおり基準との比較が先に止める", async () => {
   const c = await mergedRootAndChild();
   const added = workChild(c.db, c.clock, c.root.id);
   const rootTip = git(c.workspace.path, "rev-parse", `task/${c.root.id}`);
@@ -240,6 +240,66 @@ it("着地が終わっていない着地済みの祖先のブランチが名前�
   expect(worker.started).toEqual([]);
   expect(hasTaskBranch(c.db, added.id)).toBe(false);
   expect(getTask(c.db, openQuarantineQuestion(c.db, "workspace", "reef")!.id)!.purpose).toContain(`was: ${rootTip} refs/heads/task/${c.root.id}`);
+});
+
+// ADR 0421 Status 追記(#3895): 子は根の記録を継がない —— merge の後に完了した子は自分で根になり、根の到達の記録は子の内容が届いたことを言わない
+it("到達の記録を持つ根の下で、削除の扉が着地を終えた子は帰り先の無い系譜に数え、その下の work の子はその子を名指して拒まれる", async () => {
+  const { db, clock } = await openBoard();
+  const root = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c", workspace: "reef" }, clock.now(), ...HUMAN_WEBUI);
+  const child = registerTask(db, { type: "work", title: "child", purpose: "p", completion_criteria: "c", parent_id: root.id }, clock.now(), ...HUMAN_WEBUI);
+  fillEmptyWorkspace(db, child.id, "reef");
+  const board = (taskId: string, payload: TaskScopedPayload) => appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: clock.now() });
+  for (const task of [root, child]) {
+    board(task.id, { kind: "task_branch_created", sha: "0".repeat(40), workspace: "reef" });
+    completeTask(db, getTask(db, task.id)!, FULL_HANDOFF, "worker", clock.now(), "worker");
+  }
+  board(root.id, { kind: "landing_finished", pr_number: 1, basis: "merge" });
+  board(child.id, { kind: "landing_ended_workspace_deleted", workspace: "reef" });
+
+  expect(() => workChild(db, clock, child.id)).toThrow(`no work task grows here: ${deletedReason(getTask(db, child.id)!)}`);
+});
+
+// ADR 0434 決定1〜3(#3921 の実測の形): 収束が push する前に修理を merge back した根の PR を GitHub が merge しても、その修理は届いていない
+it("push の前に修理を merge back した根の PR が merge されても、扉は収束が根を読み終えるまで拒み、断念と答えた後に通して確認がその根を名指し、同じ checkout で登録し直した名前で根の下の work の子は帰り先なしで拒まれる", async () => {
+  const c = await reefWithPrRootAndChild("escalate");
+  const repair2 = await settleRepairNotMergedBack(c.db, c.clock, c.workspace, c.root.id, "repair2.txt");
+  tearDownRepair(c.db, c.clock, c.workspace, repair2);
+  await mergeOnGitHub(c.workspace, c.root.id);
+  c.github.scriptMergedOutside(1);
+  await c.landing.tick("outside_merge");
+  expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("merge_observed");
+
+  await expect(c.door()).rejects.toMatchObject({ name: "DeletionBlockedError", reasons: [{ code: "merged_pr_landing_unfinished", task_ids: [c.root.id] }] });
+
+  await c.landing.converge();
+  const [failure] = promotionFailures(c.db, c.root.id);
+  expect(failure!.purpose).toContain(`PR #1 is already merged, but merge-backed repair work on task/${c.root.id} still has content to land`);
+  await answerPromotion(c.db, c.clock, c.landing, c.workspace, failure!, "abandon promotion");
+
+  await expect(c.door(false)).rejects.toMatchObject({
+    name: "DeletionConfirmationRequiredError",
+    landingEnds: [{ id: c.root.id, pr_number: 1, pr_head_lacks_unpushed_content: true }, { id: c.child.id }, { id: repair2.id }],
+  });
+  await reRegister(c.db, c.reef, c.workspace, () => {}, c.landing);
+
+  expect(() => workChild(c.db, c.clock, c.root.id)).toThrow(`no work task grows here: ${deletedReason(c.root)}`);
+});
+
+// ADR 0434 決定2: 扉は記録だけで読むので、名前の場所に根のブランチが無くても拒む。それでも収束は Quarantine を出し、人間の回答で抜けられる
+it("ブランチの無い merge 済みの根でも扉は拒み、収束が出す workspace の Quarantine に `restore the baseline` と答えれば、収束の次の回が着地を終えて扉が通る", async () => {
+  const c = await mergedRootAndChild();
+  git(c.workspace.path, "branch", "-D", `task/${c.root.id}`);
+  const refused = { code: "merged_pr_landing_unfinished", task_ids: [c.root.id] };
+  await expect(c.door()).rejects.toMatchObject({ reasons: expect.arrayContaining([refused]) });
+
+  await c.landing.converge();
+  const quarantine = openQuarantineQuestion(c.db, "workspace", "reef")!;
+  expect(getTask(c.db, quarantine.id)!.purpose).toContain(`refs/heads/task/${c.root.id}`);
+  await answerWorkspaceQuarantine(c, getTask(c.db, quarantine.id)!, undefined, "restore the baseline");
+  const verdicts = await c.landing.converge();
+
+  expect(verdicts.find(({ taskId }) => taskId === c.root.id)?.verdict).toMatchObject({ kind: "nothing_to_land" });
+  await c.door();
 });
 
 /** `place` の packed-refs に `ref` の壊れた行を並びの位置に置く —— for-each-ref の名指しの読みは、探す範囲の頭のこの行を黙って飛ばす。 */

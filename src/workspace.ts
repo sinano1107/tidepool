@@ -784,7 +784,7 @@ export class RoomCopyGitlinkError extends Error {
 export class NamedPlaceSideError extends Error {}
 
 /** ADR 0364 決定2 / ADR 0411 決定3: 盤面所有の写しから名前の場所へ tip を fetch する段と、検証済みの写しで名前の場所の値と比べる段の失敗 ——
- *  名前の場所の側(解放なら quarantine、verb なら拒むだけ)。 */
+ *  名前の場所の側(解放なら quarantine、verb は資源の停止を登録せず回収する、ADR 0424 決定2・3)。 */
 export class NamedPlaceFetchError extends NamedPlaceSideError {}
 
 /** ADR 0411 決定2・3: 作業台の tip の検証を通った写し(名前の場所の objects を借りる、`judgeWorkbench`)で名前の場所の値と比べる手 `compare` を
@@ -3780,8 +3780,8 @@ function recordedRef(db: Db, workspaceName: string, ref: string): string | undef
 }
 
 /** 基準の比較で動いた ref が見つかった —— pickup と解放は workspace quarantine に落とし(pickup は repo アクセスの案内を付けない ——
- *  fetch の失敗ではなく、案内は repo アクセスの失敗の瞬間だけのもの、ADR 0067 決定2)、完了の門は worker を拒むだけで(ADR 0359 決定4 /
- *  ADR 0373 決定12)、受理のやり直しは回答の拒否として投げる。 */
+ *  fetch の失敗ではなく、案内は repo アクセスの失敗の瞬間だけのもの、ADR 0067 決定2)、完了の門は資源の停止を登録せず session を回収し
+ *  (ADR 0424 決定2・3)、受理のやり直しは回答の拒否として投げる。 */
 export class RefsMovedError extends Error {}
 
 /** ADR 0064 の不変条件の1つの比較器で、通れば2値行を畳む(ADR 0351 決定2・4): ref がすべて基準の値のままであることを要求する ——
@@ -4374,7 +4374,7 @@ export function buildWorkspaceResolver(
  *  synchronous request (registration, a quarantine/merge answer) is not this
  *  seam — those fail fast with a DomainError instead (ADR 0009). `onStop` は止めた資源を pickup の呼び手へ渡す(ADR 0274)。
  *  ADR 0363 決定2: worker の verb は呼ばない —— 走った後の drift の観測者は後始末、session の後に PR が待つ間は landing の
- *  2 つの poll で(ADR 0366 決定4)、verb は拒むだけ。 */
+ *  2 つの poll で(ADR 0366 決定4)、verb は資源の停止を登録しない(拒むか回収する、ADR 0424 決定2・3)。 */
 export function resolveOrQuarantine(
   db: Db,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
@@ -4390,7 +4390,7 @@ export function resolveOrQuarantine(
 
 /** 名前が registry に無い(drift)ときだけ `onDrift` に渡して undefined を返す。他の失敗は投げる。drift を登録するか・拒むかは
  *  呼び手が決める —— 登録するのは観測者の3人: 走る前の pickup の門、走った後の後始末、session の後に PR が待つ間の landing の
- *  2 つの poll(ADR 0363 決定2 / ADR 0366 決定4)。worker の verb は拒むだけ。 */
+ *  2 つの poll(ADR 0363 決定2 / ADR 0366 決定4)。worker の verb は登録しない(拒むか回収する、ADR 0424 決定2・3)。 */
 export function resolveUnlessDrifted(
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
   taskWorkspace: string | null,

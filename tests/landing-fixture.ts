@@ -11,6 +11,7 @@ import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
   createLanding,
   type Landing,
+  mergedPrRootIdsWithUnfinishedLandingInWorkspace,
   prRootIdsWithUnpushedContentInWorkspace,
   registerPrPromotionFailureQuestion,
   taskIdsAwaitingLandingInWorkspace,
@@ -596,11 +597,12 @@ export function answerWorkspaceQuarantine(
   { db, clock, workspace, landing, workbenchBase }: { db: Db; clock: FakeClock; workspace: WorkspaceConfig; landing: Landing; workbenchBase?: string },
   question: Task,
   pollNow: () => void = () => {},
+  answer = "repaired by hand",
 ) {
   return submitAnswer(
     { db, pollNow, landing, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db, workspace, workspacesDir: workbenchBase }) },
     getTask(db, question.id)!,
-    ["repaired by hand"],
+    [answer],
     undefined,
     () => clock.now(),
     "webui",
@@ -810,6 +812,7 @@ export function deletionReaders(db: Db, resolve: WorkspaceResolver | undefined, 
     listAwaitingLandingTaskIds: (name) => taskIdsAwaitingLandingInWorkspace(db, resolve, name),
     listUnpushedPrRootIds: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name),
     listLandingInProgressTaskIds: (name) => (landing ? taskIdsBeingLandedInWorkspace(db, landing, name) : []),
+    listMergedPrRootIdsWithUnfinishedLanding: (name) => mergedPrRootIdsWithUnfinishedLandingInWorkspace(db, name),
     listPrRootIdsLackingUnpushedContent: (name) => prRootIdsWithUnpushedContentInWorkspace(db, resolve, name, { declined: true }),
   };
 }

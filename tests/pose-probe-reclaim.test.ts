@@ -12,6 +12,7 @@ import {
   bootTidepool,
   callAsTask,
   checkoutOf,
+  expectPoseReclaimed,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   makeWorkspace,
@@ -67,23 +68,6 @@ async function pickedRoot(name: string) {
   return { board, root, session, room: recordedInterviewRoom(board.db, root.id)!.path, checkout: checkoutOf(board.db, root.id) };
 }
 
-/** pose_probe の応答が session の終わりで、`fragment` を載せた failure question が立ち、出題・監査・資源の停止が無い。
- *  後始末は回収済み観測の後ろなので、ここまでの quarantine の無さは verb が登録しないことを言う。最後に容器を空けて後始末を待つ。 */
-async function expectReclaimed(board: Tidepool, rootId: string, session: string, res: any, fragment: string): Promise<void> {
-  expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain("this session is over");
-  expect(board.containers.forceReclaims).toEqual([session]);
-  const failure = (await questions(board)).find((question) => question.parent_id === rootId && question.question_cancel_option === "abandon" && question.status === "todo");
-  expect(failure.title).toContain("pose_probe");
-  expect(failure.purpose).toContain(fragment);
-  expect(failure.question_items.map((item: any) => item.options)).toEqual([["retry", "abandon"]]);
-  expect((await api(board.baseUrl, "GET", `/api/tasks/${rootId}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
-  expect((await api(board.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.type === "review")).toEqual([]);
-  expect(await servedQuarantineQuestion(board, "workspace", rootId)).toBeUndefined();
-  board.containers.fireEmpty(session);
-  await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
-}
-
 it("面接室の object が壊れていれば、pose_probe は自分で quarantine せずに failure question を登録して回収し、後始末が面接室を quarantine する —— question は2枚(ADR 0424 決定2・3 の前提)", async () => {
   const { board, root, session, room, checkout } = await pickedRoot("pose-reclaim-damaged-room");
   // 前の出題の写しを面接室に置き、worktree がその tree を再現したまま、面接室の側のその tree を壊す(#3814 の形)
@@ -98,7 +82,7 @@ it("面接室の object が壊れていれば、pose_probe は自分で quaranti
 
   const res = await callAsTask(board, root.id, "pose_probe", POSE);
 
-  await expectReclaimed(board, root.id, session, res, tree);
+  await expectPoseReclaimed(board, root.id, session, res, tree);
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeDefined();
   expect((await questions(board)).filter((question) => question.status === "todo")).toHaveLength(2);
 });
@@ -110,7 +94,7 @@ it("記録の上で root の task の checkout が開いていなければ、pos
 
   const res = await callAsTask(board, root.id, "pose_probe", POSE);
 
-  await expectReclaimed(board, root.id, session, res, `the task checkout of ${root.id} is not open`);
+  await expectPoseReclaimed(board, root.id, session, res, `the task checkout of ${root.id} is not open`);
 });
 
 it.each([
@@ -144,7 +128,7 @@ it.each([
   const res = await callAsTask(board, root.id, "pose_probe", POSE);
   Object.assign(hook, UNHOOKED);
 
-  await expectReclaimed(board, root.id, session, res, fragment);
+  await expectPoseReclaimed(board, root.id, session, res, fragment);
 });
 
 /** 面接室で `id` が正しく読める —— 中身の名前が `id` に一致する(`cat-file -p` は別の中身の loose を通す)。 */
@@ -193,7 +177,7 @@ it.each([
 
   const res = await callAsTask(board, root.id, "pose_probe", POSE);
 
-  await expectReclaimed(board, root.id, session, res, "");
+  await expectPoseReclaimed(board, root.id, session, res, "");
   const stopped = (await servedQuarantineQuestion(board, "workspace", root.id)) !== undefined;
   expect(stopped || readsWhole(room, id)).toBe(true);
 });

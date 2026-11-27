@@ -180,6 +180,25 @@ it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タ
   expect(refs[0]?.listAwaitingLandingTaskIds("lagoon")).toEqual([work.id]);
 });
 
+it("DELETE /api/workspaces/:name は PR の merge を記録したが着地がまだ終わっていない根の読み口を渡す(ADR 0434 決定2)", async () => {
+  const refs: WorkspaceDeletionReferences[] = [];
+  t = await bootTidepool({
+    workspaceAdmin: {
+      delete: async (_input, references) => {
+        refs.push(references);
+        return "/home/pi/work/lagoon";
+      },
+    },
+  });
+  const now = new Date();
+  const work = completedWork(t.db, now, "tako", undefined, "lagoon");
+  appendEvent(t.db, { taskId: work.id, at: now, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 7 } });
+
+  await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
+
+  expect(refs[0]?.listMergedPrRootIdsWithUnfinishedLanding("lagoon")).toEqual([work.id]);
+});
+
 it("DELETE refuses a workspace referenced only through an unsettled task's ancestor", async () => {
   const dir = await makeRegistry();
   t = await bootTidepool({

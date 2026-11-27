@@ -15,6 +15,7 @@ import {
   checkoutOf,
   commitWork,
   driftable,
+  expectCompletionReclaimed,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -26,6 +27,7 @@ import {
   questions,
   registerWork,
   seedOtherTaskBranch,
+  sessionId,
   submoduleSource,
   type Tidepool,
 } from "./harness.js";
@@ -419,20 +421,23 @@ it("親の work branch が gitlink を進めていても、子の tip が触っ�
   expect((await api(t.baseUrl, "GET", `/api/tasks/${child.id}`)).json.status).toBe("done");
 });
 
-it("記録した tip と fork 元の merge-base が取れなければ、確かめられないとして完了を拒む(ADR 0362 決定2)", async () => {
+it("記録した tip が fork 元と履歴を共有しなければ、complete_task は fork 元へ積み直す手を言って拒み、session は続く(ADR 0362 決定2 / ADR 0424 決定1)", async () => {
   const ws = await makeWorkspace("settings-no-merge-base");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "rewrite the history");
   await t.clock.advance(HOUR);
   const checkout = checkoutOf(t.db, task.id);
+  const fork = git(ws.path, "rev-parse", `task/${task.id}`);
   // 保護ブランチと履歴を共有しない tip
   git(checkout, "reset", "--hard", git(checkout, "commit-tree", git(checkout, "rev-parse", "HEAD^{tree}"), "-m", "orphan"));
 
   const result = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
 
   expect(result.isError).toBe(true);
-  expect(result.content[0].text).toContain("could not verify");
-  expect(result.content[0].text).toContain("Retry complete_task or escalate");
+  expect(result.content[0].text).toBe(
+    `the task branch tip shares no history with its fork source ${fork} — rebase your commits onto it and commit, then call complete_task again`,
+  );
+  expect(t.containers.forceReclaims).toEqual([]);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 });
 
@@ -470,46 +475,23 @@ async function committedThenDrifted(title: string) {
   const checkout = checkoutOf(t.db, task.id);
   commitWork(checkout, "feature.txt", "the deliverable\n");
   registry.drifted = true;
-  return { ws, task, checkout, client: await mcpClient(t.mcpBaseUrl, task.id) };
+  const session = String(sessionId(t.db, task.id));
+  t.containers.hold(task.id);
+  return { ws, task, checkout, session };
 }
 
 const quarantineQuestions = async () => (await questions(t)).filter((q: any) => q.question_quarantine_kind !== null);
 
-it("実行中に名前が registry から消えた(drift)work の complete_task は done にせず、名前・escalate・残る task の checkout の在り処を言って拒み、呼び直しても Quarantine を立てない(ADR 0363 決定1・2・4)", async () => {
-  const { ws, task, checkout, client } = await committedThenDrifted("finish after the registry lost the workspace");
-
-  const first: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
-  const again: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
-  await client.close();
-
-  for (const refused of [first, again]) {
-    expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toContain(`"${ws.name}" is not in the workspace registry`);
-    expect(refused.content[0].text).toContain("escalate");
-    expect(refused.content[0].text).toContain(checkout);
-  }
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
-  expect(await quarantineQuestions()).toEqual([]);
-});
-
-it("issue #3094 の再現: drift の後の完了は拒まれ、escalate の後始末が Quarantine を1枚立て、worker の commit は checkout にだけ残って記録の task branch に入らない(ADR 0363 決定1・4)", async () => {
-  const { ws, task, checkout, client } = await committedThenDrifted("ship while the registry loses the workspace");
+it("issue #3094 の再現: drift の後の完了は回収され、後始末が Quarantine を1枚立て、worker の commit は checkout にだけ残って記録の task branch に入らない(ADR 0363 決定1・4 / ADR 0424 決定3)", async () => {
+  const { ws, task, checkout, session } = await committedThenDrifted("ship while the registry loses the workspace");
   const tip = git(checkout, "rev-parse", "HEAD");
 
-  const refused: any = await client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
-  const escalated: any = await client.callTool({
-    name: "escalate",
-    arguments: { context: "the workspace left the registry", questions: [{ title: "where now?", options: ["restore it", "drop it"], recommendation: "restore it" }] },
-  });
-  await client.close();
+  const res = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
 
-  expect(refused.isError).toBe(true);
-  expect(escalated.isError ?? false).toBe(false);
-  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined());
+  await expectCompletionReclaimed(t, task.id, session, res, `unknown workspace: ${ws.name}`, ws.name);
   const [quarantine, ...others] = await quarantineQuestions();
   expect(others).toEqual([]);
   expect(quarantine).toMatchObject({ question_quarantine_kind: "workspace", question_quarantine_value: ws.name });
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).not.toBe("done");
   expect(git(checkout, "rev-parse", "HEAD")).toBe(tip);
   expect(git(ws.path, "rev-parse", `task/${task.id}`)).not.toBe(tip);
 });
