@@ -1,5 +1,7 @@
 # 失われたタスクブランチは系譜が記録で「透明」か「死んだ」と読み、数える前に盤面が origin から取りに行き、cancel の項は木のまま読む
 
+**Status 追記: 決定1 の「内容が保護ブランチに届いた着地の記録」は、git で確かめた後に書く記録(`landing_finished` / `local_merge_executed`)だけになる —— PR の merge の記録(`pr_merged` / `pr_merge_observed`)では透明にならない([ADR 0434](0434-only-a-record-written-after-git-confirms-it-says-a-tasks-content-reached-and-the-delete-door-refuses-a-merged-root-whose-landing-is-unfinished.md) 決定1、2026-11-27、issue #3921)。**
+
 **Status 追記: 下の追記の「削除の扉が着地を終えた祖先」は、自身が到達の記録(決定1 が数える種類)を持たないものに限る。飛ばす「着地済みの祖先」は、着地の候補でなく、自身の到達の記録か `nothing_to_land` を持つ祖先である([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) の Status 追記、2026-11-27、issue #3895)。**
 
 **Status 追記: 決定3 の「失われた祖先に git を当てない」に、着地済みの祖先のうちタスクブランチが名前の場所に無いものが加わる —— 系譜の読みは読まずに飛ばし、失われた event は書かない。決定3 の帰り先なしには、削除の扉が着地を終えた祖先を数える task も入る([ADR 0421](0421-the-delete-door-ends-the-landing-of-every-completed-task-it-leaves-under-the-name-and-refuses-while-the-board-still-has-something-to-carry.md) 決定3・5、2026-11-26、issue #3890)。**
