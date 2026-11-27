@@ -1,259 +1,88 @@
-import { afterEach, expect, it } from "vitest";
-import { AUTHORITY_WILDCARD } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { expect, it } from "vitest";
+import { openDb } from "../src/db.js";
+import { listEvents } from "../src/events.js";
+import { approvalAnnotation, cancelTaskDirectly, declarePremiseBreach, getTask, listChildren, placedRoots, presentTask, registerFailureQuestion, registerTask } from "../src/tasks.js";
+import { answerQuestionViaWebui, decomposeTaskViaWorker, HUMAN_WEBUI, markPickedUp } from "./harness.js";
 
-let t: Tidepool;
-afterEach(() => t?.stop());
+const NOW = new Date(0);
+const edit = {
+  title: "edit registry",
+  purpose: "update the registry",
+  completion_criteria: "the change is ready",
+  place_in_workspace: "reg",
+};
 
-it("decompose converts a child assigned outside allowed_workspaces into an approval question instead of registering it", async () => {
-  t = await bootTidepool({
-    authority: { name: "standard", guidance: "", allowed_workspaces: ["sandbox"] },
-  });
-  const parent = await registerWork(t, "parent");
-  await t.clock.advance(HOUR); // parent picked up into the slot
-  const client = await mcpClient(t.mcpBaseUrl, parent.id);
-  const res: any = await client.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "this piece belongs in the prod checkout",
-      children: [
-        {
-          title: "run the prod migration",
-          purpose: "apply the schema change",
-          completion_criteria: "schema matches the migration",
-          workspace: "prod",
-        },
-      ],
-    },
-  });
-  expect(res.isError ?? false).toBe(false);
-  await client.close();
+it.each([false, true])("requires approval for agent placement and creates a root with risk %s without raising the origin's risk", (risk_flag) => {
+  const db = openDb(":memory:");
+  try {
+    const parent = registerTask(db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c", workspace: "x" }, NOW, ...HUMAN_WEBUI);
+    decomposeTaskViaWorker(db, parent, { reason: "the registry is a separate repo", children: [{ ...edit, risk_flag }] }, "deckhand", NOW);
 
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+    expect(placedRoots(db, parent.id)).toEqual([]);
+    const [approval] = listChildren(db, parent.id);
+    expect(approval).toMatchObject({ type: "question", question_items: [{ options: ["approve", "reject"] }] });
+    expect(approvalAnnotation(db, approval!)).toEqual({ raises_parent_risk: false });
 
-  // the child never lands as a work task while its workspace is unapproved
-  expect(board.find((x: any) => x.title === "run the prod migration")).toBeUndefined();
+    answerQuestionViaWebui(db, approval!, ["approve"], NOW);
 
-  // an approval question stands in its place instead
-  const question = board.find((x: any) => x.type === "question" && x.parent_id === parent.id);
-  expect(question).toBeDefined();
-  expect(question.question_items[0].options).toEqual(["approve", "reject"]);
-  expect(question.question_items[0].recommendation).toBe("approve");
-
-  // the parent is blocked on that question (derived from the unfinished child)
-  expect(board.find((x: any) => x.id === parent.id).status).toBe("blocked");
+    const [root] = placedRoots(db, parent.id);
+    expect(getTask(db, root!.id)).toMatchObject({
+      parent_id: null,
+      based_on_decision: null,
+      workspace: "reg",
+      risk_flag: risk_flag ? 1 : 0,
+      origin_task_id: parent.id,
+      origin_decision: approval!.based_on_decision,
+    });
+    expect(getTask(db, parent.id)?.risk_flag).toBe(0);
+    expect(listEvents(db, parent.id).map(({ kind }) => kind)).not.toContain("risk_flag_raised");
+  } finally {
+    db.close();
+  }
 });
 
-it("a child targeting a workspace within allowed_workspaces registers directly, with no approval question", async () => {
-  t = await bootTidepool({
-    authority: { name: "standard", guidance: "", allowed_workspaces: ["sandbox"] },
-  });
-  const parent = await registerWork(t, "parent");
-  await t.clock.advance(HOUR);
-  const client = await mcpClient(t.mcpBaseUrl, parent.id);
-  const res: any = await client.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "this piece stays in the sandbox checkout",
-      children: [
-        {
-          title: "tidy the sandbox fixtures",
-          purpose: "keep the sandbox data current",
-          completion_criteria: "fixtures reflect the latest schema",
-          workspace: "sandbox",
-        },
-      ],
-    },
-  });
-  expect(res.isError ?? false).toBe(false);
-  await client.close();
+it.each([
+  ["review", "cancel origin"],
+  ["review", "cancel ancestor"],
+  ["repair", "cancel origin"],
+  ["repair", "cancel ancestor"],
+])("roots placed from a %s origin stay independent when we %s", (kind, cancel) => {
+  const db = openDb(":memory:");
+  try {
+    const task = { purpose: "p", completion_criteria: "c" };
+    const work = registerTask(db, { ...task, type: "work", title: "work", workspace: "x" }, NOW, ...HUMAN_WEBUI);
+    markPickedUp(db, work.id, NOW);
+    const review = registerTask(db, { ...task, type: "review", title: "review", parent_id: work.id }, NOW, ...HUMAN_WEBUI);
+    const origin = kind === "review" ? review
+      : registerTask(db, { ...task, type: "work", title: "repair", parent_id: review.id }, NOW, ...HUMAN_WEBUI);
+    decomposeTaskViaWorker(db, origin, {
+      reason: "two registry changes",
+      children: [edit, { ...edit, title: "a second registry edit" }],
+    }, "deckhand", NOW);
+    for (const question of listChildren(db, origin.id).filter((child) => child.type === "question")) {
+      answerQuestionViaWebui(db, question, ["approve"], NOW);
+    }
 
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const child = board.find((x: any) => x.title === "tidy the sandbox fixtures");
-  expect(child).toBeDefined();
-  expect(child.type).toBe("work");
-  expect(child.workspace).toBe("sandbox");
-  expect(board.filter((x: any) => x.type === "question")).toEqual([]);
-});
+    const [first, second] = placedRoots(db, origin.id);
+    const placed = getTask(db, first!.id)!;
+    const child = registerTask(db, { ...task, type: "work", title: "part of the registry edit", parent_id: placed.id }, NOW, ...HUMAN_WEBUI);
+    expect(presentTask(db, origin).status).toBe("todo");
+    expect(() => declarePremiseBreach(db, placed, "the premise was wrong", "deckhand", NOW, "worker"))
+      .toThrow(/a root task or an attached child escalates instead/);
 
-it("allowed_workspaces に明示 wildcard \"*\" があれば任意の workspace が無制限に振る舞う(issue #41)", async () => {
-  t = await bootTidepool({
-    authority: { name: "standard", guidance: "", allowed_workspaces: [AUTHORITY_WILDCARD] },
-  });
-  const parent = await registerWork(t, "parent");
-  await t.clock.advance(HOUR);
-  const client = await mcpClient(t.mcpBaseUrl, parent.id);
-  const res: any = await client.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "this piece belongs in the prod checkout",
-      children: [
-        {
-          title: "run the prod migration",
-          purpose: "apply the schema change",
-          completion_criteria: "schema matches the migration",
-          workspace: "prod",
-        },
-      ],
-    },
-  });
-  expect(res.isError ?? false).toBe(false);
-  await client.close();
+    registerFailureQuestion(db, placed, "registry edit failed", "the registry edit failed", NOW);
+    const failure = listChildren(db, placed.id).find((task) => task.type === "question")!;
+    answerQuestionViaWebui(db, failure, ["abandon"], NOW, { comment: "drop this edit" });
+    expect(getTask(db, placed.id)?.status).toBe("cancelled");
+    expect(getTask(db, child.id)?.status).toBe("cancelled");
+    expect(getTask(db, second!.id)?.status).toBe("todo");
+    expect(getTask(db, origin.id)?.status).toBe("todo");
 
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const child = board.find((x: any) => x.title === "run the prod migration");
-  expect(child).toBeDefined();
-  expect(child.type).toBe("work");
-  expect(child.workspace).toBe("prod");
-  expect(board.filter((x: any) => x.type === "question")).toEqual([]);
-});
-
-it("allowed_workspaces が空リストなら、明示された workspace は何であれ承認 question に変換される(issue #41 AC3: 空リストは従来どおり)", async () => {
-  t = await bootTidepool({
-    authority: { name: "standard", guidance: "", allowed_workspaces: [] },
-  });
-  const parent = await registerWork(t, "parent");
-  await t.clock.advance(HOUR);
-  const client = await mcpClient(t.mcpBaseUrl, parent.id);
-  const res: any = await client.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "this piece belongs in the prod checkout",
-      children: [
-        {
-          title: "run the prod migration",
-          purpose: "apply the schema change",
-          completion_criteria: "schema matches the migration",
-          workspace: "prod",
-        },
-      ],
-    },
-  });
-  expect(res.isError ?? false).toBe(false);
-  await client.close();
-
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(board.find((x: any) => x.title === "run the prod migration")).toBeUndefined();
-  const question = board.find((x: any) => x.type === "question" && x.parent_id === parent.id);
-  expect(question).toBeDefined();
-});
-
-async function decomposeOutOfBoundsWorkspace(t: Tidepool, parentId: string) {
-  const client = await mcpClient(t.mcpBaseUrl, parentId);
-  await client.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "this piece belongs in the prod checkout",
-      children: [
-        {
-          title: "run the prod migration",
-          purpose: "apply the schema change",
-          completion_criteria: "schema matches the migration",
-          workspace: "prod",
-        },
-      ],
-    },
-  });
-  await client.close();
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  return board.find((x: any) => x.type === "question" && x.parent_id === parentId);
-}
-
-it("approving a workspace-approval question registers the pending child with the requested workspace, without touching the parent's risk flag", async () => {
-  t = await bootTidepool({
-    authority: { name: "standard", guidance: "", allowed_workspaces: ["sandbox"] },
-  });
-  const parent = await registerWork(t, "parent");
-  await t.clock.advance(HOUR);
-  const question = await decomposeOutOfBoundsWorkspace(t, parent.id);
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["approve"],
-  });
-  expect(answered.status).toBe(200);
-
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const child = board.find((x: any) => x.title === "run the prod migration");
-  expect(child).toBeDefined();
-  expect(child.type).toBe("work");
-  expect(child.workspace).toBe("prod");
-  expect(child.risk_flag).toBe(0);
-
-  const updatedParent = board.find((x: any) => x.id === parent.id);
-  expect(updatedParent.risk_flag).toBe(0);
-
-  const parentEvents = (await api(t.baseUrl, "GET", `/api/tasks/${parent.id}/events`)).json;
-  expect(parentEvents.filter((e: any) => e.kind === "risk_flag_raised")).toEqual([]);
-});
-
-it("rejecting a workspace-approval question leaves the child unregistered", async () => {
-  t = await bootTidepool({
-    authority: { name: "standard", guidance: "", allowed_workspaces: ["sandbox"] },
-  });
-  const parent = await registerWork(t, "parent");
-  await t.clock.advance(HOUR);
-  const question = await decomposeOutOfBoundsWorkspace(t, parent.id);
-
-  const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
-    answers: ["reject"],
-    comment: "not needed",
-  });
-  expect(answered.status).toBe(200);
-
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(board.find((x: any) => x.title === "run the prod migration")).toBeUndefined();
-});
-
-it("a child with no workspace of its own inherits its parent's workspace, without triggering an approval question", async () => {
-  t = await bootTidepool({
-    authority: { name: "standard", guidance: "", allowed_workspaces: ["sandbox"] },
-  });
-  const root = await registerWork(t, "root");
-  await t.clock.advance(HOUR); // root picked up
-
-  const rootClient = await mcpClient(t.mcpBaseUrl, root.id);
-  await rootClient.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "this piece runs in the sandbox checkout",
-      children: [
-        {
-          title: "sandbox child",
-          purpose: "set up the sandbox checkout",
-          completion_criteria: "sandbox checkout is ready",
-          workspace: "sandbox",
-        },
-      ],
-    },
-  });
-  await rootClient.close();
-
-  await t.clock.advance(HOUR); // sandbox child picked up
-  const sandboxChild = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (x: any) => x.title === "sandbox child",
-  );
-
-  const childClient = await mcpClient(t.mcpBaseUrl, sandboxChild.id);
-  const res: any = await childClient.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "split the sandbox setup further",
-      children: [
-        {
-          title: "sandbox grandchild",
-          purpose: "seed the sandbox fixtures",
-          completion_criteria: "fixtures are seeded",
-        },
-      ],
-    },
-  });
-  expect(res.isError ?? false).toBe(false);
-  await childClient.close();
-
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const grandchild = board.find((x: any) => x.title === "sandbox grandchild");
-  expect(grandchild).toBeDefined();
-  expect(grandchild.type).toBe("work");
-  expect(grandchild.workspace).toBe("sandbox");
-  expect(board.filter((x: any) => x.type === "question")).toEqual([]);
+    const target = cancel === "cancel origin" ? origin : work;
+    cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+    expect(getTask(db, target.id)?.status).toBe("cancelled");
+    expect(getTask(db, second!.id)?.status).toBe("todo");
+  } finally {
+    db.close();
+  }
 });

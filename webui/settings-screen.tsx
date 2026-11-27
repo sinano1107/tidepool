@@ -579,10 +579,8 @@ const DANGEROUS_REASON_LABEL: Record<string, string> = {
     'Merge is auto_if_ci_green — a PR under this authority merges unattended once CI is green, with no human in the loop.',
   assignable_to_wildcard:
     'Assignable-to carries the wildcard "*" — an agent with this authority may delegate to any agent.',
-  allowed_workspaces_wildcard:
-    'Allowed-workspaces carries the wildcard "*" — this authority reaches every workspace on the board.',
   unprotect:
-    'Protection is being removed — tasks targeting this workspace stop converting to approval questions, and its PRs follow the merge dial without waiting for a human.',
+    'Protection is being removed. Its PRs will follow the merge dial.',
   review_allowed_commands_set:
     'Review-allowed commands is non-empty — review sessions in this workspace gain Bash access to those command prefixes, beyond the read-only default.',
   allowed_domains_set:
@@ -630,8 +628,8 @@ function sameStrings(a: string[], b: string[]) {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-// A list field for a profile's assignable_to / allowed_workspaces (issue #78):
-// picks from the registry's existing agents / workspaces rather than free text,
+// A list field for a profile's assignable_to (issue #78):
+// picks from the registry's existing agents,
 // so a value can't be a typo for a name that doesn't exist. Selected entries
 // render as removable Tags; the wildcard "*" rides as its own option — it is
 // exactly what the server flags as dangerous, so it stays selectable and the
@@ -759,18 +757,15 @@ function SkillListInput({ candidates, degraded, values, onChange }: {
   );
 }
 
-// The four editable profile fields, shared by the edit card and the create
+// The editable profile fields, shared by the edit card and the create
 // form so the two never drift (the profile analogue of the duplication the
 // agent card and its create form carry field-by-field).
-function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assignableTo, setAssignableTo, allowedWorkspaces, setAllowedWorkspaces, merge, setMerge }: {
+function ProfileFields({ agentNames, guidance, setGuidance, assignableTo, setAssignableTo, merge, setMerge }: {
   agentNames: string[];
-  workspaceNames: string[];
   guidance: string;
   setGuidance: (guidance: string) => void;
   assignableTo: string[];
   setAssignableTo: (names: string[]) => void;
-  allowedWorkspaces: string[];
-  setAllowedWorkspaces: (names: string[]) => void;
   merge: string;
   setMerge: (merge: string) => void;
 }) {
@@ -779,17 +774,13 @@ function ProfileFields({ agentNames, workspaceNames, guidance, setGuidance, assi
     <React.Fragment>
       <Input label="Guidance — prose injected into the agent's system prompt at spawn"
         multiline rows={4} value={guidance} onChange={(e) => setGuidance(e.target.value)}
-        hint={'name the act you want stopped — offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to / Allowed workspaces, or in a protected workspace — never in a flag, which declares rather than gates'}
+        hint={'name the act you want stopped — offering it as one example of a category ("irreversible or outward-facing") leaves the category call to the reader. And guidance is never a floor: a boundary that must hold goes in Assignable to, or in a protected workspace — never in a flag, which declares rather than gates'}
         placeholder="how an agent carrying this authority should act" />
       <ProfileListInput label="Assignable to"
         hint={'who this authority may delegate to — a registered agent or the human, or "*" for any (confirmed on save)'}
         candidates={agentNames.includes('human') ? agentNames : [...agentNames, 'human']}
         wildcardHint="any agent"
         values={assignableTo} onChange={setAssignableTo} />
-      <ProfileListInput label="Allowed workspaces"
-        hint={'which workspaces this authority may act in — pick a registered workspace, or "*" for every one (confirmed on save)'}
-        candidates={workspaceNames} wildcardHint="every workspace"
-        values={allowedWorkspaces} onChange={setAllowedWorkspaces} />
       <Select label="Merge authority" options={MERGE_OPTIONS} value={merge} onChange={(e) => setMerge(e.target.value)} />
     </React.Fragment>
   );
@@ -1000,11 +991,10 @@ function useWorkspaceSave(say: AppSay, onDone: () => Promise<void> | void) {
 // prefilled from GET /api/profiles. `name` is the file name
 // (authority/<name>.yaml), not renameable here, same as agents. No delete: an
 // agent referencing this profile would break at spawn (parent issue #55).
-function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, onChanged, edit }: {
+function ProfileRecord({ profile, agentNames, agentIcons, say, onChanged, edit }: {
   profile: SettingsProfile;
   agentNames: string[];
   agentIcons: Record<string, string>;
-  workspaceNames: string[];
   say: AppSay;
   onChanged: () => Promise<void>;
   edit: SettingsEditSlot;
@@ -1014,7 +1004,6 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const open = edit.isOpen(id);
   const [guidance, setGuidance] = React.useState(profile.guidance);
   const [assignableTo, setAssignableTo] = React.useState(profile.assignable_to ?? []);
-  const [allowedWorkspaces, setAllowedWorkspaces] = React.useState(profile.allowed_workspaces ?? []);
   const [merge, setMerge] = React.useState(profile.merge ?? '');
   const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onChanged(); }, 'PATCH /api/profiles/:name 409');
 
@@ -1024,7 +1013,6 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const changed = {
     guidance: guidance !== profile.guidance,
     assignable_to: !sameStrings(assignableTo, profile.assignable_to ?? []),
-    allowed_workspaces: !sameStrings(allowedWorkspaces, profile.allowed_workspaces ?? []),
     merge: (merge || '') !== (profile.merge ?? ''),
   };
   const dirty = Object.values(changed).some(Boolean);
@@ -1033,15 +1021,13 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
   const startEdit = () => edit.open(id, () => {
     setGuidance(profile.guidance);
     setAssignableTo(profile.assignable_to ?? []);
-    setAllowedWorkspaces(profile.allowed_workspaces ?? []);
     setMerge(profile.merge ?? '');
   });
 
   const submit = () => {
-    const body: Partial<Record<'guidance' | 'merge', string> & Record<'assignable_to' | 'allowed_workspaces', string[]>> = {};
+    const body: Partial<Record<'guidance' | 'merge', string> & Record<'assignable_to', string[]>> = {};
     if (changed.guidance) body.guidance = guidance;
     if (changed.assignable_to) body.assignable_to = assignableTo;
-    if (changed.allowed_workspaces) body.allowed_workspaces = allowedWorkspaces;
     if (changed.merge) body.merge = merge;
     save(async (confirm) => { await api(`/api/profiles/${encodeURIComponent(profile.name)}`, { ...body, ...confirm }, 'PATCH'); }, 'updated', profile.name);
   };
@@ -1057,19 +1043,15 @@ function ProfileRecord({ profile, agentNames, agentIcons, workspaceNames, say, o
           <FieldRow label="assignable to" kind={(profile.assignable_to ?? []).length ? 'tags' : 'unset'}
             tags={profile.assignable_to ?? []} agentIcons={agentIcons} wildcardHint="any agent"
             unsetLabel="nobody — this authority can't be delegated" />
-          <FieldRow label="allowed workspaces" kind={(profile.allowed_workspaces ?? []).length ? 'tags' : 'unset'}
-            tags={profile.allowed_workspaces ?? []} wildcardHint="every workspace"
-            unsetLabel="no workspace — this authority can't act anywhere" />
           <FieldRow label="merge authority" kind="mono" value={profile.merge} />
         </React.Fragment>
       )}
       {open && (
         <React.Fragment>
           <ProfileFields
-            agentNames={agentNames} workspaceNames={workspaceNames}
+            agentNames={agentNames}
             guidance={guidance} setGuidance={setGuidance}
             assignableTo={assignableTo} setAssignableTo={setAssignableTo}
-            allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
             merge={merge} setMerge={setMerge} />
           <EditActions dirty={dirty} ok={!!merge} busy={busy} saveLabel="Save changes — commits to the registry"
             onSave={submit} onCancel={() => edit.close()} />
@@ -2921,9 +2903,8 @@ function NewAgentForm({ authorityProfiles, providerOptions, executionSettingsFai
 
 // The authority profile create form (issue #55 phase 3) — the 409
 // confirm_required round trip rides on useProfileSave, same as the edit card.
-function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
+function NewProfileForm({ agentNames, say, onCreated, edit }: {
   agentNames: string[];
-  workspaceNames: string[];
   say: AppSay;
   onCreated: () => Promise<void> | void;
   edit: SettingsEditSlot;
@@ -2933,17 +2914,16 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
   const nameReason = TidepoolRules.whyInvalidRegistryName(TidepoolRules.normalizeText(name));
   const [guidance, setGuidance] = React.useState('');
   const [assignableTo, setAssignableTo] = React.useState<string[]>([]);
-  const [allowedWorkspaces, setAllowedWorkspaces] = React.useState<string[]>([]);
   const [merge, setMerge] = React.useState('');
   const { busy, save, dialog } = useProfileSave(say, async () => { edit.close(); await onCreated(); }, 'POST /api/profiles 409');
   const dirty = !TidepoolRules.whyBlank(name) || !!guidance.trim() || assignableTo.length > 0
-    || allowedWorkspaces.length > 0 || !!merge;
+    || !!merge;
   useDirtySignal(edit, true, dirty);
 
-  // 作成扉は4フィールドすべてを常に載せる(ADR 0079 決定1 / ADR 0086 決定3)
+  // 作成扉はプロフィールのフィールドすべてを常に載せる(ADR 0079 決定1 / ADR 0086 決定3)
   const submit = () => save(
     async (confirm) => {
-      await api('/api/profiles', { name: TidepoolRules.normalizeText(name), guidance, assignable_to: assignableTo, allowed_workspaces: allowedWorkspaces, merge, ...confirm });
+      await api('/api/profiles', { name: TidepoolRules.normalizeText(name), guidance, assignable_to: assignableTo, merge, ...confirm });
     },
     'created', TidepoolRules.normalizeText(name),
   );
@@ -2954,10 +2934,9 @@ function NewProfileForm({ agentNames, workspaceNames, say, onCreated, edit }: {
       <Input label="Name" error={nameReason} value={name} onChange={(e) => setName(e.target.value)}
         placeholder="letters, digits, - _ . — becomes authority/<name>.yaml, not renameable later" />
       <ProfileFields
-        agentNames={agentNames} workspaceNames={workspaceNames}
+        agentNames={agentNames}
         guidance={guidance} setGuidance={setGuidance}
         assignableTo={assignableTo} setAssignableTo={setAssignableTo}
-        allowedWorkspaces={allowedWorkspaces} setAllowedWorkspaces={setAllowedWorkspaces}
         merge={merge} setMerge={setMerge} />
       <EditActions ok={!nameReason && !!merge} busy={busy} saveLabel="Add authority profile — commits to the registry"
         onSave={submit} onCancel={() => edit.close()} />
@@ -3192,9 +3171,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   // refreshes both, else the #55 completion path (create profile → referencing
   // agent can spawn) needs a manual page reload
   const refreshAfterProfile = async () => { await loadProfiles(); await loadAgents(); };
-  // the profile pickers offer the registry's current agents / workspaces so an
-  // assignable_to / allowed_workspaces entry can't name something that doesn't
-  // exist — the same lists the cards above already render, reused here
+  // The profile picker offers the registry's current agents.
   const agentNames = (agents ?? []).map((a) => a.name);
   const workspaceNames = (workspaces ?? []).map((w) => w.name);
 
@@ -3332,10 +3309,10 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
       rowSummary: (p) => (p.assignable_to ?? []).join(', ') || '—',
       record: (rec) => (
         <ProfileRecord profile={rec} agentNames={agentNames} agentIcons={agentIcons}
-          workspaceNames={workspaceNames} say={say} onChanged={refreshAfterProfile} edit={edit} />
+          say={say} onChanged={refreshAfterProfile} edit={edit} />
       ),
       createForm: () => (
-        <NewProfileForm agentNames={agentNames} workspaceNames={workspaceNames}
+        <NewProfileForm agentNames={agentNames}
           say={say} onCreated={refreshAfterProfile} edit={edit} />
       ),
       reload: refreshAfterProfile,

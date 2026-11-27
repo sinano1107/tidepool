@@ -1134,14 +1134,14 @@ it.each([
 ] as const)("%sの行への、%s%s の task の異議の commit が立てる子は %j —— 記憶の行は親を問わず memory_repair、判断の行は捨てた成果には work の修理子を立てず、どちらの修理子も自分の群の異議だけを運び、帰責 event と RCA は群を分けず状態に依らない(ADR 0268 決定3 / ADR 0271 決定1・2 / ADR 0272 決定1・2)", (rows, status, ancestor, titles) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-16T00:00:00.000Z");
-  const spec = { assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c", workspace: "charts" };
-  const root = ancestor ? registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI) : undefined;
+  const spec = { assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" };
+  const root = ancestor ? registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c", workspace: "charts" }, at, ...HUMAN_WEBUI) : undefined;
   const registered =
     status === "Interview の root"
       ? getTask(db, examineeRootId(db, interviewExaminee(db, at).id))!
       : root
         ? decomposeTaskViaWorker(db, root, { reason: "split", children: [spec] }, "deckhand", at)[0]!
-        : registerTask(db, { type: "work", ...spec }, at, ...HUMAN_WEBUI);
+        : registerTask(db, { type: "work", ...spec, workspace: "charts" }, at, ...HUMAN_WEBUI);
   const decision = logDecision(db, registered, "deckhand's call", "deckhand", at, "worker");
   const memory = recordNote(db, at, registered.id).event_id;
   if (status === "cancelled") cancelTaskDirectly(db, registered, null, at, {}, "webui");

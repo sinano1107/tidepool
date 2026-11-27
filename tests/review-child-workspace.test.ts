@@ -20,7 +20,7 @@ const ran = (db: Db, task: Task): Task => {
   return task;
 };
 
-describe("付帯子の review の登録(ADR 0290 決定1・2)", () => {
+describe("付帯子の review の登録(ADR 0384 決定1)", () => {
   it("workspace を指定しない付帯子の review は、列が NULL で保存される", () => {
     const db = openDb(":memory:");
     const parent = ran(db, register(db, { type: "work", workspace: "reef" }));
@@ -44,29 +44,6 @@ describe("付帯子の review の登録(ADR 0290 決定1・2)", () => {
     expect(listBoard(db).filter((task) => task.parent_id === parent.id)).toEqual([]);
   });
 
-  it("祖先と違う名前の明示は拒まれ、文はルート review を案内する", () => {
-    const db = openDb(":memory:");
-    const parent = ran(db, register(db, { type: "work", workspace: "reef" }));
-
-    expect(() => register(db, { type: "review", parent_id: parent.id, workspace: "lagoon" })).toThrow(/root review/);
-  });
-
-  // 実行前の親の下の付帯子 —— 盤面名義(異議由来の auditor RCA の形)で、ADR 0292 決定2 の門を通らずに ADR 0290 の検査に届く
-  it("固定済みの祖先が無いときは、どの名前の明示も拒まれる", () => {
-    const db = openDb(":memory:");
-    const parent = register(db, { type: "work" });
-
-    expect(() => boardReview(db, { parent_id: parent.id, workspace: "reef" })).toThrow(/nearest ancestor's workspace/);
-  });
-
-  it("列が NULL の分解子を越えて最も近い固定済みの祖先と比べる", () => {
-    const db = openDb(":memory:");
-    const root = register(db, { type: "work", workspace: "reef" });
-    const child = register(db, { type: "work", parent_id: root.id });
-
-    expect(() => boardReview(db, { parent_id: child.id, workspace: "lagoon" })).toThrow(/nearest ancestor's workspace/);
-    expect(boardReview(db, { parent_id: child.id, workspace: "reef" }).workspace).toBeNull();
-  });
 });
 
 describe("Executor の引けない親への review 子の登録(ADR 0292 決定2)", () => {

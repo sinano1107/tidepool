@@ -17,6 +17,7 @@ import { type AuthorityProfile, type MergeDial, UnknownAgentError } from "../src
 import {
   answerQuestion,
   completeTask,
+  fillEmptyWorkspace,
   getTask,
   listBoard,
   recordPrOpened,
@@ -2025,10 +2026,12 @@ it("workspace を解決できない、親を持つ完了 work は、workspace �
   const parent = landingWork(db, clock);
   const child = registerTask(
     db,
-    { type: "work", title: "lost child", purpose: "p", completion_criteria: "c", parent_id: parent.id, workspace: "ghost" },
+    { type: "work", title: "lost child", purpose: "p", completion_criteria: "c", parent_id: parent.id },
     clock.now(),
     ...HUMAN_WEBUI,
   );
+  // ADR 0372 決定4: a previously fixed child can still carry a different workspace.
+  fillEmptyWorkspace(db, child.id, "ghost");
   finish(db, clock, child);
 
   await expect(convergeOn(landing, child.id)).resolves.toEqual({

@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GitToolError } from "../src/git.js";
 import {
   authedClone,
   authedFetch,
@@ -653,6 +654,53 @@ describe("盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339
     });
 
     expect(stdout.toString().includes("password=inst-token")).toBe(answers);
+  });
+
+  it("origin の無い checkout からの網に出る git は、verb と在り処を名指して投げる", async () => {
+    const repo = await tempDir("tidepool-repo-");
+    git(repo, "init", "-b", "main");
+
+    expect(() => authedLsRemote(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "refs/heads/main")).toThrow(
+      `\`git ls-remote\` has no origin to reach (in ${repo})`,
+    );
+  });
+
+  // ADR 0441 決定4: 容量切れと読むのは手元の失敗だけ —— 相手が stderr に書いた行(`remote: …`)は相手の disk の話
+  it("相手の hook が「No space left on device」と書いて断った push は、host の失敗でなく今の素の Error で上がる", async () => {
+    const { remote, repo } = await checkoutOfBareRemote();
+    writeFileSync(join(remote, "hooks", "pre-receive"), "#!/bin/sh\necho 'fatal: write error: No space left on device' >&2\nexit 1\n", { mode: 0o755 });
+    git(repo, "commit", "--allow-empty", "-m", "next");
+
+    const err = (() => {
+      try {
+        authedPush(undefined, repo, GIT_NETWORK_TIMEOUT_MS, [["main", git(repo, "rev-parse", "HEAD")]]);
+      } catch (thrown) {
+        return thrown as Error;
+      }
+    })();
+
+    expect(err?.constructor).toBe(Error);
+    expect(err?.message).toMatch(new RegExp(`^\`git push\` failed \\(in ${repo}\\): .*remote: fatal: write error: No space left on device`, "s"));
+  });
+
+  // ADR 0441 決定4: cwd が無い失敗は型のまま通る —— 網に出る git の前の段(for-each-ref)の間に盤面所有の repo が消えた形
+  it("盤面所有の repo が網に出る直前に消えると、git の道具の失敗が subcommand と在り処を名指して上がる", async () => {
+    const { repo, sha } = await checkoutOfBareRemote();
+    const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+    const shim = await tempDir("tidepool-git-shim-");
+    writeFileSync(
+      join(shim, "git"),
+      `#!/bin/sh\ncase " $* " in *" for-each-ref "*) rm -rf '${boardHome()}'/repo-*;; esac\nexec '${real}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("PATH", `${shim}:${process.env.PATH}`);
+
+    expect(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, sha)).toThrow(
+      expect.objectContaining({
+        constructor: GitToolError,
+        message: expect.stringMatching(new RegExp(`^\`git fetch\` cannot run: the directory ${boardHome()}/repo-\\w+ does not exist$`)),
+      }),
+    );
   });
 
   it("cwd が無い呼び出しは上限つきの面でも subcommand と在り処を名指して投げる(issue #2722)", async () => {

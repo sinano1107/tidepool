@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { basename } from "node:path";
@@ -7,7 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { isNonAgentActorId } from "./actor-id.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { git, localGitEnv } from "./git.js";
+import { git, gitBytesWithInput } from "./git.js";
 import {
   authedFetch,
   authedLsRemote,
@@ -91,29 +90,17 @@ export interface AgentDefinition {
  *  ("gitignored, so I can just delete them"). Issue #489's 2026-08-25
  *  re-measurement, in `docs/real-environment-trial.md`, has the conditions and
  *  the counts. However it is written, guidance is never a floor (ADR 0013 /
- *  0035, GLOSSARY.md 「床(Floor)」): a boundary that must hold goes in the two
- *  allowlists below or in a protected workspace, where the act converts to an
+ *  0035, GLOSSARY.md 「床(Floor)」): a boundary that must hold goes in the
+ *  delegation allowlist below or an approval requirement, where the act converts to an
  *  approval question with no model in the path (ADR 0002 / 0013). Not in a
  *  flag — `risk` is a declaration the registrant makes, and `review` an opt-in
  *  to observation that widens nothing (GLOSSARY.md 「Risk flag」/「Review flag」).
  *  `assignable_to` (issue #11) is a machine-enforced delegation allowlist —
  *  confused-deputy prevention: a decompose child assigned outside this list
  *  converts to an approval question rather than registering (ADR 0002).
- *  `allowed_workspaces` (issue #11) is its spatial analogue: a decompose
- *  child explicitly targeting a workspace outside this list converts the
- *  same way. A profile loaded from the registry (via `authorityProfileSchema`
- *  below) always carries all three machine-read fields explicitly — omission
- *  is a load error (issue #41: "absent means unrestricted" was a silent
- *  footgun for registry authors; ADR 0079 決定1 extends the same line to
- *  `merge`). Unrestricted must instead be spelled out with the wildcard
- *  `"*"`, which `outsideAuthority` (tasks.ts) reads as "no restriction". The
- *  fields stay optional on this TS type only because `AuthorityProfile`
- *  values are also hand-built in code paths that never go through the
- *  registry loader — the read-only reviewer floor (`REVIEWER_AUTHORITY_PROFILE`
- *  below, ADR 0013) and per-task `resolveAuthority` overrides in tests —
- *  where omission legitimately still means unrestricted / inert; issue #41 and
- *  ADR 0079 are registry-side profile hygiene only, not a change to that
- *  code-side shape.
+ *  An agent placement in another workspace always requires approval (ADR 0384 決定3).
+ *  Registry authors must specify assignable_to and merge (issue #41, ADR 0079 決定1).
+ *  They are optional here for profiles built in code, including the reviewer floor below.
  *  `merge` (issue #11, three-valued since ADR 0079) declares **which surface
  *  the human's merge decision lives on**: `escalate` the board's question
  *  surface, `auto_if_ci_green` the profile's own authority (unattended once CI
@@ -123,7 +110,6 @@ export interface AuthorityProfile {
   name: string;
   guidance: string;
   assignable_to?: string[];
-  allowed_workspaces?: string[];
   merge?: MergeDial;
 }
 
@@ -134,8 +120,7 @@ export interface AuthorityProfile {
  *  (the repair types do the same with their own constants: their `## Authority` is
  *  their `REPAIR_NOTICES` line with no roster, ADR 0272 追記3 / ADR 0279 決定4). A code constant,
  *  not a registry entry, so the enforcement floor itself sits outside what
- *  Condensation's registry-edit loop could ever propose a diff against. `allowed_workspaces: []` blocks
- *  every explicit workspace target; `assignable_to: []` blocks every
+ *  Condensation's registry-edit loop could ever propose a diff against. `assignable_to: []` blocks every
  *  explicit assignee except the one structural exception decomposeTask
  *  carves out for a review's own repair children (the reviewed task's own
  *  assignee — ADR 0013). The same "task type overrides profile" line reaches
@@ -150,7 +135,6 @@ export const REVIEWER_AUTHORITY_PROFILE: AuthorityProfile = {
     "You are reviewing read-only. Never fix directly — findings become repair tasks.\n" +
     "Assign a repair to the worker in your roster: they executed the task you are reviewing.",
   assignable_to: [],
-  allowed_workspaces: [],
 };
 
 /** The merge dial's values, one source for both the schema below and every TS
@@ -376,12 +360,9 @@ const workspaceEntrySchema = z.object({
    *  registry の床もこの値で判定される(ADR 0381 決定1)。 */
   repo: z.string().optional(),
   notes: z.string().optional(),
-  /** Protected workspace (issue #15 layer 2 / ADR 0013): a decompose child
-   *  targeting this workspace converts to an approval question unconditionally,
-   *  regardless of the registering worker's authority profile. A workspace whose
-   *  declared `repo` is the registry's repository is protected without this flag
-   *  (ADR 0377 決定1・5 / ADR 0381 決定1) — "changes to it always need human approval" is a
-   *  resource-side invariant, independent of any profile's allowed_workspaces. */
+  /** Protected workspace (ADR 0013): PRs require human merge. An agent placement always requires a
+   *  question naming the destination (ADR 0384 決定3). A workspace that declares the registry's repo
+   *  is protected without this flag (ADR 0377 決定1・5 / ADR 0381 決定1). */
   protected: z.boolean().optional(),
   /** The protected branch this workspace's tasks fork from and PR onto
    *  (issue #27 / ADR 0023): task-branch fork point, PR base, and direct-
@@ -790,12 +771,7 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
     if (match) blobs.push({ sha: match[1]!, path: match[2]! });
   }
   const files = new Map<string, string>();
-  const out = execFileSync("git", ["cat-file", "--batch"], {
-    cwd: dir,
-    env: localGitEnv(),
-    stdio: ["pipe", "pipe", "pipe"],
-    input: `${blobs.map((b) => b.sha).join("\n")}\n`,
-  });
+  const out = gitBytesWithInput(`${blobs.map((b) => b.sha).join("\n")}\n`, dir, "cat-file", "--batch");
   // 出力は `<sha> blob <size>\n<content>\n` の繰り返し。本文は文字数でなく
   // バイト数で切る(マルチバイトの本文では両者がずれる)
   let offset = 0;
@@ -856,13 +832,12 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
 
 // closed schema: an escalation-rights field cannot exist even by
 // misconfiguration — upward escalation is never restricted (issue #7).
-// assignable_to/allowed_workspaces are required, not optional: a registry
+// assignable_to is required: a registry
 // author must spell out "*" for unrestricted rather than get it by omission
 // (issue #41).
 export const authorityProfileSchema = z.strictObject({
   guidance: z.string(),
   assignable_to: z.array(z.string()),
-  allowed_workspaces: z.array(z.string()),
   merge: z.enum(MERGE_DIAL_VALUES),
 });
 
@@ -908,7 +883,6 @@ function parseAuthorityFile(name: string, raw: string): AuthorityProfile {
     name,
     guidance: profile.guidance,
     assignable_to: profile.assignable_to,
-    allowed_workspaces: profile.allowed_workspaces,
     merge: profile.merge,
   };
 }

@@ -42,14 +42,14 @@ const PROFILES = [
     name: "implementer",
     guidance: "full read/write in assigned workspaces",
     assignable_to: ["reef-crab"],
-    allowed_workspaces: ["tidepool"],
+
     merge: "escalate",
   },
   {
     name: "reviewer",
     guidance: "read-only",
-    assignable_to: ["anemone"],
-    allowed_workspaces: ["*"],
+    assignable_to: ["*"],
+
     merge: "external",
   },
 ];
@@ -148,7 +148,7 @@ test("profile record renders tags and the wildcard", async ({ boot, page }) => {
   await page.getByTestId("settings-section-profiles").click();
   await page.getByTestId("settings-record-profiles-reviewer").click();
   await expect(page.getByText("read-only")).toBeVisible();
-  await expect(page.getByText("* — every workspace")).toBeVisible();
+  await expect(page.getByText("* — any agent")).toBeVisible();
   await expect(page.getByText("merge authority", { exact: true })).toBeVisible();
 });
 

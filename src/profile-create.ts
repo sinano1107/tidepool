@@ -23,15 +23,15 @@ import {
 import { AUTHORITY_WILDCARD } from "./tasks.js";
 
 /** The WebUI's profile-creation verb (issue #76, #55 phase 1): the schema's
- *  four fields, reused straight from `authorityProfileSchema` (registry.ts)
+ *  fields, reused straight from `authorityProfileSchema` (registry.ts)
  *  so the two never drift — `name` picks the file, never written into it
  *  (same as parseAuthorityFile). Unlike agents, profiles carry no
  *  machine-stamped version. */
 export type CreateProfileInput = z.infer<typeof authorityProfileSchema> & {
   name: string;
   /** 危険な値への人間の明示同意(ADR 0061 決定1)— workspace の `confirm` と
-   *  同じく入力に同乗する。profile の4フィールドではないので、ファイルには
-   *  書かれない(serializeProfileFile は4キーしか読まない)。 */
+   *  同じく入力に同乗する。profile のフィールドではないので、ファイルには
+   *  書かれない。 */
   confirmDangerous?: boolean;
 };
 
@@ -40,27 +40,22 @@ export type CreateProfileInput = z.infer<typeof authorityProfileSchema> & {
  *  than parsing prose. */
 export type DangerousValueReason =
   | "merge_auto_if_ci_green"
-  | "assignable_to_wildcard"
-  | "allowed_workspaces_wildcard";
+  | "assignable_to_wildcard";
 
 /** Pure judgment of whether a profile's values grant broad power (issue #76):
- *  `merge: auto_if_ci_green` (unattended merge) and either list carrying the
- *  wildcard (unrestricted delegation/workspace access). The enumeration counts
+ *  `merge: auto_if_ci_green` (unattended merge) and assignable_to carrying the
+ *  wildcard (unrestricted delegation). The enumeration counts
  *  values that widen the board's **unattended** outward effect — which is why
  *  `merge: external` is deliberately absent (ADR 0079 決定5). This layer only
  *  reports — `assertConfirmed` below is what turns a verdict into a refusal.
  *  Every field is optional because an absent one was not written by the human,
- *  so it never enters the judgment (issue #266 / ADR 0086) — create passes all
- *  three and is unchanged. */
+ *  so it never enters the judgment (issue #266 / ADR 0086) — create passes both and is unchanged. */
 export function dangerousValues(
-  input: Partial<Pick<CreateProfileInput, "assignable_to" | "allowed_workspaces" | "merge">>,
+  input: Partial<Pick<CreateProfileInput, "assignable_to" | "merge">>,
 ): DangerousValueReason[] {
   const reasons: DangerousValueReason[] = [];
   if (input.merge === "auto_if_ci_green") reasons.push("merge_auto_if_ci_green");
   if (input.assignable_to?.includes(AUTHORITY_WILDCARD)) reasons.push("assignable_to_wildcard");
-  if (input.allowed_workspaces?.includes(AUTHORITY_WILDCARD)) {
-    reasons.push("allowed_workspaces_wildcard");
-  }
   return reasons;
 }
 
@@ -156,7 +151,6 @@ function mergePatch(existing: AuthorityProfile, patch: UpdateProfileInput): Crea
     name: patch.name,
     guidance: patch.guidance ?? existing.guidance,
     assignable_to: patch.assignable_to ?? existing.assignable_to ?? [],
-    allowed_workspaces: patch.allowed_workspaces ?? existing.allowed_workspaces ?? [],
     merge: patch.merge ?? existing.merge ?? "escalate",
   };
 }
@@ -184,8 +178,8 @@ export async function deleteProfile(input: DeleteProfileInput, deps: ProfileAdmi
   if (!ownEntry(registry.authority, input.name)) throw new UnknownAuthorityProfileError(input.name);
   // 確認では買えない拒否が先(ADR 0061 根拠5 と同じ順序): 参照中の profile を
   // 消せば、その agent の spawn は quarantine ではなく素の失敗に落ちる(ADR 0087
-  // 決定2)。`assignable_to` / `allowed_workspaces` に名前が並んでいるだけの
-  // agent / workspace は参照ではない —— 許可先が1つ消えるだけで無害である。
+  // 決定2)。`assignable_to` に名前が並んでいるだけの
+  // agent は参照ではない —— 許可先が1つ消えるだけで無害である。
   const holders = Object.values(registry.agents)
     // 組み込みは profile map を引かない(ADR 0117 決定1 / agent.ts の1分岐)ので、
     // 同名の profile があっても参照者ではない
@@ -235,7 +229,6 @@ function sameEffectiveFields(existing: AuthorityProfile, input: CreateProfileInp
   return (
     existing.guidance === input.guidance &&
     sameStringArray(existing.assignable_to ?? [], input.assignable_to) &&
-    sameStringArray(existing.allowed_workspaces ?? [], input.allowed_workspaces) &&
     existing.merge === input.merge
   );
 }
@@ -248,7 +241,6 @@ function serializeProfileFile(profile: CreateProfileInput): string {
   return stringifyYaml({
     guidance: profile.guidance,
     assignable_to: profile.assignable_to,
-    allowed_workspaces: profile.allowed_workspaces,
     merge: profile.merge,
   });
 }

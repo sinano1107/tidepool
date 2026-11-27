@@ -777,7 +777,7 @@ export function startScheduler(deps: {
     if (!resolve) return { pass: await contentSourceFor(head, github, () => undefined).expand() };
     // board-driven async workspace use: registry drift quarantines the name
     // (ADR 0009) and the loop re-reads the stops before the next head
-    const resolved = resolveOrQuarantine(db, resolve, head.workspace, clock.now());
+    const resolved = resolveOrQuarantine(db, resolve, derivedWorkspace(db, head), clock.now());
     const checked = resolved && issueWorkspaceAtPickup(entered, resolved, resolve);
     if (!checked) return { skip: "head" };
     const ref = { workspace: checked, number: head.github_issue_number };
@@ -870,7 +870,7 @@ export function startScheduler(deps: {
     if (parent.github_issue_number === null || !github) return { pass: stored };
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     if (!resolve) return { pass: stored };
-    const resolved = resolveOrQuarantine(db, resolve, parent.workspace, clock.now());
+    const resolved = resolveOrQuarantine(db, resolve, derivedWorkspace(db, parent), clock.now());
     const checked = resolved && issueWorkspaceAtPickup(entered, resolved, resolve);
     if (!checked) return { skip: "head" };
     const ref = { workspace: checked, number: parent.github_issue_number };

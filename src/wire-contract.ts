@@ -463,7 +463,6 @@ export interface WireContract {
       name: string;
       guidance: string;
       assignable_to?: string[];
-      allowed_workspaces?: string[];
       merge?: string;
     }>;
   };

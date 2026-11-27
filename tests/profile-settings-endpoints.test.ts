@@ -22,7 +22,7 @@ it("POST /api/profiles は profile を createProfile へ渡し、201 を返す",
     name: "restricted",
     guidance: "Stay in your lane.",
     assignable_to: [],
-    allowed_workspaces: [],
+
     merge: "escalate",
   });
 
@@ -33,7 +33,7 @@ it("POST /api/profiles は profile を createProfile へ渡し、201 を返す",
       name: "restricted",
       guidance: "Stay in your lane.",
       assignable_to: [],
-      allowed_workspaces: [],
+
       merge: "escalate",
     },
   ]);
@@ -47,7 +47,7 @@ it("GET /api/profiles は編集フォーム用に全フィールドを返す", a
           name: "restricted",
           guidance: "Stay in your lane.",
           assignable_to: ["tako"],
-          allowed_workspaces: ["tidepool"],
+
           merge: "escalate",
         },
       ],
@@ -63,7 +63,7 @@ it("GET /api/profiles は編集フォーム用に全フィールドを返す", a
         name: "restricted",
         guidance: "Stay in your lane.",
         assignable_to: ["tako"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "escalate",
       },
     ],
@@ -91,7 +91,7 @@ it("POST は ProfileConfirmationRequiredError を 409 + confirm_required + 理�
     name: "powerful",
     guidance: "Merges on green.",
     assignable_to: [],
-    allowed_workspaces: [],
+
     merge: "auto_if_ci_green",
   });
 
@@ -117,7 +117,7 @@ it("POST は confirmDangerous をそのまま createProfile へ運ぶ", async ()
     name: "powerful",
     guidance: "Merges on green.",
     assignable_to: [],
-    allowed_workspaces: [],
+
     merge: "auto_if_ci_green",
     confirmDangerous: true,
   });
@@ -128,7 +128,7 @@ it("POST は confirmDangerous をそのまま createProfile へ運ぶ", async ()
       name: "powerful",
       guidance: "Merges on green.",
       assignable_to: [],
-      allowed_workspaces: [],
+
       merge: "auto_if_ci_green",
       confirmDangerous: true,
     },
@@ -148,7 +148,7 @@ it("PATCH /api/profiles/:name は URL の名前と body を updateProfile へ渡
   const res = await api(t.baseUrl, "PATCH", "/api/profiles/restricted", {
     guidance: "Updated guidance.",
     assignable_to: ["tako"],
-    allowed_workspaces: ["tidepool"],
+
     merge: "escalate",
   });
 
@@ -159,7 +159,7 @@ it("PATCH /api/profiles/:name は URL の名前と body を updateProfile へ渡
       name: "restricted",
       guidance: "Updated guidance.",
       assignable_to: ["tako"],
-      allowed_workspaces: ["tidepool"],
+
       merge: "escalate",
     },
   ]);
@@ -169,18 +169,18 @@ it("PATCH も同じ拒否を 409 に写す", async () => {
   t = await bootTidepool({
     profileAdmin: {
       update: async () => {
-        throw new ProfileConfirmationRequiredError("roaming", ["allowed_workspaces_wildcard"]);
+        throw new ProfileConfirmationRequiredError("roaming", ["assignable_to_wildcard"]);
       },
     },
   });
 
-  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roaming", { allowed_workspaces: ["*"] });
+  const res = await api(t.baseUrl, "PATCH", "/api/profiles/roaming", { assignable_to: ["*"] });
 
   expect(res.status).toBe(409);
   expect(res.json).toEqual({
     error: expect.any(String),
     confirm_required: true,
-    dangerous_values: ["allowed_workspaces_wildcard"],
+    dangerous_values: ["assignable_to_wildcard"],
   });
 });
 
@@ -195,12 +195,12 @@ it("PATCH も confirmDangerous をそのまま updateProfile へ運ぶ", async (
   });
 
   const res = await api(t.baseUrl, "PATCH", "/api/profiles/roaming", {
-    allowed_workspaces: ["*"],
+    assignable_to: ["*"],
     confirmDangerous: true,
   });
 
   expect(res.status).toBe(200);
-  expect(calls).toEqual([{ name: "roaming", allowed_workspaces: ["*"], confirmDangerous: true }]);
+  expect(calls).toEqual([{ name: "roaming", assignable_to: ["*"], confirmDangerous: true }]);
 });
 
 it("編集対象の未知 name(UnknownAuthorityProfileError)は 404", async () => {
@@ -215,7 +215,7 @@ it("編集対象の未知 name(UnknownAuthorityProfileError)は 404", async () =
   const res = await api(t.baseUrl, "PATCH", "/api/profiles/ghost", {
     guidance: "g",
     assignable_to: [],
-    allowed_workspaces: [],
+
     merge: "escalate",
   });
 
@@ -232,7 +232,7 @@ it("不正入力は 400(POST/PATCH とも zod で拒否)", async () => {
 
   // name 欠落
   expect(
-    (await api(t.baseUrl, "POST", "/api/profiles", { guidance: "g", assignable_to: [], allowed_workspaces: [], merge: "escalate" })).status,
+    (await api(t.baseUrl, "POST", "/api/profiles", { guidance: "g", assignable_to: [], merge: "escalate" })).status,
   ).toBe(400);
   // 未知キー(strictObject を extend しても strict が残る)
   expect(
@@ -240,7 +240,7 @@ it("不正入力は 400(POST/PATCH とも zod で拒否)", async () => {
       await api(t.baseUrl, "PATCH", "/api/profiles/x", {
         guidance: "g",
         assignable_to: [],
-        allowed_workspaces: [],
+
         merge: "escalate",
         bogus: 1,
       })
@@ -261,7 +261,7 @@ it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 
     name: "restricted",
     guidance: "g",
     assignable_to: [],
-    allowed_workspaces: [],
+
     merge: "escalate",
   });
 
@@ -271,10 +271,10 @@ it("registry の push 失敗(RegistryPushFailedError)は致命 — 502(ADR 0052 
 it("POST/PATCH は profileAdmin 未設定なら 503", async () => {
   t = await bootTidepool();
   expect(
-    (await api(t.baseUrl, "POST", "/api/profiles", { name: "x", guidance: "g", assignable_to: [], allowed_workspaces: [], merge: "escalate" })).status,
+    (await api(t.baseUrl, "POST", "/api/profiles", { name: "x", guidance: "g", assignable_to: [], merge: "escalate" })).status,
   ).toBe(503);
   expect(
-    (await api(t.baseUrl, "PATCH", "/api/profiles/x", { guidance: "g", assignable_to: [], allowed_workspaces: [], merge: "escalate" })).status,
+    (await api(t.baseUrl, "PATCH", "/api/profiles/x", { guidance: "g", assignable_to: [], merge: "escalate" })).status,
   ).toBe(503);
 });
 
@@ -291,7 +291,7 @@ it("不正な profile 名(InvalidAuthorityProfileNameError)は 400", async () =>
     name: "bad name",
     guidance: "g",
     assignable_to: [],
-    allowed_workspaces: [],
+
     merge: "escalate",
   });
 
@@ -311,7 +311,7 @@ it("その他の外部失敗は 502", async () => {
     name: "restricted",
     guidance: "g",
     assignable_to: [],
-    allowed_workspaces: [],
+
     merge: "escalate",
   });
 
@@ -347,11 +347,11 @@ it("PATCH の空配列は安全側 — 確認なしで通る", async () => {
 
   const res = await api(t.baseUrl, "PATCH", "/api/profiles/roamer", {
     assignable_to: [],
-    allowed_workspaces: [],
+
   });
 
   expect(res.status).toBe(200);
-  expect(calls).toEqual([{ name: "roamer", assignable_to: [], allowed_workspaces: [] }]);
+  expect(calls).toEqual([{ name: "roamer", assignable_to: [] }]);
 });
 
 it("空パッチ {} は 200 — no-change の扱いは domain 側(コミットなしの成功)", async () => {

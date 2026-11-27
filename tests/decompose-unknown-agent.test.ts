@@ -71,7 +71,7 @@ it("組み込みに解決される agent を assignee にした decompose の子
     agentRegistered: () => true,
     resolvesToBuiltIn: (name) => name === "fugu",
     // assignable_to の外なので、門が無ければ承認 question に変換される
-    authority: { name: "narrow", guidance: "g", assignable_to: [], allowed_workspaces: ["*"] },
+    authority: { name: "narrow", guidance: "g", assignable_to: [] },
   });
   const parent = await registerWork(t, "parent");
   await t.clock.advance(HOUR);

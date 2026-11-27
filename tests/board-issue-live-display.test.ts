@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, defaultingTo, HUMAN_WEBUI, type Tidepool } from "./harness.js";
+import { api, bootTidepool, defaultingTo, HUMAN_WEBUI, markPickedUp, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -193,4 +193,33 @@ it("同一issueへの並行リクエストはフェッチを共有し、GitHub�
   expect(board.status).toBe(200);
   expect(queue.status).toBe(200);
   expect(t.github.issueFetches.length).toBe(1);
+});
+
+it("lists and opens an unpicked issue-backed child in its tree's repository", async () => {
+  const home = { name: "home", path: "/fake/home" };
+  const project = { name: "project", path: "/fake/project" };
+  t = await bootTidepool({ workspace: home, resolveWorkspace: defaultingTo(home, project) });
+  const root = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work", title: "root", purpose: "p", completion_criteria: "c", assignee: "human", workspace: project.name,
+  });
+  expect(root.status).toBe(201);
+  markPickedUp(t.db, root.json.id, t.clock.now());
+  t.github.scriptIssue(49, { title: "project issue", body: "project details", comments: [] });
+  const child = await api(t.baseUrl, "POST", "/api/tasks", {
+    type: "work", github_issue_number: 49, workspace: project.name, parent_id: root.json.id, assignee: "human",
+    decompose_reason: "track the project issue separately",
+  });
+  expect(child.status).toBe(201);
+  expect(child.json).toMatchObject({ parent_id: root.json.id, workspace: project.name, has_task_branch: false });
+  const beforeDisplay = t.github.issueFetches.length;
+
+  const list = await api(t.baseUrl, "GET", "/api/tasks");
+  const detail = await api(t.baseUrl, "GET", `/api/tasks/${child.json.id}`);
+
+  expect(list.status).toBe(200);
+  expect(detail.status).toBe(200);
+  const issue = { id: child.json.id, title: "project issue", workspace: project.name, issue_live_state: "live" };
+  expect(list.json).toContainEqual(expect.objectContaining(issue));
+  expect(detail.json).toMatchObject(issue);
+  expect(t.github.issueFetches.slice(beforeDisplay)).toEqual([{ path: project.path, number: 49 }]);
 });

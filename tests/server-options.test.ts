@@ -23,12 +23,12 @@ import {
   declaredRegistryMode,
   WATCHDOG,
 } from "../src/server-options.js";
-import { decomposeTask, listBoard, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import type { Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { restoreBaseline } from "../src/workspace.js";
 import { composition } from "./board-composition.js";
 import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, type BootOptions, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, servedQuarantineQuestion } from "./harness.js";
+import { api, type BootOptions, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, initWorkspaceCheckout, leaveBaseline, makeWorkspace, questions, queueWork, recordCheckoutAtWorkspace, servedQuarantineQuestion } from "./harness.js";
 import { breakRegistry, commitWorkspaceDeletion, makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -672,7 +672,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(options.githubAuth).toBe(githubAuth);
 });
 
-it("宣言 repo が registry と同じ repo の workspace を名指しする分解は flag が無くても承認 question になる(ADR 0377 決定5 / ADR 0381 決定1)", async () => {
+it("宣言 repo が registry と同じ workspace は flag が無くても保護と判定する(ADR 0377 決定5 / ADR 0381 決定1)", async () => {
   const path = await tempDir("registry-edit-workspace-");
   const workspace = await initWorkspaceCheckout(path, "registry-edit");
   const origin = "/srv/git/registry.git";
@@ -680,23 +680,10 @@ it("宣言 repo が registry と同じ repo の workspace を名指しする分�
   git(registryDir, "remote", "add", "origin", origin);
   const board = { ...composition(), registryDir, workspaceName: workspace.name, defaultAgentName: "deckhand" };
   const options = await buildOptions(board);
-  const { db } = options;
   try {
-    const now = board.clock.now();
-    const parent = registerTask(db, { type: "work", title: "plan", purpose: "plan registry changes", completion_criteria: "registry changes proposed" }, now, ...HUMAN_WEBUI);
-    const picked = pickupTask(db, parent, "deckhand", now)!;
-
-    const children = decomposeTask(db, picked, {
-      reason: "propose one change",
-      children: [{ title: "change the registry", purpose: "edit configuration", completion_criteria: "configuration updated", workspace: workspace.name }],
-    }, "deckhand", now, { allowed_workspaces: [workspace.name] }, options.isProtectedWorkspace, "worker");
-
-    expect(children).toEqual([]);
-    expect(listBoard(db)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "question", parent_id: parent.id, purpose: expect.stringContaining('targets protected workspace "registry-edit"') }),
-    ]));
+    expect(options.isProtectedWorkspace?.(workspace.name)).toBe(true);
   } finally {
-    db.close();
+    options.db.close();
   }
 });
 

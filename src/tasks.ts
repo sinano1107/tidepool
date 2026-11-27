@@ -307,7 +307,10 @@ export interface AgentTierProposal<T extends TierRef = TierId> {
 /** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、段の追加は名前・説明・位置、段の説明の提案は文面、Interview は仮説・測る仕事・対象の effort・実環境、memory は文言と宛先。 */
 export type ProposalAmendment = RoutingRowChange | { to: Tier } | AddTierAmendment | { description: string } | InterviewAmendment | MemoryAmendment;
 
-export interface PendingChildSpec extends TaskContent {
+export type PendingChildSpec = (
+  | (TaskContent & { issue_ref?: never })
+  | { issue_ref: { number: number; workspace: string }; title?: never; purpose?: never; completion_criteria?: never }
+) & {
   review_by?: string[];
   review_tier?: string;
   /** The decision-log entry this child would have rested on had it registered
@@ -321,8 +324,7 @@ export interface PendingChildSpec extends TaskContent {
   /** The assignee originally requested at decompose time, honored as-is on
    *  materialization regardless of which reason(s) triggered this question. */
   assignee?: string;
-  /** The workspace originally requested at decompose time, honored as-is on
-   *  materialization regardless of which reason(s) triggered this question. */
+  /** ADR 0384 決定3: the target workspace of an approved root placement. */
   workspace?: string;
   /** The review flag originally requested at decompose time, honored as-is
    *  on materialization regardless of which reason(s) triggered this
@@ -336,7 +338,7 @@ export interface PendingChildSpec extends TaskContent {
    *  same line as `review_flag` above. */
   tier?: string;
   priority?: string;
-}
+};
 
 /** The SQLite shape of a task: items/answer/pending-child are JSON TEXT
  *  columns, and — unlike domain `Task` — the three content columns are
@@ -451,6 +453,8 @@ export interface RegisterTaskInput extends Partial<TaskContent>, Partial<Intervi
   review_tier?: string;
   type: TaskType;
   parent_id?: string;
+  /** Reason supplied when placing a GitHub issue under a parent. */
+  decompose_reason?: string;
   /** GLOSSARY.md's risk flag — declares external effect at registration. */
   risk_flag?: boolean;
   /** GLOSSARY.md's review flag — opts this task into on-completion review
@@ -460,9 +464,8 @@ export interface RegisterTaskInput extends Partial<TaskContent>, Partial<Intervi
   assignee?: string;
   /** Registers the task against a specific workspace (issue #11). Absent →
    *  null: at pickup the nearest fixed ancestor's, else the board default
-   *  (ADR 0233 / ADR 0372 決定1). A review child stores null
-   *  either way and follows its nearest fixed ancestor; naming another
-   *  workspace for it is refused (ADR 0290). */
+   *  (ADR 0233 / ADR 0372 決定1). For an issue reference this names its repo;
+   *  a matching fixed tree uses the reference as a child (ADR 0384 決定2). */
   workspace?: string;
   /** 1-4 question items (issue #30) — a single-item array is the degenerate
    *  case, not a distinct shape. */
@@ -976,11 +979,8 @@ function assertExecutionRequest(
   }
 }
 
-/** ADR 0016: unlike an ordinary task's workspace — empty until pickup
- *  writes the default's name (ADR 0233) — an issue-backed task's workspace is a
- *  confirmed value, required at registration, because it's the repo half of
- *  the identity of the issue it points at (a swapped default must never
- *  silently repoint it at another repo's same-numbered issue). */
+/** ADR 0016: registration requires the workspace as the repository half of the reference.
+ *  A child derives it from its fixed tree (ADR 0384 決定2), independently of the board default. */
 function assertGithubRef(input: RegisterTaskInput): void {
   if (input.github_issue_number !== undefined) {
     const reason = whyNotPositiveInteger(input.github_issue_number);
@@ -1010,25 +1010,21 @@ function assertGithubRef(input: RegisterTaskInput): void {
   }
 }
 
-/** The duplicate half of the registration gate (issue #104): while an
- *  unsettled issue-backed task holds the same reference (workspace name +
- *  issue number), registering another is refused — a duplicate is the same
- *  work twice, and whichever PR merges first closes the issue, turning the
- *  other into a dead reference and a manufactured failure question. Settled
- *  (done/cancelled — the task's own status, not its tree's) references never
- *  block: an abandon-then-retry re-registration is legitimate. Board-local
- *  by design — it needs no GitHub seam, so it holds on seam-less boards too,
- *  and the API gate reuses it as its cheap first check before the costly
- *  fetch + LLM inspection. */
+/** Issue #104: an unsettled issue-backed task or open approval reserves the workspace and issue number.
+ *  The human door checks before GitHub and the domain checks again when writing. The approval answer
+ *  closes its own reservation and registers the task in one transaction. */
 export function assertNoUnsettledIssueRef(db: Db, workspace: string, issueNumber: number): void {
   const dup = db
     .prepare(
       `SELECT id FROM tasks
-       WHERE workspace = ? AND github_issue_number = ?
-         AND ${unsettledSql("status")}
+       WHERE ${unsettledSql("status")} AND (
+         (github_issue_number = @number AND ${derivedWorkspaceSql("tasks")} = @workspace)
+         OR (json_extract(question_pending_child, '$.issue_ref.number') = @number
+           AND json_extract(question_pending_child, '$.issue_ref.workspace') = @workspace)
+       )
        LIMIT 1`,
     )
-    .get(workspace, issueNumber) as { id: string } | undefined;
+    .get({ workspace, number: issueNumber }) as { id: string } | undefined;
   if (dup) {
     throw new DomainError(
       `issue #${issueNumber} in workspace ${workspace} is already referenced by unsettled task ${dup.id}`,
@@ -1197,14 +1193,9 @@ function settledNoReturnAncestorCountedBy(db: Db, task: Pick<Task, "workspace" |
   return name === null ? undefined : noReturnAncestors(db, name, task, asOf).find(({ kind }) => kind === "lost-dead" || (kind === "deleted" && !lostOnly));
 }
 
-/** ADR 0380 決定5: `parentId` の下に立つ子の系譜が数える、決着した帰り先を奪う祖先 —— 親の workspace で問い(親自身もそれなら親)、子が別の
- *  workspace を明示すれば(`childWorkspace`)その系譜でも問う。子が workspace を明示するのは #3423 までは agent の分解だけ(人間の扉は
- *  ADR 0384 決定1 で拒む)。 */
-function settledNoReturnAncestorOfChild(db: Db, parentId: string, childWorkspace: string | undefined, asOf?: number): NoReturnAncestor | undefined {
-  return (
-    settledNoReturnAncestorCountedBy(db, { workspace: null, parent_id: parentId }, { asOf }) ??
-    (childWorkspace === undefined ? undefined : settledNoReturnAncestorCountedBy(db, { workspace: childWorkspace, parent_id: parentId }, { asOf }))
-  );
+/** ADR 0380 決定5 / ADR 0384 決定1: 子は workspace を入力に持たず、親の系譜で帰り先を問う。 */
+function settledNoReturnAncestorOfChild(db: Db, parentId: string, asOf?: number): NoReturnAncestor | undefined {
+  return settledNoReturnAncestorCountedBy(db, { workspace: null, parent_id: parentId }, { asOf });
 }
 
 /** 作成の箇所(ADR 0372 決定3 の固定、`start_work`)が読む「タスクブランチを持つ」—— 失われた event が効いていれば持たず、作り直す
@@ -1555,6 +1546,35 @@ export function registerTask(
   }
   assertQuestionSpec(input);
   assertGithubRef(input);
+  // ADR 0384 決定3: 分解元は task と判断の対で、子でない根だけが持つ —— based_on_decision は parent_id と組んで委譲の読み手を動かす
+  if ((input.origin_task_id === undefined) !== (input.origin_decision === undefined) ||
+    (input.origin_task_id !== undefined && (input.parent_id !== undefined || input.based_on_decision !== undefined))) {
+    throw new Error("an origin is a task and its decision together, on a root with no parent and no based_on_decision");
+  }
+  const issueWorkspace = input.github_issue_number === undefined ? undefined : input.workspace;
+  let issueParent: Task | undefined;
+  if (issueWorkspace !== undefined && input.parent_id !== undefined) {
+    issueParent = getTask(db, input.parent_id);
+    if (!issueParent) throw new DomainError("parent task not found");
+    // An approved child already carries its decomposition decision.
+    if (input.based_on_decision === undefined) {
+      assertHumanDecomposable(db, issueParent);
+      assertDecomposable(db, issueParent);
+    }
+    // ADR 0384 決定2: only a fixed, matching tree can carry the issue reference as a child.
+    const root = getTask(db, treeRootId(db, issueParent.id))!;
+    const rootIsFixed = latestEventOfTask(db, root.id, "task_picked_up") !== undefined || hasTaskBranch(db, root.id);
+    // ADR 0372 決定1: a previously fixed child can still hold a different workspace.
+    if (rootIsFixed && root.workspace === issueWorkspace && derivedWorkspace(db, issueParent) === issueWorkspace) {
+      input.workspace = undefined;
+      if (input.based_on_decision === undefined) input.assignee ??= defaultRepairAssignee(db, issueParent);
+    } else if (input.based_on_decision !== undefined) {
+      throw new DomainError("the issue workspace no longer matches the fixed tree — reject this approval and register the issue again");
+    } else {
+      input.parent_id = undefined;
+    }
+  }
+  if (!hasWorkspaceField(input) && input.workspace !== undefined) throw new DomainError(CHILD_TAKES_NO_WORKSPACE);
   assertExecutionRequest(db, input);
   assertReviewFieldsTakeEffect(input, input.review_by, input.review_tier);
   assertReviewByDistinct(input.review_by);
@@ -1562,28 +1582,9 @@ export function registerTask(
   assertNoExamineeChild(db, input);
   assertReturnDestination(db, input);
   assertRepairHasParent(input);
-  // ADR 0384 決定3: 分解元は task と判断の対で、子でない根だけが持つ —— based_on_decision は parent_id と組んで委譲の読み手を動かす
-  if ((input.origin_task_id === undefined) !== (input.origin_decision === undefined) ||
-    (input.origin_task_id !== undefined && (input.parent_id !== undefined || input.based_on_decision !== undefined))) {
-    throw new Error("an origin is a task and its decision together, on a root with no parent and no based_on_decision");
-  }
   assertReviewChildHasExecutor(db, input, actorId);
-  // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない。
-  // #3421 から本番の呼び手は付帯子の review に workspace を渡さない(人間の扉は ADR 0384 決定1 で先に拒み、盤面の登録は渡さない)ので、
-  // ここに届くのは test だけ —— 共有の規則を #3423 が組み直すまで残す
-  if (input.type === "review" && input.parent_id && input.workspace !== undefined) {
-    const ancestorWorkspace = derivedWorkspace(db, { workspace: null, parent_id: input.parent_id! });
-    if (input.workspace !== ancestorWorkspace) {
-      throw new DomainError(
-        `a review child runs in its nearest ancestor's workspace (${ancestorWorkspace ?? "none fixed yet"}) — omit workspace; ` +
-          "to review in another workspace, register a root review (no parent)",
-      );
-    }
-    input.workspace = undefined;
-  }
-  // assertGithubRef above guarantees workspace whenever the ref is present
-  if (input.github_issue_number !== undefined && input.workspace) {
-    assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
+  if (issueWorkspace !== undefined) {
+    assertNoUnsettledIssueRef(db, issueWorkspace, input.github_issue_number!);
   }
   const { maxKey } = db
     .prepare("SELECT COALESCE(MAX(sort_key), 0) AS maxKey FROM tasks")
@@ -1631,7 +1632,25 @@ export function registerTask(
     interview_target_id: input.interview_target_id ?? null,
     created_at: now.toISOString(),
   };
-  db.transaction(() => {
+  return db.transaction(() => {
+    if (issueParent && task.based_on_decision === null) {
+      // ADR 0047 決定7: the human supplies a reason for work split from a parent.
+      const line = input.decompose_reason ?? "";
+      if (whyBlank(line)) throw new DomainError("a decomposition requires a reason");
+      const decision = logDecision(db, issueParent, line, actorId, now, origin);
+      if (task.parent_id === null) {
+        task.origin_task_id = issueParent.id;
+        task.origin_decision = decision;
+      } else if (raisesParentRisk(input, issueParent)) {
+        const { risk_flag, assignee, review_flag, review_by, review_tier, tier, priority } = input;
+        return registerChildApproval(db, issueParent, {
+          issue_ref: { number: input.github_issue_number!, workspace: issueWorkspace! },
+          based_on_decision: decision, risk_flag, assignee, review_flag, review_by, review_tier, tier, priority,
+        }, [CHILD_RISK_APPROVAL_REASON], actorId, now, origin);
+      } else {
+        task.based_on_decision = decision;
+      }
+    }
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, origin_task_id, origin_decision, sort_key, handoff_doc, pr_number,
@@ -1681,14 +1700,14 @@ export function registerTask(
         ...(input.opened_on_event_ids && { opened_on_event_ids: input.opened_on_event_ids }),
         ...(input.assignee_not_copied && { assignee_not_copied: input.assignee_not_copied }),
         ...(input.audited_probe !== undefined && { audited_probe: input.audited_probe }),
-        ...(input.based_on_decision !== undefined && {
-          based_on_decision: input.based_on_decision,
+        ...(task.based_on_decision !== null && {
+          based_on_decision: task.based_on_decision,
         }),
       },
       at: now,
     });
+    return task;
   })();
-  return task;
 }
 
 
@@ -2694,11 +2713,21 @@ export function answerQuestion(
         // actually carries risk beyond its parent — raises the parent's own
         // risk flag to match (upward propagation). A "reject" answer leaves it
         // unregistered.
-        const pending = kind.pending_child;
+        const { workspace, based_on_decision, issue_ref, ...pending } = kind.pending_child;
         if (answer === "approve") {
+          const parent = getTask(db, question.parent_id!)!;
+          const decision = based_on_decision ?? question.based_on_decision;
+          if ((workspace !== undefined || issue_ref) && decision === null) throw new DomainError("approval requires its decomposition decision");
           registerTask(
             db,
-            { type: "work", ...pending, parent_id: question.parent_id! },
+            {
+              type: "work", ...pending,
+              ...(workspace === undefined
+                ? { parent_id: parent.id, based_on_decision: issue_ref ? decision! : based_on_decision }
+                // ADR 0111 決定1: agent roots get a completion review, including older pending placements with a child flag.
+                : { workspace, review_flag: undefined, origin_task_id: parent.id, origin_decision: decision! }),
+              ...(issue_ref && { workspace: issue_ref.workspace, github_issue_number: issue_ref.number }),
+            },
             now,
             HUMAN_ACTOR_ID,
             origin,
@@ -2707,7 +2736,7 @@ export function answerQuestion(
           // flag, not a decompose-time snapshot: a second, unrelated (e.g.
           // assignee-only) approval on an already-risky parent propagates
           // nothing new and must not re-fire the audit event.
-          if (raisesParentRisk(pending, getTask(db, question.parent_id!)!)) {
+          if (raisesParentRisk(kind.pending_child, parent)) {
             db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
             appendEvent(db, {
               taskId: question.parent_id!,
@@ -3381,18 +3410,10 @@ export interface ChildSpec extends TaskContent {
    *  worker's authority profile's `assignable_to` (confused-deputy
    *  prevention), this too converts to an approval question (issue #11). */
   assignee?: string;
-  /** Targets the child at a specific workspace. Only agent decomposition still
-   *  carries it until #3423: the human doors refuse it (ADR 0384 決定1). Outside
-   *  the registering worker's authority profile's `allowed_workspaces`, this too
-   *  converts to an approval question (issue #11). Absent → store an empty column
-   *  and derive the execution workspace from the nearest filled ancestor or
-   *  default (ADR 0372 決定1). */
-  workspace?: string;
   /** Opts this child into on-completion review (layer 1), same as
    *  RegisterTaskInput's own field — the registrant declares it, human or
    *  agent, with no authority check either way (ADR 0021: review flag opt-in
-   *  sits outside the authority checks above, unlike risk_flag/assignee/
-   *  workspace). */
+   *  sits outside the authority checks above, unlike risk_flag/assignee). */
   review_flag?: boolean;
   /** The child's own execution request (GLOSSARY.md「要求」): the decomposing
    *  parent's judgement about how hard this slice is, carried into the
@@ -3406,7 +3427,6 @@ export interface ChildSpec extends TaskContent {
  *  itself stays free of any registry/file-loading dependency. */
 interface AuthorityContext {
   assignable_to?: string[];
-  allowed_workspaces?: string[];
   /** The merge dial (issue #11, three-valued since ADR 0079 — see registry.ts):
    *  `escalate` makes recordPrOpened register a merge-decision question for
    *  every PR; `auto_if_ci_green` queues it for the unattended poll (landing.ts);
@@ -3649,8 +3669,8 @@ export function landingSurface(
   }
 }
 
-/** The explicit "unrestricted" marker an assignable_to/allowed_workspaces
- *  allowlist can carry (issue #41) — a registry profile must spell this out
+/** The explicit "unrestricted" marker an assignable_to
+ *  list can carry (issue #41) — a registry profile must spell this out
  *  rather than get it by omitting the field. */
 export const AUTHORITY_WILDCARD = "*";
 
@@ -3659,8 +3679,7 @@ export const AUTHORITY_WILDCARD = "*";
  *  restricts it (no allowlist configured means unrestricted, same as an
  *  allowlist carrying the explicit wildcard AUTHORITY_WILDCARD — issue #41: a
  *  registry profile must spell out "unrestricted" rather than get it by
- *  omission, but the meaning is unchanged). Shared by the assignable_to and
- *  allowed_workspaces checks in decomposeTask — risk_flag's check is its own
+ *  omission, but the meaning is unchanged). Used for assignable_to in decomposeTask — risk_flag's check is its own
  *  shape (compared against the parent's flag, not a list). */
 function outsideAuthority(value: string | undefined, allowlist: string[] | undefined): boolean {
   return (
@@ -3715,9 +3734,43 @@ export function assigneeNeedsApproval(
  *  this exact pair rather than a free-form escalation. */
 const PENDING_CHILD_OPTIONS = ["approve", "reject"] as const;
 
+const CHILD_RISK_APPROVAL_REASON = "carries risk beyond the parent's declared risk";
+
+/** ADR 0374 決定16: when review of a human's work finds a repair, default back to the human. */
+function defaultRepairAssignee(db: Db, parent: Task): typeof HUMAN_ACTOR_ID | undefined {
+  if (parent.type === "review" && isIntegrationReview(db, parent.id) && reviewedTaskExecutor(db, parent) === HUMAN_ACTOR_ID) {
+    return HUMAN_ACTOR_ID;
+  }
+}
+
+function registerChildApproval(
+  db: Db,
+  parent: Task,
+  pending: PendingChildSpec & { based_on_decision: number },
+  reasons: string[],
+  actorId: string,
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  const action = pending.workspace === undefined ? "child registration" : "root placement";
+  const childTitle = pending.issue_ref ? issueRefPlaceholder(pending.issue_ref.number) : pending.title;
+  const context = pending.issue_ref ? `The issue is in workspace "${pending.issue_ref.workspace}".` : pending.purpose;
+  const title = `authorize ${action}: ${childTitle}`;
+  return registerTask(db, {
+    type: "question",
+    title,
+    purpose: `"${childTitle}" ${reasons.join("; ")} — ${actorId} needs approval to register it. ${context}`,
+    completion_criteria: `a human approves or rejects the ${action}`,
+    parent_id: parent.id,
+    question: [{ title, options: [...PENDING_CHILD_OPTIONS], recommendation: "approve" }],
+    question_kind: { kind: "approval", pending_child: pending },
+    based_on_decision: pending.based_on_decision,
+  }, now, actorId, origin);
+}
+
 interface DecomposeInput {
   reason: string;
-  children: ChildSpec[];
+  children: (ChildSpec & { place_in_workspace?: string })[];
 }
 
 /** Decomposition: one decision splits the remaining work into child tasks.
@@ -3733,25 +3786,21 @@ export function decomposeTask(
   actorId: string,
   now: Date,
   authority: AuthorityContext | undefined,
-  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
-   *  protected workspace / ADR 0013), resolved by the caller against the
-   *  registry. A protected target converts unconditionally, regardless of
-   *  the registering worker's `allowed_workspaces` — "changes to it always
-   *  need human approval" is a resource-side invariant independent of any
-   *  profile. Absent → no workspace is protected. */
+  /** Names a protected destination in the approval question. */
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
   assertDecomposable(db, parent);
-  // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2 / ADR 0301 決定3)—— 別の workspace を明示した子はその系譜でも(ADR 0380 決定5)
-  for (const child of input.children) assertReturnDestination(db, { type: "work", parent_id: parent.id, workspace: child.workspace });
-  // ADR 0374 Status 追記(決定16): 人間担当の完了時レビューの修理子は、省略すると元の実行者へ戻す。
-  const defaultToHuman = parent.type === "review" && isIntegrationReview(db, parent.id) && reviewedTaskExecutor(db, parent) === HUMAN_ACTOR_ID;
+  // ADR 0301 決定3: 承認を要する子も登録前に床を通す。根の配置は承認 question 自体が床を通る(ADR 0384 帰結)。
+  if (input.children.some((child) => child.place_in_workspace === undefined)) {
+    assertReturnDestination(db, { type: "work", parent_id: parent.id });
+  }
+  const repairAssignee = defaultRepairAssignee(db, parent);
   input = {
     ...input,
     children: input.children.map((child) => {
       child = { ...child };
-      if (defaultToHuman) child.assignee ??= HUMAN_ACTOR_ID;
+      if (child.place_in_workspace === undefined) child.assignee ??= repairAssignee;
       for (const field of ["title", "purpose", "completion_criteria", "tier", "review_tier", "priority"] as const) {
         if (child[field] !== undefined) child[field] = normalizeText(child[field]);
       }
@@ -3766,10 +3815,12 @@ export function decomposeTask(
   // survive as a pending_child on an approval question, where it would only
   // throw at the moment a human clicks approve (registerTask validates the
   // *question*, not the spec it carries).
-  for (const child of input.children) {
-    assertGithubRef({ type: "work", ...child });
-    assertExecutionRequest(db, { type: "work", ...child });
-    assertReviewFieldsTakeEffect({ type: "work", parent_id: parent.id, ...child }, child.review_by, child.review_tier);
+  for (const { place_in_workspace, ...child } of input.children) {
+    if (place_in_workspace !== undefined && whyBlank(place_in_workspace)) throw new DomainError("a root placement requires a workspace");
+    const work = { type: "work" as const, parent_id: place_in_workspace === undefined ? parent.id : undefined, ...child };
+    assertGithubRef(work);
+    assertExecutionRequest(db, work);
+    assertReviewFieldsTakeEffect(work, child.review_by, child.review_tier);
     assertReviewByDistinct(child.review_by);
   }
   if (whyBlank(input.reason)) {
@@ -3778,10 +3829,13 @@ export function decomposeTask(
   const children: Task[] = [];
   db.transaction(() => {
     const decisionId = logDecision(db, parent, input.reason, actorId, now, origin);
-    for (const child of input.children) {
+    for (const { place_in_workspace, ...child } of input.children) {
       const reasons: string[] = [];
-      if (raisesParentRisk(child, parent)) {
-        reasons.push("carries risk beyond the parent's declared risk");
+      if (place_in_workspace !== undefined) {
+        const target = isProtectedWorkspace?.(place_in_workspace) ? "protected workspace" : "workspace";
+        reasons.push(`places a root in ${target} "${place_in_workspace}"`);
+      } else if (raisesParentRisk(child, parent)) {
+        reasons.push(CHILD_RISK_APPROVAL_REASON);
       }
       // A review's repair children may target the reviewed task's own
       // executor regardless of the reviewer profile's assignable_to (ADR
@@ -3795,50 +3849,9 @@ export function decomposeTask(
           reasons.push(`assigns review to "${reviewer}", outside ${actorId}'s assignable_to`);
         }
       }
-      if (outsideAuthority(child.workspace, authority?.allowed_workspaces)) {
-        reasons.push(
-          `targets workspace "${child.workspace}", outside ${actorId}'s allowed_workspaces`,
-        );
-      }
-      if (child.workspace !== undefined && isProtectedWorkspace?.(child.workspace)) {
-        reasons.push(`targets protected workspace "${child.workspace}"`);
-      }
       // ADR 0372 決定1: 省略した workspace は空のままにし、pickup 前の親の Edit や既定の差し替えを反映する
       if (reasons.length > 0) {
-        const questionTitle = `authorize child registration: ${child.title}`;
-        registerTask(
-          db,
-          {
-            type: "question",
-            title: questionTitle,
-            purpose:
-              `"${child.title}" ${reasons.join("; ")} — outside ${actorId}'s authority to ` +
-              `register unapproved. ${child.purpose}`,
-            completion_criteria: "a human approves or rejects the child registration",
-            parent_id: parent.id,
-            question: [
-              { title: questionTitle, options: [...PENDING_CHILD_OPTIONS], recommendation: "approve" },
-            ],
-            question_kind: { kind: "approval", pending_child: {
-              title: child.title,
-              purpose: child.purpose,
-              completion_criteria: child.completion_criteria,
-              risk_flag: child.risk_flag,
-              assignee: child.assignee,
-              workspace: child.workspace,
-              review_flag: child.review_flag,
-              review_by: child.review_by,
-              review_tier: child.review_tier,
-              tier: child.tier,
-              priority: child.priority,
-              based_on_decision: decisionId,
-            } },
-            based_on_decision: decisionId,
-          },
-          now,
-          actorId,
-          origin,
-        );
+        registerChildApproval(db, parent, { ...child, workspace: place_in_workspace, based_on_decision: decisionId }, reasons, actorId, now, origin);
         continue;
       }
       children.push(
@@ -4333,6 +4346,10 @@ export function ancestorsSql(taskRef: string): string {
       UNION SELECT t.parent_id, a.depth + 1 FROM tasks t JOIN ancestors a ON t.id = a.id)`;
 }
 
+function treeRootId(db: Db, taskId: string): string {
+  return db.prepare(`${ancestorsSql("?")} SELECT id FROM ancestors WHERE id IS NOT NULL ORDER BY depth DESC LIMIT 1`).pluck().get(taskId) as string | undefined ?? taskId;
+}
+
 /** memory_repair に盤面が注入する1行(ADR 0272 決定3 / ADR 0281): 伏せた verb の理由と、書き込みの行・判断の行の射程と、書き込みが対象の
  *  scope に留まること(ADR 0285 決定2)。`get_current_task` の envelope と spawn の文面が同じこれを運ぶ。spawn の文面では Authority 節の
  *  本文そのもので、profile の guidance は使わない(ADR 0272 追記3)。 */
@@ -4371,16 +4388,14 @@ function discardingAncestor(db: Db, taskId: string, asOf?: number): Task | undef
  *  (a) 系譜のルートが保護ブランチを対象にする仕事(受験者でない work か、主題の無い review = 独立監査)か question でない(新しいルートの種類も
  *  既定でこちら)、(b) cancelled の work が祖先にある(root に最も近いものを名指す、ADR 0271 決定1)か、親自身が cancelled(型を
  *  問わない、ADR 0268 決定3)、(c) 子の系譜が、ブランチを失って死んだ task か、削除の扉が着地を終えた到達の記録の無い task(ADR 0421
- *  決定3)を数える(ADR 0380 決定2・5 —— 親の workspace で、子が別の workspace
- *  `childWorkspace` を明示すればその系譜でも問う)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
+ *  決定3)を数える(ADR 0380 決定2・5 / ADR 0384 決定1)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
  *  知りたい読み手もその task を親として問う。`asOfEventId` を渡せば (b) はその event より前に記録された cancel だけを数える
  *  (当時版の Authority —— ADR 0301 決定5。(a) のルートの種類は変わらない)。(c) も失われた event・`task_branch_created`・削除の扉の終わりの
  *  記録をその event より前で読む(ADR 0380 帰結)。 */
-export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: number, childWorkspace?: string): string | undefined {
+export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: number): string | undefined {
   const parent = getTask(db, parentId);
   if (!parent) return undefined;
-  const rootId = db.prepare(`${ancestorsSql("?")} SELECT id FROM ancestors WHERE id IS NOT NULL ORDER BY depth DESC LIMIT 1`).pluck().get(parentId) as string | undefined;
-  const root = rootId === undefined ? parent : getTask(db, rootId)!;
+  const root = getTask(db, treeRootId(db, parentId))!;
   // ルートの question も帰り先あり —— 人間の判断の行への異議は human 宛ての work の修理子を立てる(ADR 0237 決定3 / #2377)
   if (!((root.type === "work" && root.interview_target_id === null) || (root.type === "review" && root.meta_review_subject === null) || root.type === "question")) {
     const kind =
@@ -4394,7 +4409,7 @@ export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: n
   if (ancestor) return `the cancel of ancestor "${ancestor.title}" (${ancestor.id}) discarded this task's artifact, so no repair can land`;
   if (db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${cancelledSql("t", asOfEventId)}`).get(parentId)) return `its parent "${parent.title}" (${parent.id}) is cancelled, so no repair can land`;
   // ADR 0380 決定2・6: 失われた側は木でなく子の系譜で読む —— cancel の項は上の `parent_id` のまま
-  const taken = settledNoReturnAncestorOfChild(db, parentId, childWorkspace, asOfEventId);
+  const taken = settledNoReturnAncestorOfChild(db, parentId, asOfEventId);
   if (taken) return `${noReturnCause(taken)}, so no repair can land`;
   return undefined;
 }
@@ -4419,14 +4434,14 @@ function dependsOnBranch(task: { type: Task["type"]; rca: boolean; audit: boolea
  *  初めから帰り先の無い系譜で、cancel の項は cascade が倒す。 */
 export function settledNoReturnAncestorOfReview(db: Db, task: Task): NoReturnAncestor | undefined {
   if (task.type !== "review" || task.parent_id === null || isRca(db, task.id) || auditedPosedEventId(db, task.id) !== undefined) return undefined;
-  return settledNoReturnAncestorOfChild(db, task.parent_id, undefined);
+  return settledNoReturnAncestorOfChild(db, task.parent_id);
 }
 
 /** ADR 0301 決定2・3: 帰り先の無い親の下に、宛先がブランチに依存する task は生えない(扉を問わず)。 */
-function assertReturnDestination(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "opened_on_event_ids" | "audited_probe" | "question_kind" | "workspace">): void {
+function assertReturnDestination(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "opened_on_event_ids" | "audited_probe" | "question_kind">): void {
   const branch = { type: input.type, rca: !!input.opened_on_event_ids?.length, audit: input.audited_probe !== undefined, approval: input.question_kind?.kind === "approval" };
   if (input.parent_id === undefined || !dependsOnBranch(branch)) return;
-  const reason = whyNoReturnDestination(db, input.parent_id, undefined, input.workspace);
+  const reason = whyNoReturnDestination(db, input.parent_id);
   if (reason) throw new DomainError(`no ${input.type} task grows here: ${reason}`);
 }
 
@@ -4717,11 +4732,10 @@ export function getTextAuthor(db: Db, taskId: string): string {
   return decision === null ? getRegistrant(db, taskId) : getEvent(db, decision)!.actor_id;
 }
 
-/** Whether materializing `child` under `parent` raises the parent's risk
- *  (issue #11's upward propagation) — the child carries risk the parent does
- *  not. Approval evaluates it against the parent's current flag. */
-export function raisesParentRisk(child: { risk_flag?: boolean }, parent: Pick<Task, "risk_flag">): boolean {
-  return !!child.risk_flag && !parent.risk_flag;
+/** Whether an unapproved child exceeds the parent's current risk (issue #11).
+ *  ADR 0384 決定3: the workspace in a pending approval identifies a root placement, so there is no parent risk raise. */
+export function raisesParentRisk(child: { risk_flag?: boolean; workspace?: string }, parent: Pick<Task, "risk_flag">): boolean {
+  return child.workspace === undefined && !!child.risk_flag && !parent.risk_flag;
 }
 
 /** 承認 question(`question_pending_child` を持つ question)の注釈(issue #757)。
@@ -4990,7 +5004,7 @@ export function getTask(db: Db, id: string): Task | undefined {
  *  assigns a new max(sort_key), so "latest" is just the highest sort_key
  *  among the parent's children. Used by the human decompose API route (issue
  *  #129) to report back whichever landed: a plain work child, or (when
- *  decomposeTask's own risk/protected-workspace machinery intervened) the
+ *  decomposeTask required approval) the
  *  pending-child approval question it registered instead — either way, the
  *  same single-Task response shape the plain registration door already has. */
 export function latestChild(db: Db, parentId: string): Task | undefined {

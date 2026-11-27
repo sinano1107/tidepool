@@ -6,7 +6,7 @@ import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents, objectionBundles } from "../src/events.js";
 import { listMemoryEntries } from "../src/memory.js";
 import { proposeFromMaterial } from "../src/retrospective.js";
-import { listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
+import { derivedWorkspace, fillEmptyWorkspace, listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { bundledObjection, decomposedChild, markPickedUp } from "./harness.js";
 
@@ -17,7 +17,7 @@ const at = new Date("2026-09-15T00:00:00.000Z");
 const draft = { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures." };
 
 const task = (db: Db, type: TaskType, title: string, registrant = HUMAN_ACTOR_ID, parent_id?: string): Task =>
-  registerTask(db, { type, title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id }, at, registrant, "webui");
+  registerTask(db, { type, title, purpose: "p", completion_criteria: "c", workspace: parent_id ? undefined : "charts", parent_id }, at, registrant, "webui");
 /** entry に束ね済みの異議群を1つ足し、その異議群に cause を帰責する(呼ぶたびに後の異議群)。 */
 const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entries: number[] | null = null): number => {
   const objection = bundledObjection(db, taskId, entry_id, at);
@@ -26,6 +26,8 @@ const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entri
 /** 異議されたエントリに cause を帰責する。親は deckhand が一度 pickup した形にする —— RCA 子(人間名義の登録)が付ける(ADR 0292 決定2)。
  *  pickup は人間に起きないので、エントリの書き手が人間でも pickup の名義は deckhand。 */
 const objected = (db: Db, parent: Task, cause: Cause, worker = "deckhand"): number => {
+  const workspace = derivedWorkspace(db, parent);
+  if (workspace !== null) fillEmptyWorkspace(db, parent.id, workspace);
   markPickedUp(db, parent.id, at);
   const entry = logDecision(db, parent, `decided as ${cause}`, worker, at, "worker");
   attribute(db, parent.id, entry, cause);
@@ -131,8 +133,8 @@ it("主題つきの親(meta-review)の行からの Behavior candidate は、盤�
 it("meta-review の系譜の行(主題の修理子の行・RCA の行・RCA の子の RCA の行)からの Behavior candidate は、盤面に既定 workspace があっても scope null —— 祖先に meta-review の無い修理子の行からは今どおり task の workspace(ADR 0283 決定1)", () => {
   const db = openDb(":memory:");
   const board = { workspace: { name: "charts" } };
-  const child = (type: TaskType, title: string, parent: Task, workspace?: string) =>
-    registerTask(db, { type, title, purpose: "p", completion_criteria: "c", parent_id: parent.id, workspace }, at, HUMAN_ACTOR_ID, "webui");
+  const child = (type: TaskType, title: string, parent: Task) =>
+    registerTask(db, { type, title, purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, HUMAN_ACTOR_ID, "webui");
   const proposeOn = (objectedTask: Task) => {
     const entry = objected(db, objectedTask, "capability");
     return proposeFromMaterial(db, rca(db, `rca (auditor): ${objectedTask.title}`, objectedTask).id, { ...draft, material_id: entry }, board, "auditor", at).memory_entry_id;
@@ -141,13 +143,13 @@ it("meta-review の系譜の行(主題の修理子の行・RCA の行・RCA の�
   const routingReview = registerTask(db, { type: "review", title: "routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, at, HUMAN_ACTOR_ID, "webui");
   objected(db, memoryReview, "capability");
   const reviewRca = rca(db, "rca (auditor): memory meta-review", memoryReview);
-  const work = task(db, "work", "index the tide charts");
+  const work = registerTask(db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c", workspace: "reef" }, at, HUMAN_ACTOR_ID, "webui");
 
   const ids = [
     proposeOn(child("memory_repair", "memory repair: memory meta-review", memoryReview)),
     proposeOn(child("routing_repair", "routing repair: routing meta-review", routingReview)),
     proposeOn(reviewRca),
-    proposeOn(child("memory_repair", "memory repair: index the tide charts", work, "reef")),
+    proposeOn(child("memory_repair", "memory repair: index the tide charts", work)),
   ];
 
   expect(listMemoryEntries(db, {}).map((m) => [m.id, m.scope])).toEqual([
@@ -237,6 +239,7 @@ it("premise_breached の宣言への異議エントリからも提案できる",
   const parent = task(db, "work", "T");
   const based_on_decision = logDecision(db, parent, "split T into A", "deckhand", at, "worker");
   const child = task(db, "work", "A", HUMAN_ACTOR_ID, parent.id);
+  fillEmptyWorkspace(db, child.id, "charts");
   markPickedUp(db, child.id, at);
   const entry = appendEvent(db, {
     taskId: child.id,

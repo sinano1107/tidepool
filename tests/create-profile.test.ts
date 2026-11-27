@@ -33,7 +33,7 @@ describe("createProfile: 正常系(issue #76)", () => {
         name: "risky",
         guidance: "Prefer reversible actions.\nAnything irreversible is outside your authority.",
         assignable_to: ["deckhand", "tako"],
-        allowed_workspaces: ["tidepool"],
+
         merge: "auto_if_ci_green",
         // 危険な値を含むペイロードなので確認が要る(ADR 0061 決定1)— この
         // テストの主題はラウンドトリップで、門そのものは別 describe が見る
@@ -47,7 +47,7 @@ describe("createProfile: 正常系(issue #76)", () => {
       name: "risky",
       guidance: "Prefer reversible actions.\nAnything irreversible is outside your authority.",
       assignable_to: ["deckhand", "tako"],
-      allowed_workspaces: ["tidepool"],
+
       merge: "auto_if_ci_green",
     });
     // 手編集(帯域外)ではなくコミット済み — ADR 0020 の読み取り規律と両立する。
@@ -65,7 +65,7 @@ describe("createProfile: 正常系(issue #76)", () => {
         name: "readonly",
         guidance: "Read-only work.",
         assignable_to: ["*"],
-        allowed_workspaces: ["*"],
+
         merge: "external",
         confirmDangerous: true,
       },
@@ -82,7 +82,7 @@ describe("createProfile: 正常系(issue #76)", () => {
       name: "readonly",
       guidance: "Read-only work.",
       assignable_to: ["*"],
-      allowed_workspaces: ["*"],
+
       merge: "external",
     });
   });
@@ -92,7 +92,7 @@ describe("createProfile: name 検証(issue #76 — assertValidAgentName と同�
   const base = {
     guidance: "g",
     assignable_to: ["*"],
-    allowed_workspaces: ["*"],
+
     merge: "escalate" as const,
   };
 
@@ -127,7 +127,7 @@ describe("createProfile: checkout の位置に依存しない書き込み(ADR 00
     name: "risky",
     guidance: "g",
     assignable_to: ["*"],
-    allowed_workspaces: ["*"],
+
     merge: "escalate" as const,
     confirmDangerous: true,
   };
@@ -182,7 +182,7 @@ describe("listProfileViews: 編集フォーム用の一覧(issue #76 — listAge
   it("registry の全プロファイルを全フィールドで返す", async () => {
     const registryDir = await makeMainRegistry();
     await createProfile(
-      { name: "risky", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "external", confirmDangerous: true },
+      { name: "risky", guidance: "g", assignable_to: ["*"], merge: "external", confirmDangerous: true },
       { db, registry: { dir: registryDir, mode: "purely-local" } },
     );
 
@@ -193,7 +193,7 @@ describe("listProfileViews: 編集フォーム用の一覧(issue #76 — listAge
       name: "risky",
       guidance: "g",
       assignable_to: ["*"],
-      allowed_workspaces: ["*"],
+
       merge: "external",
     });
   });
@@ -204,7 +204,7 @@ describe("createProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
     name: "risky",
     guidance: "g",
     assignable_to: ["*"],
-    allowed_workspaces: ["tidepool"],
+
     merge: "escalate" as const,
   };
 
@@ -247,7 +247,7 @@ describe("createProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
       name: "risky",
       guidance: "g",
       assignable_to: ["*"],
-      allowed_workspaces: ["tidepool"],
+
       merge: "escalate",
     });
   });

@@ -4,7 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents, listEventsOfKinds } from "../src/events.js";
-import { completeTask, derivedWorkspace, getTask, humanDecomposeTask, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
+import { completeTask, derivedWorkspace, fillEmptyWorkspace, getTask, humanDecomposeTask, pickupTask, registerTask, returnToQueue, type Task } from "../src/tasks.js";
 import { recordTaskCheckoutTip, releaseWorkspace, resolveTaskBranchLineage, workspaceNeedsHuman } from "../src/workspace.js";
 import { api, bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, makeWorkspace, prepareAtPickup, seedTaskBranch } from "./harness.js";
 
@@ -158,7 +158,9 @@ it("別の workspace の列を持つ祖先は、task_branch_created を持って
   const db = openDb(":memory:");
   const parent = work(db, "parent", { workspace: a.name });
   seedTaskBranch(db, a, parent.id);
-  const child = pickupTask(db, work(db, "child", { parent_id: parent.id, workspace: b.name }), "deckhand", NOW)!;
+  const legacyChild = work(db, "child", { parent_id: parent.id });
+  fillEmptyWorkspace(db, legacyChild.id, b.name);
+  const child = pickupTask(db, getTask(db, legacyChild.id)!, "deckhand", NOW)!;
 
   await prepareAtPickup(db, b, child, { defaultWorkspaceName: b.name });
 

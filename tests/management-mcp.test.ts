@@ -383,7 +383,7 @@ it("agentAdmin と profileAdmin の操作を管理MCP から利用できる(issu
     name: "cautious",
     guidance: "Ask before broad changes.",
     assignable_to: ["navigator"],
-    allowed_workspaces: ["tidepool"],
+
     merge: "escalate",
   };
   try {
@@ -466,7 +466,7 @@ it("管理MCP は危険な profile の確認を持たず、常にドメインの
     name: "unrestricted",
     guidance: "operate broadly",
     assignable_to: ["*"],
-    allowed_workspaces: ["tidepool"],
+
     merge: "escalate",
   };
   try {
