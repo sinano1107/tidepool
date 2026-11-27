@@ -1380,8 +1380,8 @@ function humanWorkGate(db: Db, taskId: string, verb: keyof typeof HUMAN_WORK_GAT
   if (verb !== "start work" && taskBranchLostInForce(db, taskId)) {
     throw new DomainError(lostBranchRefusal(verb, taskBranch(taskId), true));
   }
-  // ADR 0421 決定3 / ADR 0301 決定3: 帰り先の無い系譜では書き始めない —— 登録の床と同じ述語を同じ入力(自分の列も問う、ADR 0380 決定5)で
-  // 記録だけで読み、準備の git より前に拒む
+  // ADR 0421 決定3 / ADR 0301 決定3: 帰り先の無い系譜では書き始めない。登録の床と同じく親の系譜で問い
+  // (ADR 0384 決定1)、準備の git より前に拒む。
   const noReturn = verb === "start work" && task.parent_id !== null ? whyNoReturnDestination(db, task.parent_id) : undefined;
   if (noReturn) throw new DomainError(`cannot ${verb}: ${noReturn}.`);
   if (derived && derivedWorkspace(db, task) !== derived.name) {

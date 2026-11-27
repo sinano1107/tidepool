@@ -641,6 +641,12 @@ function decomposeChildrenSchema(db: Db) {
         .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
       review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
       priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
+    }, {
+      error: (issue) => {
+        if (issue.code === "unrecognized_keys" && issue.keys.includes("workspace")) {
+          return `Unrecognized keys: ${issue.keys.join(", ")} — use place_in_workspace to propose a root in another workspace.`;
+        }
+      },
     }),
   );
 }

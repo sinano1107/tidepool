@@ -26,7 +26,7 @@ it.each(["decompose", "redecompose"])("%s validates the placement mark and refus
   try {
     const reason = "the change targets the registry repo";
     for (const [args, message] of [
-      [{ reason, children: [{ ...child, workspace: "registry" }] }, "workspace"],
+      [{ reason, children: [{ ...child, workspace: "registry" }] }, "use place_in_workspace to propose a root in another workspace"],
       [{ reason, children: [{ ...child, extra: true }] }, "extra"],
       [{ reason, children: [child], extra: true }, "extra"],
       [{ reason, children: [{ ...child, place_in_workspace: "not-a-real-workspace" }] }, "unknown workspace: not-a-real-workspace"],
@@ -42,10 +42,7 @@ it.each(["decompose", "redecompose"])("%s validates the placement mark and refus
 
     const result: any = await client.callTool({ name, arguments: { reason, children: [{ ...child, place_in_workspace: "registry" }] } });
     expect(result.isError ?? false, JSON.stringify(result.content)).toBe(false);
-    const placed = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-    expect(placed.find((x: any) => x.parent_id === parent.id && x.type === "question")).toMatchObject({
-      title: "authorize root placement: change registry",
-    });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ child_ids: [], parent_status: "blocked" });
   } finally {
     await client.close();
   }

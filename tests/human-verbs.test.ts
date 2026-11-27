@@ -21,11 +21,14 @@ import {
 import { createLanding, type LandingDeps, registerPrPromotionFailureQuestion, taskIdsAwaitingLanding } from "../src/landing.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import {
+  approvalAnnotation,
   cancelTaskDirectly,
+  completeTask,
   derivedWorkspace,
   fillEmptyWorkspace,
   getTask,
   listBoard,
+  listChildren,
   pickupTask,
   presentTask,
   QuestionClosedError,
@@ -38,8 +41,10 @@ import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { quarantineWorkspace, recordDeclaredRepo, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, heldInPrepareMerge, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
+  answerQuestionViaWebui,
   decomposeTaskViaWorker,
   defaultingTo,
+  FULL_HANDOFF,
   failEventInsert,
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
@@ -568,19 +573,99 @@ it.each([
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error(result.failure.error);
   const task = getTask(db, result.task.id)!;
-  const decision = listEvents(db, parent.id).find(({ kind }) => kind === "decision_logged")!.id;
+  const decision = listEvents(db, parent.id).find(({ kind }) => kind === "decision_logged")!;
+  expect(decision.payload).toMatchObject({ line: "split the issue-backed task" });
   expect(task).toMatchObject({
     github_issue_number: 189,
     title: "#189",
     parent_id: child ? parent.id : null,
-    based_on_decision: child ? decision : null,
+    based_on_decision: child ? decision.id : null,
     origin_task_id: child ? null : parent.id,
-    origin_decision: child ? null : decision,
+    origin_decision: child ? null : decision.id,
     workspace: child ? null : workspace,
   });
   expect(derivedWorkspace(db, task)).toBe(workspace);
   expect(await registerThroughHumanDoor(deps, { type: "work", github_issue_number: 189, workspace }, () => NOW, "webui"))
     .toMatchObject({ ok: false, failure: { kind: "invalid", error: expect.stringContaining("already referenced") } });
+});
+
+it.each(["reef", "registry"])("requires a human decomposition reason when placing an issue from a parent into %s", async (workspace) => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c", workspace: "reef" }, NOW, ...HUMAN_WEBUI);
+  recordTaskBranchCreated(db, root.id, undefined, "reef");
+  const issue = { type: "work" as const, parent_id: root.id, github_issue_number: 189, workspace };
+  const deps = { db, pollNow: () => {} };
+
+  expect(await registerThroughHumanDoor(deps, issue, () => NOW, "webui"))
+    .toEqual({ ok: false, failure: { kind: "invalid", error: "a decomposition requires a reason" } });
+  expect(listEvents(db, root.id).some(({ kind }) => kind === "decision_logged")).toBe(false);
+  expect(await registerThroughHumanDoor(deps, { ...issue, parent_id: undefined }, () => NOW, "webui"))
+    .toMatchObject({ ok: true, task: { type: "work", parent_id: null, github_issue_number: 189 } });
+});
+
+it.each(["approve", "reject"])("reserves a risky issue-backed child until the answer (%s)", async (answer) => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c", workspace: "reef" }, NOW, ...HUMAN_WEBUI);
+  recordTaskBranchCreated(db, root.id, undefined, "reef");
+  const issue = {
+    type: "work" as const, parent_id: root.id, decompose_reason: "separate the risky change",
+    github_issue_number: 189, workspace: "reef", risk_flag: true,
+  };
+  const deps = { db, pollNow: () => {} };
+  const register = () => registerThroughHumanDoor(deps, issue, () => NOW, "webui");
+
+  const result = await register();
+
+  expect(result).toMatchObject({ ok: true, task: { type: "question", parent_id: root.id } });
+  const approval = onlyQuestion(db);
+  expect(approvalAnnotation(db, approval)).toEqual({ raises_parent_risk: true });
+  expect(listChildren(db, root.id).map(({ type }) => type)).toEqual(["question"]);
+  expect(getTask(db, root.id)?.risk_flag).toBe(0);
+  expect(await register()).toMatchObject({ ok: false, failure: { kind: "invalid", error: expect.stringContaining("already referenced") } });
+
+  answerQuestionViaWebui(db, approval, [answer], NOW, { comment: "risk reviewed" });
+
+  const child = listChildren(db, root.id).find((task) => task.type === "work");
+  if (answer === "reject") {
+    expect(child).toBeUndefined();
+    expect(getTask(db, root.id)?.risk_flag).toBe(0);
+    expect(await register()).toMatchObject({ ok: true, task: { type: "question" } });
+    return;
+  }
+  expect(child).toMatchObject({
+    type: "work", github_issue_number: 189, title: "#189", parent_id: root.id,
+    workspace: null, origin_task_id: null, based_on_decision: approval.based_on_decision, risk_flag: 1,
+  });
+  expect(derivedWorkspace(db, child!)).toBe("reef");
+  expect(getTask(db, root.id)?.risk_flag).toBe(1);
+  expect(listEvents(db, root.id).filter(({ kind }) => kind === "risk_flag_raised"))
+    .toMatchObject([{ payload: { origin_question_id: approval.id } }]);
+});
+
+it("defaults an issue-backed repair under a human completion review to the human", async () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, {
+    type: "work", title: "human work", purpose: "p", completion_criteria: "c", assignee: "human", workspace: "reef",
+  }, NOW, ...HUMAN_WEBUI);
+  recordTaskBranchCreated(db, root.id, undefined, "reef");
+  completeTask(db, root, FULL_HANDOFF, "human", NOW, "webui");
+  const [review] = listChildren(db, root.id);
+  const deps = { db, pollNow: () => {} };
+
+  const matching = await registerThroughHumanDoor(deps, {
+    type: "work", parent_id: review!.id, decompose_reason: "repair the original work",
+    github_issue_number: 189, workspace: "reef",
+  }, () => NOW, "webui");
+  const separate = await registerThroughHumanDoor(deps, {
+    type: "work", parent_id: review!.id, decompose_reason: "fix the registry separately",
+    github_issue_number: 189, workspace: "registry", risk_flag: true,
+  }, () => NOW, "webui");
+
+  expect(matching).toMatchObject({ ok: true, task: { type: "work", parent_id: review!.id, raw_assignee: "human" } });
+  expect(separate).toMatchObject({
+    ok: true, task: { type: "work", parent_id: null, origin_task_id: review!.id, raw_assignee: null, risk_flag: 1 },
+  });
+  expect(getTask(db, review!.id)?.risk_flag).toBe(0);
 });
 
 // ADR 0384 決定1・3: 子は workspace を入力に持たない —— 親と同じ名前でも拒み、別の workspace に置くなら親の「別の workspace に置く」を使う

@@ -3,6 +3,7 @@ import { createLanding } from "../src/landing.js";
 import { quarantineStops } from "../src/quarantine.js";
 import { completeTask, decomposeTask, getTask, listChildren, placedRoots, registerTask } from "../src/tasks.js";
 import { recordTaskCheckoutTip, releaseWorkspace } from "../src/workspace.js";
+import { FakeGitHubClient } from "./fakes.js";
 import {
   addTaskChange,
   answerQuestionViaWebui,
@@ -33,8 +34,9 @@ afterEach(async () => {
   await t?.stop();
 });
 
-it("a completed work's review places a registry root on the registry branch without holding up the work's landing (#2033)", async () => {
-  const x = await makeWorkspace("x");
+it.each(["purely local", "open PR"])("a completed work and its review's registry root land independently in the %s case (#2033)", async (mode) => {
+  const github = mode === "open PR" ? new FakeGitHubClient() : null;
+  const x = github ? (await makeLandingWorkspace("x")).workspace : await makeWorkspace("x");
   const reg = await makeWorkspace("reg");
   const { db, clock } = await openBoard();
   const now = clock.now();
@@ -66,12 +68,16 @@ it("a completed work's review places a registry root on the registry branch with
 
   settleReview(db, getTask(db, review.id)!, "shako", now);
   const landing = createLanding({
-    db, clock, workspace: x, resolveWorkspace: defaultingTo(x, reg), github: null, defaultAgentName: "deckhand", isProtectedWorkspace,
+    db, clock, workspace: x, resolveWorkspace: defaultingTo(x, reg), github, defaultAgentName: "deckhand", isProtectedWorkspace,
   });
-  await expect(convergeOn(landing, done.id)).resolves.toMatchObject({ form: "local_merge_question" });
-  const [merge] = openLocalMergeQuestions(db, done.id);
-  expect(await answerLocalMerge({ db, clock, landing, workspace: x, work: done, question: merge!, base: "/dev/null/workbenches" })).toMatchObject({ status: "done" });
-  expect(git(x.path, "show", `main:${work.id}.txt`)).toBe("finished");
+  if (github) {
+    await expect(convergeOn(landing, done.id)).resolves.toMatchObject({ form: "pull_request_opened", prNumber: 1 });
+  } else {
+    await expect(convergeOn(landing, done.id)).resolves.toMatchObject({ form: "local_merge_question" });
+    const [merge] = openLocalMergeQuestions(db, done.id);
+    expect(await answerLocalMerge({ db, clock, landing, workspace: x, work: done, question: merge!, base: "/dev/null/workbenches" })).toMatchObject({ status: "done" });
+    expect(git(x.path, "show", `main:${work.id}.txt`)).toBe("finished");
+  }
   expect(getTask(db, root.id)?.status).toBe("todo");
 
   const edited = await completeThroughTaskCheckout(db, clock, reg, root, "registry.txt", "updated\n");
@@ -80,6 +86,9 @@ it("a completed work's review places a registry root on the registry branch with
   expect(await answerLocalMerge({ db, clock, landing, workspace: reg, work: edited, question: registryMerge!, base: "/dev/null/workbenches" }))
     .toMatchObject({ status: "done" });
   expect(git(reg.path, "show", "main:registry.txt")).toBe("updated");
+  if (github) {
+    await expect(github.readPullRequest({ workspace: x, number: 1 })).resolves.toMatchObject({ state: "OPEN" });
+  }
 });
 
 const MINUTE = 60 * 1000;

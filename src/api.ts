@@ -247,8 +247,8 @@ const registerTaskSchema = z.object({
   // refuses tier / priority on one (ADR 0111 追記10)
   tier: z.string().optional(),
   priority: z.string().optional(),
-  // A human decomposition needs a reason (ADR 0047 decision 7). Issue-backed work
-  // with a parent can use its issue reference as the decision (ADR 0384 decision 2).
+  // A human decomposition requires a reason (ADR 0047 決定7), including
+  // an issue-backed task registered from a parent (ADR 0384 決定2).
   decompose_reason: z.string().optional(),
   // an Interview's targets and fields (ADR 0199 決定3 / ADR 0273 決定9): which values exist is the domain's to say (registerTask)
   interview_targets: z.array(interviewTargetSchema).optional(),
@@ -1357,12 +1357,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // resolves an issue-backed parent's *live* content (ADR 0016: the
         // board never special-cases an issue-backed parent — GLOSSARY.md's
         // Decompose point 6), same short-TTL cache/resolver GET routes use
-        const live = await issueContent.present(
-          presentTask(db, parent, defaultAgentName, auditorName, interviewerName),
-          github,
-          displayWorkspace(parent.workspace),
-          () => clock.now(),
-        );
+        const live = await presentLiveIssue(presentTask(db, parent, defaultAgentName, auditorName, interviewerName));
         context = {
           parentTitle: live.title,
           parentPurpose: live.purpose,
@@ -2263,12 +2258,10 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       throw err;
     }
   };
-  const presentLive = <T extends BoardTask>(tasks: T[]): Promise<Array<Live<T>>> =>
-    Promise.all(
-      tasks.map((task) =>
-        issueContent.present(task, github, displayWorkspace(task.workspace), () => clock.now()),
-      ),
-    );
+  // BoardTask carries the derived workspace even before a child is picked up.
+  const presentLiveIssue = <T extends BoardTask>(task: T): Promise<Live<T>> =>
+    issueContent.present(task, github, displayWorkspace(task.workspace), () => clock.now());
+  const presentLive = <T extends BoardTask>(tasks: T[]): Promise<Array<Live<T>>> => Promise.all(tasks.map(presentLiveIssue));
 
   // ADR 0092 決定4: question 行は「一般 question」と「着地 question」に分かれて出る。
   // 着地 question は `landing` を持ち、その `blocked_by` が回答可否そのもの — 判定は

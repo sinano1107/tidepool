@@ -1320,7 +1320,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
         review_tier: z.string().optional().describe(`${REVIEW_TIER_BY_TYPE}\n${tierDescriptions.review_tier_choices}`),
         priority: z.string().optional().describe(`${PRIORITY_FIELD_DESCRIPTION}\nFor work tasks only: refused on a review task and on an Interview.`),
-        decompose_reason: z.string().optional(),
+        decompose_reason: z.string().optional().describe("Reason for splitting work from a parent, including issue-backed work registered with parent_id."),
         interview_targets: z
           .array(interviewTargetSchema)
           .optional()
