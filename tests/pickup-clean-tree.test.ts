@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -7,7 +7,7 @@ import { checkoutPickupPredicates, discardUncommitted } from "../src/pickup-pred
 import { registerTask } from "../src/tasks.js";
 import { WorkerTreeGitTimeoutError } from "../src/worker-tree-git-timeout.js";
 import { commitRoomCopy, NamedPlaceFetchError, NamedPlaceSideError, PickupGateError, RoomCopyGitlinkError, recordedInterviewRoom, releaseWorkspace, verifyWorkspaceClean, type WorkspaceConfig } from "../src/workspace.js";
-import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, STAGING_FAILURES, submoduleSource } from "./harness.js";
+import { addSubmodule, breakCheckoutStaging, commitWork, fixGitDates, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, pickUpInterviewRoot, poseAccepted, prepareAtPickup, STAGING_FAILURES, submoduleSource } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 const NOW = new Date("2026-11-06T00:00:00.000Z");
@@ -224,27 +224,37 @@ it("記録した親が commit でない出題の写しは名前の場所の側�
   expect(failure).not.toBeInstanceOf(NamedPlaceFetchError);
 });
 
-// ADR 0412 決定1・2(#3814): 出題の写しの stage は面接室の objects を借りない —— worktree が前の写しの tree を再現しても stage は自前で書き、
-// 面接室の tree の破損は面接室への fetch が読んで落ちる。欠けなら stage が書いた tree が運ばれる
-it.each(["corrupt", "missing"] as const)("worktree が前の出題の写しの tree を再現し面接室のその tree が %s なら、出題し直しは root の worktree の故障にしない(#3814)", async (damage) => {
+/** 面接室の objects の下の、入れ直しが移した壊れた loose の名前。 */
+const damagedLooseIn = (repo: string): string[] => {
+  const objects = join(repo, ".git", "objects");
+  return readdirSync(objects).filter((name) => name.startsWith("tidepool-damaged-")).flatMap((dir) => readdirSync(join(objects, dir)));
+};
+
+// ADR 0412 決定1・2(#3814): 出題の写しの stage は面接室の objects を借りない —— worktree が前の写しの tree を再現しても stage は自前で書く。
+// ADR 0425 決定1・2: 面接室のその tree が壊れていても、運ぶ段は fetch で落ちる前に入れ直しへ届く。同じ秒の出題し直しは前の写しと同じ commit を
+// 運ぶ —— 運ぶ commit が面接室に既にあっても、その tree の閉包を数える
+it.each([
+  ["corrupt", "a later second"],
+  ["missing", "a later second"],
+  ["corrupt", "the same second"],
+] as const)("worktree が前の出題の写しの tree を再現し面接室のその tree が %s なら、%s の出題し直しは入れ直して通り、その tree が面接室で読める(#3814、ADR 0425 決定1・2)", async (damage, when) => {
+  if (when === "the same second") await fixGitDates();
   const { root, room, place } = await pickedRoot(await makeWorkspace("room-copy-reposed-tree"));
   writeFileSync(join(place.path, "notes.txt"), "not committed\n");
   const first = commitRoomCopy(db, place, root.id);
-  // commit の日付は秒の粒度 —— 同じ秒の出題し直しは1回目と同じ commit を面接室から借りて書かず、運ぶものも確かめる自前の object も無い
-  // (面接室の外からの損傷は守らない、ADR 0398 決定3)。ここで見るのは別の commit を運ぶ出題し直し
-  await new Promise((resolve) => setTimeout(resolve, 1050 - (Date.now() % 1000)));
-  const protectedHead = git(room.path, "rev-parse", "refs/heads/main");
-  const keptAround = git(room.path, "for-each-ref", "refs/keep-around/");
-  damageLoose(room.path, git(room.path, "rev-parse", `${first}^{tree}`), damage);
+  // commit の日付は秒の粒度 —— 次の秒の出題し直しは別の commit を運ぶ
+  if (when === "a later second") await new Promise((resolve) => setTimeout(resolve, 1050 - (Date.now() % 1000)));
+  const tree = git(room.path, "rev-parse", `${first}^{tree}`);
+  damageLoose(room.path, tree, damage);
 
-  if (damage === "corrupt") {
-    expect(() => commitRoomCopy(db, place, root.id)).toThrow(NamedPlaceFetchError);
-    expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
-    expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe(keptAround);
-  } else {
-    const head = commitRoomCopy(db, place, root.id);
-    expect(git(room.path, "cat-file", "-p", `${head}:notes.txt`)).toBe("not committed");
-  }
+  const head = commitRoomCopy(db, place, root.id);
+
+  if (when === "the same second") expect(head).toBe(first);
+  else expect(head).not.toBe(first);
+  expect(git(room.path, "rev-parse", `refs/keep-around/${head}`)).toBe(head);
+  expect(git(room.path, "cat-file", "-p", `${head}:notes.txt`)).toBe("not committed");
+  git(room.path, "cat-file", "-p", tree);
+  expect(damagedLooseIn(room.path)).toEqual(damage === "corrupt" ? [tree] : []);
 });
 
 // ADR 0412 決定2 / ADR 0388 決定2(#3814): stage が自前で書いた blob は運んだ後の確かめの集合に入る —— 面接室にしか無い同じ中身の blob が

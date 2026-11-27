@@ -1246,6 +1246,19 @@ export async function shimGit(
       });
 }
 
+/** PATH の本物の git の前に、author と committer の日付を固定する shim を置く —— 盤面の git の env は日付を通さないので、同じ秒に書く
+ *  commit を待たずに作る。テストの終わりに PATH を戻す。 */
+export async function fixGitDates(date = "@1767225600 +0000"): Promise<void> {
+  const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
+  const dir = await tempDir("tidepool-git-date-");
+  writeFileSync(join(dir, "git"), `#!/bin/sh\nexport GIT_AUTHOR_DATE='${date}' GIT_COMMITTER_DATE='${date}'\nexec "${real}" "$@"\n`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}:${path}`;
+  onTestFinished(() => {
+    process.env.PATH = path;
+  });
+}
+
 /** `makeWorkspace` の remote 正本つきの姿(ADR 0052 / issue #211): bare な origin を
  *  持つ checkout と、そこへ**人間の merge を模して**書き込む publisher を組む。
  *  返す `WorkspaceConfig` の `repo` が「この workspace はリモートの正本を持つ」の
