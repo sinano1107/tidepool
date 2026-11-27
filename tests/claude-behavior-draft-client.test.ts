@@ -54,6 +54,9 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
   expect(prompt).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster");
   expect(prompt).toContain("(board_text: the board's doctrine, protocol and any further section it was given (such as Interview discipline), as given at its spawn)");
   expect(prompt).not.toContain("Interview root");
+  // 起草の入力に tier は無いので、tier の半文は session を指さない汎用の文(#3935)
+  expect(prompt).toContain("A tier is the quality floor a session runs at. A tier's definition is not a Behavior");
+  expect(prompt).not.toContain("this session ran at");
   // 起草も judge と同じく読んだ記憶と書き込みの本文の欄を説明する(#2621)
   expect(prompt).toContain("the memory entries the worker read before the decision (memory_read)");
   expect(prompt).toContain("When the input carries written, the objected entry is a memory write the worker applied directly");
