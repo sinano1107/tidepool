@@ -47,6 +47,7 @@ import {
   gitWithInput,
   gitWithoutHistoryOverrides,
   isAncestor,
+  ListingUnreadableError,
   outOfSpace,
   ownWorktreeStatus,
   readCheckoutRemote,
@@ -2784,21 +2785,32 @@ function fixTaskAndUnstartedAncestors(
   // ADR 0414 決定9: 型付きの拒否は書く前に全員を上から確かめる —— 下で拒んでも上の ref・event・列を残さない(event は append-only)。
   // ADR 0428 決定1・2: 在る ref を採る根拠は基準 —— 最初の作成も作り直しも、基準に在る値なら event を補える。
   const baseline = refValues(storedRefs(db, workspace.name));
-  const current = refValues(git(workspace.path, "for-each-ref", REF_SNAPSHOT_FORMAT, "refs/heads/task/"));
+  const current = taskRefsAtFixing(workspace);
   for (const member of [...ancestors, task]) {
     const ref = `refs/heads/${taskBranch(member.id)}`;
     const actual = current.get(ref);
+    if (actual === undefined) {
+      // ADR 0427 決定1: 一覧が黙って飛ばす行き先の無い symref と、ref が無い場合を区別する。
+      if (gitAnswers(() => gitListing(workspace.path, ["symbolic-ref", "--quiet", "--no-recurse", ref]))) {
+        throw new ListingUnreadableError(`git could not read ${ref} before the task branch was fixed: the symbolic ref has no resolved value.`);
+      }
+      continue;
+    }
     const expected = baseline.get(ref);
-    if (actual !== undefined && !baselineAllows(expected, actual)) {
-      throw taskRefMoved(workspace, ref, "before the task branch was fixed", expected, actual);
+    if (!baselineAllows(expected, actual.value)) {
+      throw taskRefMoved(workspace, ref, "before the task branch was fixed", expected, actual.value);
     }
   }
   // 列の出所だけは書く時に読む —— 上で埋めた祖先の列が下の祖先の出所になる(ADR 0372 決定1・3)。
   // 下の祖先の fork 元の読みは帰り先なしで投げない(#3878): 帰り先を奪う決着した祖先の下に未決着の work は残らない —— give-up は session
   // の終わりを待ち、死んだ祖先の下を倒す(ADR 0380 決定2)。cancel は道連れにし、登録の床は拒む(決定5)。task 自身のブランチが在れば
   // 固定の前の系譜の読みは飛ぶので、それには頼らない
-  for (const ancestor of ancestors) createTaskBranch(db, workspace, { ...ancestor, workspace: workspace.name }, now, { filledFrom: filledFrom(db, ancestor) });
-  createTaskBranch(db, workspace, task, now, { filledFrom: fillOwnColumn ? filledFrom(db, task) : undefined, forkSource });
+  for (const ancestor of ancestors) {
+    const checkedSha = current.get(`refs/heads/${taskBranch(ancestor.id)}`)?.sha;
+    createTaskBranch(db, workspace, { ...ancestor, workspace: workspace.name }, now, { checkedSha, filledFrom: filledFrom(db, ancestor) });
+  }
+  const checkedSha = current.get(`refs/heads/${taskBranch(task.id)}`)?.sha;
+  createTaskBranch(db, workspace, task, now, { checkedSha, filledFrom: fillOwnColumn ? filledFrom(db, task) : undefined, forkSource });
 }
 
 /** ADR 0372 決定3: 同じ固定の瞬間に `workspace` で固定する祖先なら、列に書く名前(導出の値)。固定しない祖先なら undefined。 */
@@ -3027,15 +3039,17 @@ function copySourceBeforeFixing(db: Db, named: WorkspaceConfig, task: Task, now:
 
 /** ADR 0351 決定3 / ADR 0356 決定5: 作成も口を通す plumbing —— 無い行に fork 元の sha を予告する。名前の場所では checkout しない。
  *  ADR 0372 決定2: ref を書いた後に `task_branch_created` を残す。`filledFrom` は同じ固定が空の列に `task.workspace` を書くときの出所で、
- *  列と event は1つの transaction で書く。ADR 0428 決定1: 固定で基準と照合済みの ref が在れば、初回の作成でも作り直しでも event だけを補う。
+ *  列と event は1つの transaction で書く。ADR 0428 決定1: 基準と照合した時点で ref が在れば、そのとき確かめた sha で event だけを補う。
  *  `forkSource` は複製が先に受け取った fork 元の commit(ADR 0414 決定2)—— 無ければここで読む。 */
-function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, { filledFrom, forkSource }: { filledFrom?: string; forkSource?: string } = {}): void {
+function createTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task, now: Date, { checkedSha, filledFrom, forkSource }: { checkedSha: string | undefined; filledFrom?: string; forkSource?: string }): void {
   const ref = `refs/heads/${taskBranch(task.id)}`;
-  if (!taskBranchExists(workspace, task.id)) {
+  let sha = checkedSha;
+  if (sha === undefined) {
     const source = forkSource ?? taskForkSource(db, workspace, task, () => now);
-    boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", ref, source, ""));
+    // 固定の確かめの後で置かれた symref の指し先には書かない。
+    boardRefWriter(db, workspace)(ref, source, () => git(workspace.path, "update-ref", "--no-deref", ref, source, ""));
+    sha = source;
   } else if (hasTaskBranchInForce(db, task.id)) return;
-  const sha = git(workspace.path, "rev-parse", ref);
   // ADR 0273 決定8: 面接室で切る task も列の実環境の名前を残す
   const name = task.workspace ?? workspace.name;
   db.transaction(() => {
@@ -3247,6 +3261,16 @@ async function preparePickupPlace(db: Db, workspace: WorkspaceConfig, task: Task
  *
  *  ADR 0345 決定2: `for-each-ref` は HEAD を出さないので1行足す。`HEAD` は `refs/` より前に並ぶので refname 順のまま。 */
 const REF_SNAPSHOT_FORMAT = "--format=%(if)%(symref)%(then)symref=%(symref)%(else)%(objectname)%(end) %(refname)";
+
+function taskRefsAtFixing(workspace: WorkspaceConfig): Map<string, { value: string; sha: string }> {
+  // ADR 0427 決定1: for-each-ref が先頭の壊れた packed-refs の行を黙って飛ばす形は show-ref で止める(#3826)。
+  gitListing(workspace.path, ["show-ref"]);
+  const refs = gitListing(workspace.path, ["for-each-ref", "--format=%(objectname) %(symref) %(refname)", "refs/heads/task/"]);
+  return new Map(refs.split("\n").filter(Boolean).map((line) => {
+    const [sha, target, ref] = line.split(" ") as [string, string, string];
+    return [ref, { value: target ? symrefValue(target) : sha, sha }];
+  }));
+}
 
 function readRefSnapshotValue(workspace: WorkspaceConfig, ref: string): string {
   return refValues(git(workspace.path, "for-each-ref", "--count=1", REF_SNAPSHOT_FORMAT, ref)).get(ref) ?? "";

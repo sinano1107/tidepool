@@ -1621,7 +1621,10 @@ it("タスクブランチを持ち作業台が disk に無い H の start_work �
   expect(existsSync(humanWorkbench(b, h))).toBe(false);
 });
 
-it.each(["removes the new workbench", "keeps the existing workbench"])("start_work %s when fixing fails (ADR 0414 decision 2)", async (outcome) => {
+it.each([
+  { outcome: "removes the new workbench", existing: false },
+  { outcome: "keeps the existing workbench", existing: true },
+])("start_work $outcome when fixing fails (ADR 0414 decision 2)", async ({ existing }) => {
   const b = await board("start-work-fixing-failed");
   const { parent, h } = underUnfixedParent(b);
   const path = await startedWithCommit(b, h);
@@ -1629,15 +1632,15 @@ it.each(["removes the new workbench", "keeps the existing workbench"])("start_wo
   const ref = `refs/heads/task/${parent.id}`;
   recordLost(b, parent);
   boardRefWriter(b.db, b.ws)(ref, "", () => git(b.ws.path, "update-ref", "-d", ref));
-  if (outcome === "removes the new workbench") rmSync(path, { recursive: true, force: true });
+  if (!existing) rmSync(path, { recursive: true, force: true });
   const allowInsert = failEventInsert(b.db, "task_branch_created");
 
   expect(await startWork(b, h)).toEqual(refused(expect.stringContaining(`workspace ${b.ws.name} is quarantined`)));
   allowInsert();
 
   expect(quarantineQuestion(b.db, "workspace", b.ws.name)!.purpose).toContain("task_branch_created write failed");
-  if (outcome === "removes the new workbench") expect(existsSync(path)).toBe(false);
-  else expect(git(path, "rev-parse", "HEAD")).toBe(tip);
+  if (existing) expect(git(path, "rev-parse", "HEAD")).toBe(tip);
+  else expect(existsSync(path)).toBe(false);
 });
 
 it("拒まれた take_in_work は task に何も書かない: tip が task/<H> の今の値を欠く(text C2a)・未 commit の変更がある(text C2d)—— 子孫の後始末が済んでいなくても通る(pin C6)", async () => {

@@ -25,7 +25,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** git の呼び出しの引数の記録 —— 失われた `task/<id>` を git で読む経路が無いことの釘(ADR 0407 決定1)。既定は素通し。 */
 const gitCalls = vi.hoisted(() => [] as string[][]);
-const copyHook = vi.hoisted(() => ({ run: undefined as ((cwd: string) => void) | undefined }));
+const afterGit = vi.hoisted(() => ({ run: undefined as ((cwd: string, args: string[]) => void) | undefined }));
 vi.mock("../src/git.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/git.js")>();
   return {
@@ -33,7 +33,7 @@ vi.mock("../src/git.js", async (importOriginal) => {
     git: (cwd: string, ...args: string[]) => {
       gitCalls.push(args);
       const result = actual.git(cwd, ...args);
-      if (args[0] === "read-tree" && args[1] === "-u" && args[2] === "--reset" && args[3] === "HEAD") copyHook.run?.(cwd);
+      afterGit.run?.(cwd, args);
       return result;
     },
     // ADR 0409 決定2: 手元の object の読みは stderr を取る runner を通る
@@ -58,15 +58,26 @@ async function board(name: string): Promise<Board> {
   return { db: openDb(":memory:"), clock: new FakeClock(), ws: await makeWorkspace(name), base: await tempDir("tidepool-task-checkouts-") };
 }
 
+/** Inject a change after a real Git operation returns, once per test. */
+function afterGitOperation(matches: (cwd: string, args: string[]) => boolean, run: () => void): void {
+  afterGit.run = (cwd, args) => {
+    if (!matches(cwd, args)) return;
+    afterGit.run = undefined;
+    run();
+  };
+  onTestFinished(() => { afterGit.run = undefined; });
+}
+
 /** After the task checkout or workbench is populated, between baseline comparison and fixing. */
 function afterTaskCopy(b: Board, run: () => void): void {
   const base = realpathSync(b.base);
-  copyHook.run = (cwd) => {
-    if (!cwd.startsWith(`${base}/`)) return;
-    copyHook.run = undefined;
-    run();
-  };
-  onTestFinished(() => { copyHook.run = undefined; });
+  afterGitOperation((cwd, args) => cwd.startsWith(`${base}/`) && args[0] === "read-tree" && args.at(-1) === "HEAD", run);
+}
+
+/** When fixing has checked every candidate and started writing ancestors. */
+function afterAncestorRefWrite(b: Board, ancestor: Task, run: () => void): void {
+  const ref = `refs/heads/task/${ancestor.id}`;
+  afterGitOperation((cwd, args) => cwd === b.ws.path && args[0] === "update-ref" && args.includes(ref), run);
 }
 
 function work(b: Board, title: string, extra: Partial<RegisterTaskInput> = {}): Task {
@@ -1265,6 +1276,46 @@ it("pickup accepts the new ref value while creation is still announced in the ba
   expect(git(place.path, "rev-parse", "HEAD")).toBe(main);
 });
 
+it.each([
+  { kind: "direct", symbolic: false },
+  { kind: "symbolic", symbolic: true },
+])("pickup records the checked commit when a $kind task ref moves during fixing (ADR 0428 decision 1)", async ({ symbolic }) => {
+  const b = await board("moved-after-task-branch-check");
+  const parent = work(b, "parent", { workspace: undefined });
+  const task = work(b, "child", { parent_id: parent.id });
+  const ref = `refs/heads/task/${task.id}`;
+  const target = symbolic ? "refs/heads/recovered" : ref;
+  const main = git(b.ws.path, "rev-parse", "main");
+  const moved = git(b.ws.path, "commit-tree", "main^{tree}", "-p", main, "-m", "outside work");
+  // First capture records the ref but there is no task_branch_created yet.
+  git(b.ws.path, "update-ref", target, main);
+  if (symbolic) git(b.ws.path, "symbolic-ref", ref, target);
+  afterAncestorRefWrite(b, parent, () => git(b.ws.path, "update-ref", target, moved, main));
+
+  const place = await pickUp(b, task);
+
+  expect(git(b.ws.path, "rev-parse", ref)).toBe(moved);
+  expect(git(place.path, "rev-parse", "HEAD")).toBe(main);
+  expect(createdShas(b, task)).toEqual([main]);
+  if (symbolic) expect(git(b.ws.path, "symbolic-ref", ref)).toBe(target);
+});
+
+it("pickup never writes through a dangling symref placed after the fixing check (ADR 0428 decision 1)", async () => {
+  const b = await board("symref-after-task-branch-check");
+  const parent = work(b, "parent", { workspace: undefined });
+  const task = work(b, "child", { parent_id: parent.id });
+  const ref = `refs/heads/task/${task.id}`;
+  const target = "refs/heads/unrelated";
+  const main = git(b.ws.path, "rev-parse", "main");
+  afterAncestorRefWrite(b, parent, () => git(b.ws.path, "symbolic-ref", ref, target));
+
+  await pickUp(b, task);
+
+  expect(git(b.ws.path, "for-each-ref", target)).toBe("");
+  expect(git(b.ws.path, "rev-parse", ref)).toBe(main);
+  expect(createdShas(b, task)).toEqual([main]);
+});
+
 it("give-up の回答が checkout を残したと刻んだ後に後の task のやり直しで拒まれても、拒否の文が在り処を言い、次に通る回答は告げ直さない(ADR 0393 決定3)", async () => {
   const b = await board("kept-then-refused");
   // 解放のやり直しは task の id 順 —— 完了した task が先に残され、名前の場所の事情(残った ref の lock)で解放を負う後の task が拒む
@@ -1451,6 +1502,33 @@ it.each([
   }
   expect(createdShas(b, child)).toEqual([main]);
   expect(existsSync(join(b.base, child.id, String(latestEventOfTask(b.db, child.id, "task_picked_up")!.id)))).toBe(false);
+});
+
+it.each([
+  { kind: "broken loose", dangling: false },
+  { kind: "dangling symbolic", dangling: true },
+])("pickup detects a $kind ref before fixing any ancestor (ADR 0427 decision 1 / ADR 0414 decision 9)", async ({ dangling }) => {
+  const b = await seededBoard("unreadable-at-fixing");
+  const parent = work(b, "parent", { workspace: undefined });
+  const task = work(b, "child", { parent_id: parent.id });
+  const ref = `refs/heads/task/${task.id}`;
+  const target = "refs/heads/missing";
+  afterTaskCopy(b, () => {
+    if (dangling) {
+      git(b.ws.path, "symbolic-ref", ref, target);
+    } else {
+      mkdirSync(join(b.ws.path, ".git", "refs", "heads", "task"), { recursive: true });
+      writeFileSync(join(b.ws.path, ".git", ref), "garbage\n");
+    }
+  });
+
+  await expect(pickUp(b, task)).rejects.toThrow(ref);
+
+  expect(getTask(b.db, parent.id)!.workspace).toBeNull();
+  expect(createdShas(b, parent)).toEqual([]);
+  expect(existsSync(join(b.ws.path, ".git", "refs", "heads", "task", parent.id))).toBe(false);
+  expect(git(b.ws.path, "for-each-ref", target)).toBe("");
+  expect(createdShas(b, task)).toEqual([]);
 });
 
 // #3878: 固定の書くループは下の祖先の fork 元を読む(`createTaskBranch`)が、そこで帰り先なしにはならない —— 作り直す2人の間に死んだ祖先は
