@@ -12,7 +12,19 @@ import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
+// 空きが 0 の fs を作る口 —— 既定は素通し
+const fsHook = vi.hoisted(() => ({ bavail: undefined as number | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  const statfsSync = ((path: string, options?: object) => {
+    const stats = fs.statfsSync(path, options);
+    return fsHook.bavail === undefined ? stats : { ...stats, bavail: fsHook.bavail };
+  }) as typeof fs.statfsSync;
+  return { ...fs, default: { ...fs, statfsSync }, statfsSync };
+});
+
 afterEach(() => {
+  fsHook.bavail = undefined;
   vi.unstubAllEnvs();
 });
 
@@ -48,7 +60,7 @@ it("cwd が無い git は subcommand と在り処を名指して投げ、元の 
   expect((err.cause as NodeJS.ErrnoException).code).toBe("ENOENT");
 });
 
-it("cwd があって git が PATH に無いなら、元の spawn の失敗をそのまま投げる(issue #2722)", async () => {
+it("cwd があって git が PATH に無いなら、在り処を名指さず spawn の失敗の code と文で投げる(issue #2722)", async () => {
   const cwd = await tempDir("tidepool-git-");
   vi.stubEnv("PATH", cwd);
   const err = thrown(() => git(cwd, "status"));
@@ -90,6 +102,17 @@ it("述語の git は exit 1 を no と答え、道具の失敗(128)は no と�
 
   expect(isAncestor(repo, second, first)).toBe(false);
   expect(thrown(() => isAncestor(repo, "f".repeat(40), first))).toMatchObject({ constructor: GitToolError, status: 128 });
+});
+
+it("空きが 0 の fs でも述語の「no」(exit 1)は no と答え、容量切れと言わない道具の失敗(128)は host の失敗になる(ADR 0433 決定5)", async () => {
+  const repo = await makeWorkspace("git-no-free-space");
+  const first = fixtureGit(repo.path, "rev-parse", "HEAD");
+  fixtureGit(repo.path, "commit", "--allow-empty", "-q", "-m", "second");
+  const second = fixtureGit(repo.path, "rev-parse", "HEAD");
+  fsHook.bavail = 0;
+
+  expect(isAncestor(repo, second, first)).toBe(false);
+  expect(thrown(() => isAncestor(repo, "f".repeat(40), first))).toBeInstanceOf(CheckoutHostError);
 });
 
 it.each(RUNNERS)("%s は disk が満ちて落ちた git を git の道具の失敗でなく host の失敗で投げる(ADR 0433 決定5)", async (runner) => {

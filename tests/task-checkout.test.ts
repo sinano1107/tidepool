@@ -583,6 +583,18 @@ it("task の checkout を作る fetch が disk の満杯で落ちる pickup は�
   expect(listEvents(db, task.id).find((e) => e.kind === "spawn_failed")?.payload).toMatchObject({ message: expect.stringContaining("No space left on device") });
 });
 
+it("pickup の門の fetch が名前の場所へ運ぶ段で disk の満杯に落ちれば、門の Quarantine でなく spawn_failed になる(ADR 0433 決定5)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("pickup-gate-disk-full");
+  db = openDb(":memory:");
+  const task = register();
+  // 網から盤面の repo へ引いた commit を名前の場所へ運ぶ2つ目の fetch だけが、この引数を1語で持つ
+  await shimGit({ fails: ["refs/board/fetched", "error: unable to write file: No space left on device"] });
+
+  expect(await scheduledPickup(workspace, await tempDir("tidepool-task-checkouts-"))).toEqual([task.id]);
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  expect(listEvents(db, task.id).find((e) => e.kind === "spawn_failed")?.payload).toMatchObject({ message: expect.stringContaining("No space left on device") });
+});
+
 // ADR 0411 決定5: 複製を作る fetch は閉包を全部読む —— 触らない履歴の欠けでも pickup は名前の場所の側で止まる
 it("古い履歴にだけある blob が欠けた名前の場所の pickup は、その blob を名指す名前の場所の Quarantine で止まり、task は失敗にならない(ADR 0411 決定5)", async () => {
   const named = await makeWorkspace("task-checkout-old-history-missing");

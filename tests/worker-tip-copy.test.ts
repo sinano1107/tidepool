@@ -361,6 +361,17 @@ it("写しの中の git が tmp の容量切れで落ちれば host の失敗で
   expect(existsSync(join(place.path, ".git"))).toBe(true);
 });
 
+it("写しの検証の git が disk の満杯で落ちれば、写しの host の失敗の文で task の失敗になる(ADR 0433 決定5 / ADR 0364 決定2)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  await shimGit({ fails: ["--strict", "fatal: unable to write file: No space left on device"] });
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(releaseFailure(db, task)).toMatchObject({ reason: expect.stringContaining("the board cannot make its copy of the task checkout's git files: the host is out of space: ") });
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+});
+
 it("運んだ後の確かめが tmp の容量切れで落ちれば写しの host の失敗で、完了の門は欠けや破損と言わずに拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
   const { db, task, place } = await pickedUp();
   commitWork(place.path, "work.txt", "work\n");

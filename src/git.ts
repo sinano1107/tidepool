@@ -263,8 +263,12 @@ function isDirectoryBeneath(cwd: string, rel: string): boolean {
 /** ADR 0356 決定2 / ADR 0371 決定4: 盤面が信じない checkout(task の checkout と作業台)が読めない。文の主語は投げる側が決める。 */
 export class CheckoutUnreadableError extends Error {}
 
-/** ADR 0356 決定2 / ADR 0364 決定2 / ADR 0367 決定1: checkout や盤面の一時 repo を用意する host 側の失敗。 */
+/** ADR 0356 決定2 / ADR 0364 決定2 / ADR 0367 決定1: checkout や盤面の一時 repo を用意する host 側の失敗。ADR 0433 決定5: 盤面のどの git でも、
+ *  disk が満ちて落ちたもの(`GitOutOfSpaceError`)も含む。 */
 export class CheckoutHostError extends Error {}
+
+/** ADR 0433 決定5: git の実行の出所が、disk が満ちて落ちた git を投げる host の失敗。文は git のもの —— 段は自分の文で包み直す。 */
+export class GitOutOfSpaceError extends CheckoutHostError {}
 
 export function stagingHostStep<T>(step: () => T): T {
   try {
@@ -279,9 +283,16 @@ const stagingHostError = (cause: unknown) =>
   new CheckoutHostError(`the board cannot stage the task checkout's working tree: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
 
 /** ADR 0364 決定2 / ADR 0367 決定1: writing the board's temporary repo can fail because the host is out of space. */
-export function outOfSpace(dir: string | undefined, cause: unknown): boolean {
-  if ((cause as NodeJS.ErrnoException | null)?.code === "ENOSPC" || String((cause as { stderr?: unknown } | null)?.stderr ?? "").includes("No space left on device")) return true;
-  if (dir === undefined) return false;
+export function outOfSpace(dir: string, cause: unknown): boolean {
+  return saysOutOfSpace(cause) || noFreeSpace(dir);
+}
+
+/** 失敗そのもの(fs の ENOSPC か git の stderr)が容量切れと言う。 */
+const saysOutOfSpace = (cause: unknown) =>
+  (cause as NodeJS.ErrnoException | null)?.code === "ENOSPC" || String((cause as { stderr?: unknown } | null)?.stderr ?? "").includes("No space left on device");
+
+/** `dir` の fs に、盤面のユーザーが使える空きが無い —— 容量切れと言わない書き込みの失敗を読む。 */
+function noFreeSpace(dir: string): boolean {
   try {
     return statfsSync(dir).bavail === 0;
   } catch {
@@ -297,7 +308,7 @@ type RecordedAhead = { ref: string; at: string };
  *  `ahead`, the paths the view excludes take the ref's entries. ADR 0412 決定2: an `objectsFrom` with `objects/info/alternates` throws an
  *  untyped Error before the worktree is read —— borrow the named place's objects inside `use`, after the stage. */
 export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string, use: (tree: string, gitDir: string) => T, exclude: string[] = [], ahead?: RecordedAhead): T {
-  // ADR 0412 決定3: ref の entry は名前の場所の側の段で読む(tree だけ、blob は読まない)—— 失敗は型の無いまま投げる
+  // ADR 0412 決定3: ref の entry は名前の場所の側の段で読む(tree だけ、blob は読まない)—— 失敗は git の実行の出所の型のまま投げる
   const recorded = ahead ? git(ahead.at, "--no-replace-objects", "ls-tree", "-r", "-z", ahead.ref).split("\0").filter(Boolean) : [];
   const recordedGitlinks = gitlinkPaths(recorded);
   return viewWith(runOnWorkerTree, cwd, (view, gitDir) => {
@@ -318,6 +329,7 @@ export function boardWriteTree<T>(cwd: string, head: string, objectsFrom: string
       }
       if (ahead) tree = overlayRecorded(view, excluded, recorded, tree.length);
     } catch (cause) {
+      if (cause instanceof GitOutOfSpaceError) throw stagingHostError(cause);
       if (cause instanceof WorkerTreeGitTimeoutError || cause instanceof CheckoutUnreadableError || cause instanceof CheckoutHostError) throw cause;
       if (outOfSpace(gitDir, cause)) throw stagingHostError(cause);
       throw new CheckoutUnreadableError(`the task checkout at ${cwd} cannot be read: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
@@ -418,9 +430,9 @@ export function gitReporting(
   const stderr = result.stderr?.toString() ?? "";
   if (result.error) {
     if (timeout !== undefined && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") throwTimedOut(result.error, result.pid, stderr, args, bound ?? timeout);
-    throw gitFailure(cwd, args, result.error.message, result.error as GitToolFields, result.error);
+    throw gitFailure(cwd, args, result.error);
   }
-  if (result.status !== 0) throw gitFailure(cwd, args, `Command failed: git ${args.join(" ")}\n${stderr}`, { status: result.status, stderr });
+  if (result.status !== 0) throw gitFailure(cwd, args, Object.assign(new Error(`Command failed: git ${args.join(" ")}\n${stderr}`), { status: result.status, stderr }));
   return { stdout: result.stdout.toString(), stderr };
 }
 
@@ -482,7 +494,7 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
   } catch (err) {
     const { code, pid, stderr } = err as NodeJS.ErrnoException & { pid?: number; stderr?: Buffer };
     if (timeout !== undefined && code === "ETIMEDOUT") throwTimedOut(err, pid, stderr, args, bound ?? timeout);
-    throw gitFailure(cwd, args, (err as Error).message, err as GitToolFields, err);
+    throw gitFailure(cwd, args, err as Error);
   }
 }
 
@@ -531,11 +543,11 @@ export function workerRepoGitUntil(deadline: number, cwd: string, args: string[]
   return runOnWorkerTree(cwd, args, undefined, input, deadline).toString().trim();
 }
 
-/** `run`・`gitReporting`(`gitFailure` を通る)と、github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` が共有する —— 網に出る git
- *  そのもの(`runAuthedGit`)は盤面所有の repo か HOME を cwd にするので通らず、clone の置き場の不在は `authedClone` が
- *  同じ文で先に名指す。Node は cwd が無いときも git が
- *  PATH に無いときも在り処を言わない「spawnSync git ENOENT」だけを投げ、それが quarantine の理由にそのまま載る
- *  (issue #2722)—— cwd が無いほうだけを在り処を名指す git の道具の失敗(ADR 0433 決定3)に書き換え、git が無いほうは元のまま投げる。 */
+/** github-auth.ts で盤面の網に出る git が最初に checkout を読む `checkoutOrigin` の失敗の口(`run`・`gitReporting` は `gitFailure` で同じ
+ *  `missingCwd` を通る)—— 網に出る git そのもの(`runAuthedGit`)は盤面所有の repo か HOME を cwd にするので通らず、clone の置き場の不在は
+ *  `authedClone` が同じ文で先に名指す。Node は cwd が無いときも git が PATH に無いときも在り処を言わない「spawnSync git ENOENT」だけを
+ *  投げ、それが quarantine の理由にそのまま載る(issue #2722)—— cwd が無いほうだけを在り処を名指す git の道具の失敗(ADR 0433 決定3)に
+ *  書き換え、ほかの失敗(git が無い、origin が無い)は受け取ったまま投げる。 */
 export function rethrowNamingMissingCwd(err: unknown, cwd: string, args: string[]): never {
   throw missingCwd((err as NodeJS.ErrnoException).code, cwd, args, err) ?? err;
 }
@@ -556,15 +568,16 @@ export class GitToolError extends Error {
   pid?: number;
 }
 
-/** ADR 0433 決定3・5: `run` と `gitReporting` の失敗の出所 —— disk が満ちた失敗は host の失敗、残りは git の道具の失敗。元の失敗は欄に
+/** ADR 0433 決定3・5: `run` と `gitReporting` の失敗 `err` の出所 —— disk が満ちた失敗は host の失敗、残りは git の道具の失敗。元の失敗は欄に
  *  写すので cause に持たない(cwd が無い失敗だけが今までどおり持つ)。 */
-function gitFailure(cwd: string, args: string[], message: string, { status, stderr, stdout, code, pid }: GitToolFields, spawnError?: unknown): Error {
-  const missing = missingCwd(code, cwd, args, spawnError);
+function gitFailure(cwd: string, args: string[], err: Error & GitToolFields): Error {
+  const { message, status, stderr, stdout, code, pid } = err;
+  const missing = missingCwd(code, cwd, args, err);
   if (missing) return missing;
   // 述語の「no」(exit 1)は答え —— 空き 0 を返す fs でも host の失敗にしない。空きを見るのは git が容量切れと言わない失敗だけ
-  if (outOfSpace(status === 1 ? undefined : cwd, { code, stderr })) {
-    // 写す段の `outOfSpace` が同じ欄で読み、段の文で包み直す
-    return Object.assign(new CheckoutHostError(`the host is out of space: ${message}`), { code, stderr });
+  if (saysOutOfSpace(err) || (status !== 1 && noFreeSpace(cwd))) {
+    // `stderr` と `code` も持つ —— 写す段の `outOfSpace` が同じ欄で読む。staging と写す段はこの型を見て段の文で包み直す
+    return Object.assign(new GitOutOfSpaceError(`the host is out of space: ${message}`), { code, stderr });
   }
   return Object.assign(new GitToolError(message), { status, stderr, stdout, code, pid });
 }

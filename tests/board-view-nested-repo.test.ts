@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
-import { boardViewStatus, boardWriteTree, CheckoutUnreadableError } from "../src/git.js";
-import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, makeWorkspace, STAGING_FAILURES, submoduleSource } from "./harness.js";
+import { boardViewStatus, boardWriteTree, CheckoutHostError, CheckoutUnreadableError } from "../src/git.js";
+import { addSubmodule, breakCheckoutStaging, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, gitObjectFileCount, makeWorkspace, STAGING_FAILURES, shimGit, submoduleSource } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -166,6 +166,14 @@ it("無効な gitfile を持つ dir の中の file は blob で入り、.git は
   boardWriteTree(path, head, path, (tree, staged) => {
     expect(entries(staged, tree).filter((entry) => entry.includes(" mod"))).toEqual(["100644 mod/inside.txt"]);
   });
+});
+
+it("stage の git が disk の満杯で落ちれば、staging の文で包んだ host の失敗で投げる(ADR 0433 決定5 / ADR 0367 決定1)", async () => {
+  const { path, head } = await checkout("stage-disk-full");
+  await shimGit({ fails: ["write-tree", "fatal: unable to write new index file: No space left on device"] });
+
+  expect(() => boardWriteTree(path, head, path, () => undefined)).toThrow(CheckoutHostError);
+  expect(() => boardWriteTree(path, head, path, () => undefined)).toThrow("the board cannot stage the task checkout's working tree: the host is out of space: ");
 });
 
 it("列挙と add -A の間に worker が入れ子の .git を作れば、WIP は書いた tree の gitlink を base と比べて worker の repo の故障として投げる", async () => {
