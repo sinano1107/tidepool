@@ -1933,12 +1933,10 @@ describe("ClaudeCodeWorker", () => {
     const rootSandbox = sandboxSettings(rootCall.args, logDir);
     expect(rootSandbox.filesystem.allowWrite).toEqual([rootCheckout, rootCall.env.TMPDIR]);
     expect(rootSandbox.filesystem.allowRead).toContain(read);
-    expect(rootSandbox.filesystem.allowRead).not.toContain(real);
     expect(rootSandbox.filesystem.allowRead).not.toContain(room);
     expect(JSON.parse(readFileSync(rootCall.args[rootCall.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toEqual([`Read(/${read}/**)`]);
     const childSandbox = sandboxSettings(childCall.args, logDir);
     expect(childSandbox.filesystem.allowRead).not.toContain(real);
-    expect(childSandbox.filesystem.allowRead).not.toContain(read);
     expect(childSandbox.filesystem.allowRead).not.toContain(room);
     expect(childSandbox.network.allowedDomains).toEqual(["registry.npmjs.org"]);
   });

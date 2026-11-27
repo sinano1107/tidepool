@@ -673,7 +673,7 @@ export function startScheduler(deps: {
         }
         try {
           await prepareWorkspaceAtPickup(db, place, picked, {
-            githubAuth, live, reads: checks, realEnvironment: picked.type === "interview" ? checks[0]?.place : undefined,
+            githubAuth, live, reads: checks, realEnvironment: picked.type === "interview" ? resolved : undefined,
             workspacesBaseDir: base, now: () => clock.now(), resolveRegistered: resolveWorkspace, defaultWorkspaceName: workspace?.name,
           });
         } catch (err) {

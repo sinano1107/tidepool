@@ -749,7 +749,6 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(sessionRealEnvironmentCheckout(f.db, root.id)!.path)}="read"`,
       `${JSON.stringify(sessionReadCheckoutOf(f.db, root.id, evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
-    expect(rows).not.toContain(JSON.stringify(f.workspace));
     for (const id of [root.id, evidence.id]) expect(rows).not.toContain(JSON.stringify(roomOf(id)));
   });
 

@@ -1154,16 +1154,18 @@ export interface GitCall {
 /** PATH の本物の git の前に置く shim。呼び出しごとに argv と env を記録し、`route` の URL を書き換え(盤面の網に出る git は
  *  checkout の insteadOf を読まない、ADR 0339 決定5 —— 盤面が組んだ URL の往復を local の bare へ回す)、`fake` の verb は本物へ
  *  渡さず exit 0 で答える(`ls-remote` には `lsRemote` の行を返す)。`fails` の引数を持つ呼び出しは本物へ渡さず、その stderr を出して
- *  exit 128 で落ちる(相手の答えや網の失敗を作る)。それ以外は本物へ渡す。
+ *  exit 128 で落ちる(相手の答えや網の失敗を作る)。3番目に cwd を渡すとその場所だけで落ちる。それ以外は本物へ渡す。
  *  テスト自身の git の呼び出しも通るので、URL を引数に渡すテストの git の**後に**入れる。テストの終わりに PATH を戻す。 */
 export async function shimGit(
-  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string; fails?: [argument: string, stderr: string] } = {},
+  options: { route?: [from: string, to: string]; fake?: string[]; lsRemote?: string; fails?: [argument: string, stderr: string, cwd?: string] } = {},
 ): Promise<() => GitCall[]> {
   const real = execFileSync("sh", ["-c", "command -v git"]).toString().trim();
   const dir = await tempDir("tidepool-git-shim-");
   const log = join(dir, "calls.log");
   writeFileSync(log, "");
   const [from, to] = options.route ?? [];
+  const failCwd = options.fails?.[2];
+  const inFailCwd = failCwd === undefined ? "true" : `[ "$PWD" = '${failCwd.replaceAll("'", "'\"'\"'")}' ]`;
   const fake = (options.fake ?? []).map((verb) => `*" ${verb} "*`).join("|");
   writeFileSync(
     join(dir, "git"),
@@ -1173,7 +1175,7 @@ export async function shimGit(
       `{ echo ---; for a in "$@"; do echo "arg=$a"; done; [ -f "$alt" ] && echo "alternates=$(cat "$alt")"; ` +
       `echo "env.GH_TOKEN=\${GH_TOKEN-}"; echo "env.GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}"; ` +
       `echo "env.GIT_OBJECT_DIRECTORY=\${GIT_OBJECT_DIRECTORY-}"; } >> "${log}"\n` +
-      (options.fails ? `case " $* " in *" ${options.fails[0]} "*) printf '%s\\n' '${options.fails[1]}' >&2; exit 128;; esac\n` : "") +
+      (options.fails ? `case " $* " in *" ${options.fails[0]} "*) if ${inFailCwd}; then printf '%s\\n' '${options.fails[1]}' >&2; exit 128; fi;; esac\n` : "") +
       (fake ? `case " $* " in ${fake}) case " $* " in *" ls-remote "*) printf '%s' '${options.lsRemote ?? ""}';; esac; exit 0;; esac\n` : "") +
       `exec "${real}" "$@"\n`,
     { mode: 0o755 },
