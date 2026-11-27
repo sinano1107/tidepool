@@ -605,6 +605,45 @@ export async function callAsTask(t: Tidepool, taskId: string, name: string, args
   }
 }
 
+/** ADR 0424 決定2・3: `verb` の応答が session の終わりで、`verb` を名指し `fragment` を載せた failure question(retry / abandon)が立ち、
+ *  `nothingRecorded` が verb の記録の無さを確かめ、`quarantined`(workspace の Quarantine の値)の資源の停止が無い。verb の前に
+ *  `t.containers.hold(taskId)` して後始末を回収済み観測の後ろに止めておけば、ここまでの停止の無さは verb が登録しないことを言う。
+ *  最後に容器を空けて後始末を待つ。 */
+export async function expectReclaimed(
+  t: Tidepool,
+  { verb, taskId, session, res, fragment, quarantined, nothingRecorded }:
+    { verb: string; taskId: string; session: string; res: any; fragment: string; quarantined: string; nothingRecorded: () => Promise<void> },
+): Promise<void> {
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toContain("this session is over");
+  expect(t.containers.forceReclaims).toEqual([session]);
+  const failure = (await questions(t)).find((question) => question.parent_id === taskId && question.question_cancel_option === "abandon" && question.status === "todo");
+  expect(failure.title).toContain(verb);
+  expect(failure.purpose).toContain(fragment);
+  expect(failure.question_items.map((item: any) => item.options)).toEqual([["retry", "abandon"]]);
+  await nothingRecorded();
+  expect(await servedQuarantineQuestion(t, "workspace", quarantined)).toBeUndefined();
+  t.containers.fireEmpty(session);
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
+}
+
+/** complete_task の回収(`expectReclaimed`): task は done でない。 */
+export const expectCompletionReclaimed = (t: Tidepool, taskId: string, session: string, res: any, fragment: string, workspace: string): Promise<void> =>
+  expectReclaimed(t, {
+    verb: "complete_task", taskId, session, res, fragment, quarantined: workspace,
+    nothingRecorded: async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${taskId}`)).json.status).not.toBe("done"),
+  });
+
+/** pose_probe の回収(`expectReclaimed`): 出題(decision log)も監査の review も無い。面接室の Quarantine の値は root の id。 */
+export const expectPoseReclaimed = (t: Tidepool, rootId: string, session: string, res: any, fragment: string): Promise<void> =>
+  expectReclaimed(t, {
+    verb: "pose_probe", taskId: rootId, session, res, fragment, quarantined: rootId,
+    nothingRecorded: async () => {
+      expect((await api(t.baseUrl, "GET", `/api/tasks/${rootId}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
+      expect((await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.type === "review")).toEqual([]);
+    },
+  });
+
 /** 応答予算(ADR 0195)。読み口の応答は、盤面が返す CallToolResult を丸ごとシリアライズした UTF-8 バイト数でこれ以下に収まる。 */
 export const RESPONSE_BUDGET_BYTES = 40_000;
 

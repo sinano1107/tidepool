@@ -14,6 +14,8 @@ import {
   checkoutOf,
   commitOnRefByHand,
   commitWork,
+  expectCompletionReclaimed,
+  expectPoseReclaimed,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -26,7 +28,6 @@ import {
   poseAccepted,
   prepareAtPickup,
   quarantineQuestion,
-  questions,
   registerWork,
   servedQuarantineQuestion,
   sessionId,
@@ -435,37 +436,34 @@ const recordFailures = {
   },
 } as const;
 
-it.each(["named place", "host"] as const)("complete_task は %s の側で tip を記録できなければ拒むだけで、資源を止めず task を失敗にしない(ADR 0364 決定2 / ADR 0359 決定4)", async (side) => {
+it.each(["named place", "host"] as const)("complete_task は %s の側で tip を記録できなければ拒まず、失敗の文を載せた failure question を登録して回収し、verb で資源を止めない(ADR 0424 決定2・3)", async (side) => {
   const ws = await makeWorkspace("tip-copy-gate");
   const board = (t = await bootTidepool({ workspace: ws }));
   const task = await registerWork(board, "record the tip");
   await board.clock.advance(HOUR);
   commitWork(checkoutOf(board.db, task.id), "work.txt", "work\n");
+  const session = String(sessionId(board.db, task.id));
+  board.containers.hold(task.id);
 
   const restore = recordFailures[side](ws.path);
   const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF }).finally(restore);
 
-  expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain("Retry complete_task or escalate");
-  expect((await api(board.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
-  expect(board.containers.forceReclaims).toEqual([]);
-  expect((await questions(board)).filter((question) => question.parent_id === task.id)).toEqual([]);
-  expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
+  await expectCompletionReclaimed(board, task.id, session, res, side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace", ws.name);
 });
 
-it("complete_task は人間が動かした task/<id> を retry では直らないと言って拒むだけで、workspace の Quarantine を立てない(ADR 0373 決定12 / ADR 0359 決定4)", async () => {
+it("complete_task は人間が動かした task/<id> を拒まず、動いた ref を載せた failure question を登録して回収し、verb で workspace の Quarantine を立てない(ADR 0424 決定2・3)", async () => {
   const ws = await makeWorkspace("tip-copy-moved");
   const board = (t = await bootTidepool({ workspace: ws }));
   const task = await registerWork(board, "record the tip");
   await board.clock.advance(HOUR);
   commitWork(checkoutOf(board.db, task.id), "work.txt", "work\n");
-  commitOnRefByHand(ws.path, `refs/heads/task/${task.id}`);
+  const moved = commitOnRefByHand(ws.path, `refs/heads/task/${task.id}`);
+  const session = String(sessionId(board.db, task.id));
+  board.containers.hold(task.id);
 
   const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF });
 
-  expect(res.isError).toBe(true);
-  expect(res.content[0].text).toBe(`task/${task.id} was moved outside the board. Retrying complete_task will not fix this — escalate.`);
-  expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
+  await expectCompletionReclaimed(board, task.id, session, res, `now: ${moved} refs/heads/task/${task.id}`, ws.name);
 });
 
 it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の写しを面接室に記録できなければ拒まず、失敗の文を載せた failure question を登録して回収し、verb で資源を止めない(ADR 0424 決定2・3)", async (side) => {
@@ -481,15 +479,6 @@ it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の�
   const restore = recordFailures[side](interviewRoomPath(board.db, root.id)!);
   const res = await callAsTask(board, root.id, "pose_probe", { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }).finally(restore);
 
-  expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain("this session is over");
-  expect(board.containers.forceReclaims).toEqual([session]);
-  const failure = (await questions(board)).find((question) => question.parent_id === root.id);
-  expect(failure).toMatchObject({ title: expect.stringContaining("pose_probe"), question_cancel_option: "abandon" });
-  expect(failure.purpose).toContain(side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace");
-  expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
-  expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
-  board.containers.fireEmpty(session);
-  await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
+  await expectPoseReclaimed(board, root.id, session, res, side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace");
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
 });

@@ -4,9 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   api,
   bootTidepool,
+  callAsTask,
   checkoutOf,
   commitWork,
   completeIntegrationReviews,
+  expectCompletionReclaimed,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -15,6 +17,7 @@ import {
   mcpClient,
   registerWork,
   servedQuarantineQuestion,
+  sessionId,
   type Tidepool,
 } from "./harness.js";
 
@@ -87,7 +90,7 @@ it("complete による解放ではツリーがクリーンに戻り、WIP コミ
   expect(() => git(ws.path, "show", "main:notes.txt")).toThrow();
 });
 
-it("complete_task explains a board-side ref write failure and can be retried in the same session", async () => {
+it("complete_task は名前の場所の task branch を書けなければ拒まず、失敗の文を載せた failure question を登録して session を回収する(ADR 0424 決定2・3)", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "write things");
@@ -96,22 +99,13 @@ it("complete_task explains a board-side ref write failure and can be retried in 
   commitWork(checkoutOf(t.db, task.id), "notes.txt", "finished work\n");
   const lock = join(ws.path, ".git", "refs", "heads", "task", `${task.id}.lock`);
   writeFileSync(lock, "");
-  const client = await mcpClient(t.mcpBaseUrl, task.id);
-  const complete = () => client.callTool({ name: "complete_task", arguments: { handoff: fullHandoff } });
-  try {
-    expect(await complete()).toMatchObject({
-      isError: true,
-      content: [{ type: "text", text: expect.stringMatching(/the board could not record the task branch tip.*retry complete_task or escalate/is) }],
-    });
-    expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
-    expect(await servedQuarantineQuestion(t, "workspace", ws.name)).toBeUndefined();
+  const session = String(sessionId(t.db, task.id));
+  t.containers.hold(task.id);
 
-    rmSync(lock);
-    expect((await complete()).isError ?? false).toBe(false);
-    expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("done");
-  } finally {
-    await client.close();
-  }
+  const res = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
+  rmSync(lock);
+
+  await expectCompletionReclaimed(t, task.id, session, res, `${task.id}.lock`, ws.name);
 });
 
 it("release は既知パス・untracked・0バイトをすべて満たす sandbox shadow だけを WIP から除く", async () => {
