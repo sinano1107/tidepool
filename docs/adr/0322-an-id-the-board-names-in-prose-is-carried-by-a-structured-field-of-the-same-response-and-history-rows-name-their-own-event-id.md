@@ -1,5 +1,7 @@
 # 盤面が散文で名指す id は同じ応答の構造欄が持ち、history の行は自分の event id を名乗る
 
+**Status 追記: 判事の入力の `actor` で人間の行を見分けさせる前提は失われた(ADR 0437 決定2)** —— worker 以外の行は判事に届かない。
+
 2026-10-28 の triage → grilling(issue #2672、#2663 の再確認で出た族の根)で決定。盤面が worker と判事に出す散文 —— RCA の purpose
 の「stop 123: …」「entry 3: …」、定義の証拠節の「stop #123」「entries #3, #5」、判断ログの行の「repair <task id>」「deliverable <task id>」——
 は event id / task id で対象を名指すのに、同じ応答の構造の側はその id を持たなかった: `parent.history` の行に event id が無く(行の id は
