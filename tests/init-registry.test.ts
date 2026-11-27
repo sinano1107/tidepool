@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createBoardHome, resolveBoardPlaces } from "../src/board-home.js";
 import {
   DEFAULT_AGENT_NAME,
   DEFAULT_AUDITOR_NAME,
@@ -22,21 +23,24 @@ function git(cwd: string, ...args: string[]): string {
     .trim();
 }
 
-async function emptyRegistryClone(): Promise<{ clone: string; origin: string; root: string }> {
+/** 盤面の家を作り、家から導いた registry clone の場所へ空の remote を clone する(ADR 0436 決定1)。 */
+async function emptyRegistryClone(): Promise<{ clone: string; origin: string; root: string; home: string }> {
   const root = await tempDir("tidepool-init-registry-");
   const origin = join(root, "origin.git");
-  const clone = join(root, "registry");
+  const home = join(root, "home");
+  createBoardHome(home);
+  const clone = resolveBoardPlaces({ TIDEPOOL_HOME: home }).registryDir;
   git(root, "init", "--bare", "-b", "main", origin);
   git(root, "clone", "--quiet", origin, clone);
   git(clone, "config", "user.name", "Registry Owner");
   git(clone, "config", "user.email", "owner@example.com");
-  return { clone, origin, root };
+  return { clone, origin, root, home };
 }
 
 function cleanEnv(overrides: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of [
-    "TIDEPOOL_REGISTRY",
+    "TIDEPOOL_HOME",
     "TIDEPOOL_WORKSPACES_DIR",
     "TIDEPOOL_WORKSPACE",
     "TIDEPOOL_AGENT",
@@ -56,20 +60,30 @@ function runInit(env: NodeJS.ProcessEnv) {
 }
 
 describe("npm run init-registry", () => {
-  it("requires TIDEPOOL_REGISTRY", () => {
-    const result = runInit(cleanEnv({}));
+  it("requires the board home", async () => {
+    const home = join(await tempDir("tidepool-init-no-home-"), "home");
+    const result = runInit(cleanEnv({ TIDEPOOL_HOME: home }));
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toBe("Error: TIDEPOOL_REGISTRY is required\n");
+    expect(result.stderr).toContain(`no board home at ${home}`);
+  });
+
+  it("requires the registry clone in the board home", async () => {
+    const home = join(await tempDir("tidepool-init-no-clone-"), "home");
+    createBoardHome(home);
+    const result = runInit(cleanEnv({ TIDEPOOL_HOME: home }));
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`no registry clone at ${resolveBoardPlaces({ TIDEPOOL_HOME: home }).registryDir}`);
   });
 
   it("seeds an empty remote with the default registry and an initial workspace", async () => {
-    const { clone, origin, root } = await emptyRegistryClone();
+    const { clone, origin, root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
       }),
     );
@@ -122,7 +136,7 @@ describe("npm run init-registry", () => {
   });
 
   it("refuses an existing non-git workspace before changing the registry or workspace", async () => {
-    const { clone, origin, root } = await emptyRegistryClone();
+    const { clone, origin, root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
     const workspace = join(workspacesDir, "sandbox");
     await mkdir(workspace, { recursive: true });
@@ -130,7 +144,7 @@ describe("npm run init-registry", () => {
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
       }),
     );
@@ -144,7 +158,7 @@ describe("npm run init-registry", () => {
   });
 
   it("refuses a non-empty origin/main without changing the clone or creating a workspace", async () => {
-    const { clone, root } = await emptyRegistryClone();
+    const { clone, root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
     await writeFile(join(clone, "existing.txt"), "existing registry\n");
     git(clone, "add", "existing.txt");
@@ -154,7 +168,7 @@ describe("npm run init-registry", () => {
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
       }),
     );
@@ -169,7 +183,7 @@ describe("npm run init-registry", () => {
   });
 
   it("refuses a non-empty origin whose commit is on another branch", async () => {
-    const { clone, origin, root } = await emptyRegistryClone();
+    const { clone, origin, root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
     await writeFile(join(clone, "existing.txt"), "existing registry\n");
     git(clone, "add", "existing.txt");
@@ -179,7 +193,7 @@ describe("npm run init-registry", () => {
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
       }),
     );
@@ -194,7 +208,7 @@ describe("npm run init-registry", () => {
   });
 
   it("refuses a local registry commit that has not been pushed", async () => {
-    const { clone, origin, root } = await emptyRegistryClone();
+    const { clone, origin, root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
     await writeFile(join(clone, "local.txt"), "local registry\n");
     git(clone, "add", "local.txt");
@@ -203,7 +217,7 @@ describe("npm run init-registry", () => {
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
       }),
     );
@@ -216,7 +230,7 @@ describe("npm run init-registry", () => {
   });
 
   it("refuses a dirty empty clone without overwriting local registry files", async () => {
-    const { clone, origin, root } = await emptyRegistryClone();
+    const { clone, origin, root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
     const localAgent = join(clone, "agents", "tako.md");
     await mkdir(dirname(localAgent), { recursive: true });
@@ -224,7 +238,7 @@ describe("npm run init-registry", () => {
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
       }),
     );
@@ -238,13 +252,15 @@ describe("npm run init-registry", () => {
 
   it("refuses a registry clone with no origin before changing either location", async () => {
     const root = await tempDir("tidepool-init-no-origin-");
-    const clone = join(root, "registry");
+    const home = join(root, "home");
+    createBoardHome(home);
+    const clone = resolveBoardPlaces({ TIDEPOOL_HOME: home }).registryDir;
     const workspacesDir = join(root, "workspaces");
     git(root, "init", "-b", "main", clone);
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
       }),
     );
@@ -256,7 +272,7 @@ describe("npm run init-registry", () => {
   });
 
   it("leaves an existing git workspace untouched", async () => {
-    const { clone, root } = await emptyRegistryClone();
+    const { root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
     const workspace = join(workspacesDir, "sandbox");
     await mkdir(workspace, { recursive: true });
@@ -277,7 +293,7 @@ describe("npm run init-registry", () => {
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
       }),
     );
@@ -289,12 +305,12 @@ describe("npm run init-registry", () => {
   });
 
   it("uses configured agent, workspace, and workspaces directory values, and ignores TIDEPOOL_AUDITOR (ADR 0117 決定1: 種とポインタは独立)", async () => {
-    const { clone, root } = await emptyRegistryClone();
+    const { clone, root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "configured-workspaces");
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
         TIDEPOOL_WORKSPACE: "lagoon",
         TIDEPOOL_AGENT: "ika",
@@ -322,12 +338,12 @@ describe("npm run init-registry", () => {
     // (ADR 0117 決定2: 静かな shadow は作らない)
     ["TIDEPOOL_AGENT", "fugu", 'TIDEPOOL_AGENT must not name the built-in agent "fugu"'],
   ])("refuses unsafe %s values before changing either location", async (key, value, message) => {
-    const { clone, origin, root } = await emptyRegistryClone();
+    const { clone, origin, root, home } = await emptyRegistryClone();
     const workspacesDir = join(root, "workspaces");
 
     const result = runInit(
       cleanEnv({
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
         TIDEPOOL_WORKSPACES_DIR: workspacesDir,
         [key]: value,
       }),
@@ -341,12 +357,12 @@ describe("npm run init-registry", () => {
   });
 
   it("uses ~/tidepool-workspaces when TIDEPOOL_WORKSPACES_DIR is absent", async () => {
-    const { clone, root } = await emptyRegistryClone();
+    const { root, home } = await emptyRegistryClone();
 
     const result = runInit(
       cleanEnv({
         HOME: root,
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
       }),
     );
 
@@ -355,11 +371,11 @@ describe("npm run init-registry", () => {
   });
 
   it("prints only boot steps, while the Mac setup guide keeps the trial on its own workspace", async () => {
-    const { clone, root } = await emptyRegistryClone();
+    const { root, home } = await emptyRegistryClone();
     const result = runInit(
       cleanEnv({
         HOME: root,
-        TIDEPOOL_REGISTRY: clone,
+        TIDEPOOL_HOME: home,
       }),
     );
     expect(result.status, result.stderr).toBe(0);

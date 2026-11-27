@@ -20,6 +20,7 @@ import {
   hashToken,
 } from "../src/auth.js";
 import type { BoardCall } from "../src/board-call.js";
+import { createBoardHome, openBoardHome, resolveBoardPlaces, startBoardOnHome } from "../src/board-home.js";
 import type { BoardStatePath } from "../src/board-state.js";
 import type { Cause } from "../src/cause.js";
 import { ClaudeCodeWorker, moonshotKeyAbsence } from "../src/claude-worker.js";
@@ -235,7 +236,7 @@ export interface Tidepool {
 }
 
 export interface BootOptions {
-  /** Existing board dir to reboot on — for restart tests. */
+  /** 起動し直す既存の盤面の家 —— 再起動のテスト用。家がまだ無ければ家を作る口で作る。 */
   dir?: string;
   /** Override the scripted WorkerAdapter identity across board restarts. */
   workerId?: string;
@@ -261,7 +262,7 @@ export interface BootOptions {
    *  `t.containers` は配線されない fake になる(`workerAdapter` と `t.worker` と同じ)。 */
   containerRuntime?: ContainerRuntime;
   /** transcript の器(ADR 0149)。session の stream を取って落としたいテストだけが渡す。
-   *  Absent → 盤面の dir に開く既定の器。 */
+   *  Absent → 盤面の家に開く既定の器。 */
   transcripts?: TranscriptStore;
   /** This board's one worker's authority profile (issue #11). */
   authority?: AuthorityProfile;
@@ -391,7 +392,8 @@ function normalizeCandidates(
  *  WorkerAdapter and GitHubClient seams. */
 export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool> {
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
-  const dbPath = join(dir, "board.sqlite");
+  // ADR 0436 決定5: テストの盤面も家を作る口で家を用意し、本番と同じ家を開く口を通る
+  createBoardHome(dir);
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock, options.workerId);
   const containers =
@@ -400,11 +402,12 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const push = new FakePushClient();
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
   // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
-  const existingBoard = existsSync(dbPath);
-  const db = openDb(dbPath, { terminate: () => {} });
+  const existingBoard = existsSync(resolveBoardPlaces({ TIDEPOOL_HOME: dir }).dbPath);
+  const home = openBoardHome(dir, { terminate: () => {} });
+  const { db } = home;
   if (!existingBoard) rememberFixtureHeadRepos(db);
   containers.taskIdForSession = (id) => /^\d+$/.test(id) ? getEvent(db, Number(id))?.task_id ?? undefined : undefined;
-  const server = await startServer({
+  const server = await startBoardOnHome(home, () => startServer({
     db,
     port: 0,
     mcpPort: 0,
@@ -429,7 +432,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     transcripts: options.transcripts ?? new TranscriptStore(dir),
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
-    // 面接室(ADR 0273 決定1)は盤面の dir の下に作る —— テストがホームの既定の基点に書かない
+    // 面接室(ADR 0273 決定1)は盤面の家の下に作る —— テストがホームの既定の基点に書かない
     workspacesDir: join(dir, "workspaces"),
     watchdog: options.watchdog,
     github: options.github ?? github,
@@ -475,7 +478,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     githubAuth: options.githubAuth,
     githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,
-  });
+  }));
   // 起動完了の poll は起動の収束の後に走る(ADR 0241 決定5)。GitHub を待たない起動の収束と poll はここで終わる ——
   // テストが盤面に何かを足す前に、起動完了の poll が空の queue を読み終えている(待つ GitHub の fake を渡した盤面は別)
   await new Promise((resolve) => setImmediate(resolve));

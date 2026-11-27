@@ -1,7 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import type { Request, Response } from "express";
 import { type RequestHandler, Router, urlencoded } from "express";
 import { sendJson } from "./send-json.js";
@@ -35,14 +34,6 @@ export function hashToken(token: string): string {
  *  メッセージアプリを経由して端末に届く)。 */
 export function generateToken(): string {
   return randomBytes(32).toString("base64url");
-}
-
-/** ハッシュの置き場所。**盤面ディレクトリには置かない**(#149 の罠: デプロイの
- *  rsync や git 管理下に秘密が紛れ込む)。盤面と `npm run token` の両方がこの
- *  1つの解決関数を通る — HOME が違う実行(sudo 越し等)で別ファイルに書いて
- *  「ローテーションしたのに通らない」になるのを防ぐ。 */
-export function resolveTokenFile(configured: string | undefined): string {
-  return configured ?? join(homedir(), ".tidepool", "api-token");
 }
 
 /** 盤面が持つのはハッシュだけ(ADR 0036)。平文はここでも process.env にも

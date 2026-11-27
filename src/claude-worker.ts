@@ -479,8 +479,8 @@ const MOONSHOT_BASE_URL = "https://api.moonshot.ai/anthropic";
  *  the board's env (ADR 0097 決定4)—— 鍵は Moonshot 向きの注入にだけ要る盤面の
  *  秘密で、env に置く理由が無い。worker に届かないことは ADR 0358 決定2 の列挙が
  *  どちらにしても持つ。
- *  Mirrors auth.ts's `resolveTokenFile`: one resolver so a differing HOME
- *  (sudo 越し等) can't split the board from its tooling. */
+ *  One resolver so a differing HOME (sudo 越し等) can't split the board from its tooling; a read-only
+ *  credential, so it stays outside the board home (ADR 0436 決定1). */
 export function resolveMoonshotApiKeyFile(configured: string | undefined): string {
   return configured ?? join(homedir(), ".tidepool", "moonshot-api-key");
 }

@@ -2634,8 +2634,8 @@ it("着地の比較: 開く前の項に落ちた行の無い名前は、直さ�
   expect(github.requests).toHaveLength(1);
 });
 
-/** 名前の場所の中に盤面の DB を置く固定点 —— 名前の場所と交差する(ADR 0040)。 */
-const overlappingFixedPoint = (workspace: WorkspaceConfig) => [{ label: "board database (TIDEPOOL_DB)", path: join(workspace.path, "board.sqlite") }];
+/** 名前の場所の中に盤面の家を置く固定点 —— 名前の場所と交差する(ADR 0040)。 */
+const overlappingFixedPoint = (workspace: WorkspaceConfig) => [{ label: "board home (TIDEPOOL_HOME)", path: join(workspace.path, "board-home") }];
 
 it("着地の比較: 行の無い名前の場所が盤面の固定点と重なれば、着地は最初の撮りをせず、その名前の Quarantine で止まる", async () => {
   const { workspace, db, clock, github, work } = await doneRootWithBaseline("landing-compare-first-capture-fixed-point");
@@ -2647,7 +2647,7 @@ it("着地の比較: 行の無い名前の場所が盤面の固定点と重な�
 
   expect(holdsBaseline(db, workspace.name)).toBe(false);
   expect(github.requests).toEqual([]);
-  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("overlaps the board's board database (TIDEPOOL_DB)");
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("overlaps the board's board home (TIDEPOOL_HOME)");
 });
 
 it("基準の行が無い workspace のローカル着地の merge 回答は、名前の場所が盤面の固定点と重なれば拒まれ、その名前の Quarantine になり、保護ブランチを動かさない", async () => {
@@ -2662,7 +2662,7 @@ it("基準の行が無い workspace のローカル着地の merge 回答は、�
   ).rejects.toThrow(`workspace "${workspace.name}"`);
 
   expect(holdsBaseline(db, workspace.name)).toBe(false);
-  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("overlaps the board's board database (TIDEPOOL_DB)");
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain("overlaps the board's board home (TIDEPOOL_HOME)");
   expect(getTask(db, question.id)?.status).toBe("todo");
   expect(git(workspace.path, "rev-parse", "main")).toBe(main);
 });

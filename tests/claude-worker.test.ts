@@ -2085,19 +2085,19 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("workspace が盤面の状態パスと重なっていたら spawn せず workspace を quarantine する(issue #149 / ADR 0040)", async () => {
-    // 盤面の DB が workspace の checkout の中にある形 — worker の書き込み半径
+    // 盤面の家が workspace の checkout の中にある形 — worker の書き込み半径
     // (allowWrite: [workspace.path])に盤面の状態が入る、issue #149 の本体。
     const wsDir = await tempDir("tidepool-ws-");
     const { start, calls, db, stops } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
-      { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(wsDir, "board.sqlite") }] },
+      { boardState: [{ label: "board home (TIDEPOOL_HOME)", path: join(wsDir, "board-home") }] },
     );
     const task = start("task-overlap");
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
     const question = quarantineQuestion(db, "workspace", "tidepool");
-    expect(question?.purpose).toContain("board database (TIDEPOOL_DB)");
-    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("board database (TIDEPOOL_DB)") }]]);
+    expect(question?.purpose).toContain("board home (TIDEPOOL_HOME)");
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("board home (TIDEPOOL_HOME)") }]]);
   });
 
   it("盤面の状態パスと交差しない workspace は spawn を止めない", async () => {
@@ -2105,7 +2105,7 @@ describe("ClaudeCodeWorker", () => {
     const boardDir = await tempDir("tidepool-board-");
     const { start, calls, db } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
-      { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }] },
+      { boardState: [{ label: "board home (TIDEPOOL_HOME)", path: join(boardDir, "board-home") }] },
     );
     start("task-no-overlap");
     await vi.waitFor(() => expect(calls).toHaveLength(1));

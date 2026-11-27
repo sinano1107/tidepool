@@ -1,22 +1,25 @@
-import { statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import {
   bootstrapNotice,
   hashToken,
   openHumanCredential,
   readTokenHash,
-  resolveTokenFile,
   rotateToken,
 } from "../src/auth.js";
+import { createBoardHome, resolveBoardPlaces } from "../src/board-home.js";
 import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 let server: TidepoolServer | undefined;
 afterEach(async () => {
@@ -53,9 +56,30 @@ it("ローテーションは既存ファイルのパーミッションも 600 �
   expect(statSync(tokenFile).mode & 0o077).toBe(0);
 });
 
-it("ハッシュの既定の置き場所は盤面ディレクトリの外(issue #153 / #149)", () => {
-  expect(resolveTokenFile(undefined)).toBe(join(homedir(), ".tidepool", "api-token"));
-  expect(resolveTokenFile("/etc/tidepool/api-token")).toBe("/etc/tidepool/api-token");
+// ADR 0436 決定1: `npm run token` は盤面と同じ家を解決する —— ローテーションしたのに盤面に効かない、を起こさない
+const runToken = (home: string) =>
+  spawnSync("npm", ["run", "-s", "token"], { cwd: ROOT, env: { ...process.env, TIDEPOOL_HOME: home }, encoding: "utf8" });
+
+it("npm run token は TIDEPOOL_HOME の盤面の家にある、盤面が読むのと同じ token file をローテーションする", async () => {
+  const home = join(await tempDir("tidepool-token-home-"), "board");
+  createBoardHome(home);
+  const { apiTokenFile } = resolveBoardPlaces({ TIDEPOOL_HOME: home });
+
+  const result = runToken(home);
+
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain(apiTokenFile);
+  expect(readTokenHash(apiTokenFile)).toMatch(/^[0-9a-f]{64}$/);
+});
+
+it("npm run token は盤面の家が無ければ拒み、家を作らない", async () => {
+  const home = join(await tempDir("tidepool-token-home-"), "board");
+
+  const result = runToken(home);
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(`no board home at ${home}`);
+  expect(existsSync(home)).toBe(false);
 });
 
 it("壊れた/欠けたハッシュファイルは undefined(issue #153)", async () => {

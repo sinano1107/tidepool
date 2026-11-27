@@ -238,8 +238,8 @@ const SETTINGS_TOOL_DENY = PROJECT_SETTINGS_FILES.map((name) => `Edit(.claude/${
 
 /** ADR 0156: where the CLI's built-in auto-memory write allowance is pinned — a
  *  board-owned path that stays empty, written by neither the board nor any
- *  worker. Absolute, like the board's other home-owned paths
- *  (`~/.tidepool/api-token`). The deny rule below and the probe's inline
+ *  worker. Absolute, like the board's other paths (the human-surface token
+ *  file inside the board home, ADR 0436). The deny rule below and the probe's inline
  *  `--settings` are both derived from this one value, so they cannot drift. */
 const CLAUDE_AUTO_MEMORY_DIR = join(homedir(), ".tidepool", "claude-auto-memory");
 
