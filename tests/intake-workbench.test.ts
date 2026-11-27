@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
@@ -438,6 +438,38 @@ it("入れ直しが落ちれば取り込みは拒まれ、書く先の ref も w
 
   expect(git(b.ws.path, "rev-parse", "main")).toBe(main);
   expect(listEventsOfKinds(b.db, ["workbench_taken_in"])).toHaveLength(1);
+});
+
+// ADR 0425 決定1〜3: 作業台の取り込みも同じ1つの運ぶ段 —— 閉包の中の名前の場所の損傷は、運ぶ手が読む tree・commit でも、運ぶ tip が名前の場所に
+// 既にあっても、fetch で落ちる前に入れ直す
+it.each([
+  ["名前の場所の履歴から再現した tree", "missing"],
+  ["名前の場所の履歴から再現した tree", "corrupt"],
+  ["名前の場所に既にある tip の tree", "corrupt"],
+  ["祖先の commit", "missing"],
+  ["祖先の commit", "corrupt"],
+] as const)("作業台の tip の%sが名前の場所で %s なら、取り込みは入れ直して通り、その object が名前の場所で読める(ADR 0425 決定1〜3)", async (target, damage) => {
+  const b = await board("intake-damaged-closure", withHistoryOnlyBlob);
+  await b.open();
+  const before = git(b.ws.path, "rev-parse", "main");
+  commitWork(b.workbench(), "old.txt", "only in the history\n");
+  const tip = git(b.workbench(), "rev-parse", "main");
+  // 前の取り込みが運んだ形 —— 名前の場所の ref は動かさず object だけを持たせる
+  if (target === "名前の場所に既にある tip の tree") git(b.ws.path, "fetch", "--quiet", b.workbench(), "main");
+  const id = git(b.ws.path, "rev-parse", { "名前の場所の履歴から再現した tree": "main~1^{tree}", "名前の場所に既にある tip の tree": `${tip}^{tree}`, "祖先の commit": before }[target]);
+  const loose = join(b.ws.path, ".git", "objects", id.slice(0, 2), id.slice(2));
+  rmSync(loose);
+  if (damage === "corrupt") writeFileSync(loose, "not zlib");
+
+  await b.answer("take in");
+
+  const commit = git(b.ws.path, "rev-parse", "main");
+  expect(git(b.ws.path, "rev-list", "--parents", "-n", "1", commit).split(" ").slice(1)).toEqual([before, tip]);
+  expect(listEventsOfKinds(b.db, ["workbench_taken_in"])).toHaveLength(1);
+  git(b.ws.path, "cat-file", "-p", id);
+  const objects = join(b.ws.path, ".git", "objects");
+  const moved = readdirSync(objects).filter((name) => name.startsWith("tidepool-damaged-")).flatMap((dir) => readdirSync(join(objects, dir)));
+  expect(moved).toEqual(damage === "corrupt" ? [id] : []);
 });
 
 /** 作業台を開く扉(`openHumanContentWorkbench`)の拒否が名前の場所を名指し、開き直しも作業台を消すことも誘わないことを確かめる。 */
