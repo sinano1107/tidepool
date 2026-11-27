@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -252,6 +252,21 @@ it.each(["preparation", "issue"] as const)("残った head-repo remote があれ
   expect(getTask(db, task.id)!.status).toBe("todo");
   expect(github.issueFetches).toEqual([]);
   expect(networkTo(calls, moved.repo!)).toEqual([]);
+  expect(worker.started).toEqual([]);
+});
+
+it("`.git` がディレクトリでない名前の場所も、食い違いより先に workspace の Quarantine が立つ (ADR 0419 決定1、#3922)", async () => {
+  const { db, clock, old, reef, task } = await movedInPlace("gitfile");
+  const gitDir = `${old.path}-gitdir`;
+  renameSync(join(old.path, ".git"), gitDir);
+  writeFileSync(join(old.path, ".git"), `gitdir: ${gitDir}\n`);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const { scheduler, worker } = schedulerOn(db, clock, reef.resolve("reef"), reef.resolve, reef.admin.workspacesBaseDir);
+
+  await scheduler.rerunPoll();
+
+  expect(quarantineQuestion(db, "workspace", "reef")?.purpose).toContain("`.git` is a directory");
+  expect(openQuestions(db, task)).toEqual([]);
   expect(worker.started).toEqual([]);
 });
 

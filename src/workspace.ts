@@ -136,6 +136,7 @@ import {
   ancestorsSql,
   carriesReadOnly,
   countedAncestors,
+  derivedWorkspace,
   derivedWorkspaceSql,
   fellLostBranchAttachments,
   fillEmptyWorkspace,
@@ -3685,10 +3686,12 @@ export function pickupEntrance(
 ): { place?: WorkspaceConfig } | undefined {
   const guard = pickupRepoCheck(db, task, now, resolve);
   if (!guard) return {};
-  const place = resolveOrQuarantine(db, resolve, task.workspace, now());
+  const place = resolveOrQuarantine(db, resolve, derivedWorkspace(db, task), now());
   if (!place) return undefined;
+  // the failed place carries no comparison, so the Quarantine's repair guidance cannot turn into the task's stop
+  const remembered = withRememberedRepoCheck(db, place, now, resolve);
+  fireBeforeOpenPredicates(remembered, checkoutPickupPredicates(remembered, fixedPoints));
   const checked = guard(place);
-  fireBeforeOpenPredicates(checked, checkoutPickupPredicates(checked, fixedPoints));
   const disagreement = declaredRepoDisagreement(db, task.id, { ...checked.checkRememberedRepo!(checked), name: checked.name });
   if (disagreement === undefined) return { place: checked };
   db.transaction(() => {
