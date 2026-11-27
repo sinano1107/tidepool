@@ -1,9 +1,8 @@
 import { afterEach, expect, it } from "vitest";
-import type { AgentView } from "../src/agent-create.js";
 import { appendEvent } from "../src/events.js";
 import { registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { api, bootTidepool, completeRoutingReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeRoutingReviewViaMcp, fakeRegistry, HOUR, HUMAN_WEBUI, mcpClient, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** agent の段の提案(issue #920 / ADR 0410 決定4)のサーバ境界: 提案 verb の応答と拒否の toolError、回答の HTTP の写し(承認の 200、
  *  agent が消えたときの観測の印、registry が読めないときの 409)、due 判定への registry の一覧の配線。門・pin・hook・修正値・
@@ -12,32 +11,6 @@ let t: Tidepool;
 afterEach(() => t?.stop());
 
 const DAY = 24 * HOUR;
-const agent = (name: string, provider: string, extra: Partial<AgentView> = {}): AgentView => ({
-  name,
-  version: "1",
-  authority: "standard",
-  description: `${name} agent`,
-  provider,
-  advisor: false,
-  skills: ["*"],
-  unknownFields: [],
-  systemPrompt: "p",
-  ...extra,
-});
-
-/** registry の agent 一覧の fake(可変 —— 人間が registry から agent を消した、を表す)。`unreadable` を立てると読めない。 */
-function fakeRegistry() {
-  const agents = new Map<string, AgentView>([
-    ["deckhand", agent("deckhand", "openai")],
-    ["fugu", agent("fugu", "anthropic", { builtin: true })],
-  ]);
-  const state = { unreadable: false };
-  const list = () => {
-    if (state.unreadable) throw new Error("registry clone is broken");
-    return [...agents.values()];
-  };
-  return { agents, state, agentAdmin: { list } };
-}
 
 /** deckhand の既定ティアを frontier に設定し、routing の材料で poll させ、slot に入った routing meta-review の接続を返す。 */
 async function boardWithRoutingReview(registry = fakeRegistry()) {

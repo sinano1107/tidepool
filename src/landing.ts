@@ -196,7 +196,7 @@ export function taskIdsAwaitingLandingInWorkspace(db: Db, resolve: WorkspaceReso
  *    られた head の hold が効いている根(ADR 0394 決定6・7)は、収束が push しないので数えない —— 数えると待っても通らない。素の hold の後は
  *    収束がまだ push するので数える。
  *  - `declined` は削除の確認の一覧(ADR 0421 帰結): GitHub に残る PR の head が内容を欠く根。断念・hold の根も、閉じた PR の根(開き直して
- *    merge すると内容を欠く)も数え、merge された根だけを除く。 */
+ *    merge すると内容を欠く)も、merge された根(GitHub の merge が内容を欠く、ADR 0434 決定3)も数える。 */
 export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: WorkspaceResolver | undefined, workspaceName: string, { declined = false } = {}): string[] {
   let workspace: WorkspaceConfig | undefined;
   try {
@@ -205,8 +205,7 @@ export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: Workspa
   if (!workspace) return [];
   return doneTaskIdsInWorkspace(db, workspaceName).filter((id) => {
     if (getTask(db, id)!.pr_number === null || landingEnded(db, id)) return false;
-    const outcome = rootPrOutcome(db, id);
-    if (declined ? outcome?.state === "MERGED" : outcome !== null) return false;
+    if (!declined && rootPrOutcome(db, id) !== null) return false;
     if (!declined && (declineInForce(db, id, "pr_promotion_retry") || declineInForce(db, id, "pr_merge")?.payload.outside != null)) return false;
     try {
       return taskBranchExists(workspace, id) && contentLeftBehindLocally(db, workspace, id, lastPushedHead(db, id)).length > 0;
@@ -214,6 +213,15 @@ export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: Workspa
       return false;
     }
   });
+}
+
+/** ADR 0434 決定2: PR の merge を記録したが着地がまだ終わっていない根 —— 収束は次の回で必ず読み終える(内容が無ければ `landing_finished`、
+ *  残れば失敗の question)ので、待てば通る。運ぶ内容の有無は問わず記録だけで読む(ADR 0421 決定3)。断念が効いている根は、収束が何もしないので
+ *  数えない(ADR 0421 決定4)。 */
+export function mergedPrRootIdsWithUnfinishedLandingInWorkspace(db: Db, workspaceName: string): string[] {
+  return doneTaskIdsInWorkspace(db, workspaceName).filter(
+    (id) => rootPrOutcome(db, id)?.state === "MERGED" && !landingEnded(db, id) && !declineInForce(db, id, "pr_promotion_retry"),
+  );
 }
 
 /** ADR 0421 決定4 追記: 着地の執行中の task —— その名前の task への処理中の印か、収束がその名前で着地させている根。「着地を終える」の回答と

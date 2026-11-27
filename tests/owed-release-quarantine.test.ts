@@ -10,9 +10,10 @@ import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
 import { registerRcaReview } from "../src/triage.js";
 import { workbenchPath } from "../src/workbench.js";
-import { recordTaskCheckoutTip, releaseWorkspace, type WorkspaceConfig, type WorkspaceResolver } from "../src/workspace.js";
+import { NamedPlaceSideError, recordTaskCheckoutTip, redoMergeBacks, redoOwedReleases, releaseWorkspace, type WorkspaceConfig, type WorkspaceResolver } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { answerQuestionViaWebui, checkoutOf, commitWork, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, leaveBaseline, makeWorkspace, prepareAtPickup, quarantineQuestion, tempDirSync } from "./harness.js";
+import { HUMAN_ANSWERER } from "./landing-fixture.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -176,6 +177,17 @@ it("回答は親の解放を子の merge back より先にやり直し、親子�
   expect(git(b.ws.path, "show", `${b.target}:parent.txt`)).toBe("parent");
   expect(git(b.ws.path, "show", `${b.target}:wip.txt`)).toBe("wip");
   expect(git(b.ws.path, "show", `${b.target}:child.txt`)).toBe("child");
+});
+
+it("親子の成果が競合した merge back の拒否は、名前の場所の側の失敗である(ADR 0433 決定4)", async () => {
+  const b = await mergedChild("parent.txt");
+  // 回答と同じ順: 親の解放をやり直してから merge back をやり直す(人間の扉は拒否文に包むので、型はその下で見る)
+  redoOwedReleases(b.db, b.ws, b.ws.name, b.now, () => false);
+
+  const redone = redoMergeBacks(b.db, b.ws, b.ws.name, undefined, { workbenchBase: b.workspacesDir, entry: "workspace_quarantine", answerer: HUMAN_ANSWERER, now: () => b.now });
+
+  await expect(redone).rejects.toBeInstanceOf(NamedPlaceSideError);
+  await expect(redone).rejects.toThrow(`${b.source} does not merge cleanly into '${b.target}'`);
 });
 
 it("親子の成果が競合すれば、回答は作業台を開いて拒まれ、Quarantine と子の枝の成果が残る", async () => {

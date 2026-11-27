@@ -2,17 +2,30 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { git, ListingUnreadableError, localGitEnv, stashEntries } from "../src/git.js";
+import { CheckoutHostError, GitToolError, git, gitReporting, isAncestor, ListingUnreadableError, stashEntries, withBoardGit, workerRepoGit } from "../src/git.js";
+import { authedFetch, GIT_NETWORK_TIMEOUT_MS } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
 import { recordedSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
-import { git as fixtureGit, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace } from "./harness.js";
+import { git as fixtureGit, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace, shimGit } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
+// 空きが 0 の fs を作る口 —— 既定は素通し
+const fsHook = vi.hoisted(() => ({ bavail: undefined as number | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  const statfsSync = ((path: string, options?: object) => {
+    const stats = fs.statfsSync(path, options);
+    return fsHook.bavail === undefined ? stats : { ...stats, bavail: fsHook.bavail };
+  }) as typeof fs.statfsSync;
+  return { ...fs, default: { ...fs, statfsSync }, statfsSync };
+});
+
 afterEach(() => {
+  fsHook.bavail = undefined;
   vi.unstubAllEnvs();
 });
 
@@ -26,17 +39,24 @@ function thrown(fn: () => unknown): Error {
   throw new Error("did not throw");
 }
 
-it("local git ignores global and system config even when ambient or supplied env opts in (ADR 0356 決定5)", () => {
-  vi.stubEnv("GIT_CONFIG_GLOBAL", "/ambient.gitconfig");
-  vi.stubEnv("GIT_CONFIG_PARAMETERS", "'core.hooksPath=/ambient/hooks'");
-  vi.stubEnv("GIT_DIR", "/ambient.git");
-  const env = localGitEnv({ GIT_CONFIG_NOSYSTEM: "0" });
-  expect(env).toMatchObject({
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-  });
-  expect(env.GIT_CONFIG_PARAMETERS).toBeUndefined();
-  expect(env.GIT_DIR).toBeUndefined();
+it("local git ignores global and system config even when ambient or supplied env opts in (ADR 0356 決定5)", async () => {
+  const repo = (await makeWorkspace("local-git-env")).path;
+  const dir = await tempDir("tidepool-git-");
+  const config = (key: string) => {
+    const file = join(dir, `${key}.gitconfig`);
+    writeFileSync(file, `[tidepool]\n\t${key} = leaked\n`);
+    return file;
+  };
+  vi.stubEnv("GIT_CONFIG_GLOBAL", config("global"));
+  vi.stubEnv("GIT_CONFIG_SYSTEM", config("ambientSystem"));
+  vi.stubEnv("GIT_CONFIG_PARAMETERS", "'tidepool.parameters=leaked'");
+  vi.stubEnv("GIT_DIR", join(dir, "ambient.git"));
+
+  const ambient = git(repo, "config", "--list");
+  const supplied = withBoardGit(repo, (view) => view(["config", "--list"], { GIT_CONFIG_NOSYSTEM: "0", GIT_CONFIG_SYSTEM: config("suppliedSystem") }));
+
+  expect(ambient).toContain("core.");
+  expect([ambient, supplied].filter((listed) => listed.includes("leaked"))).toEqual([]);
 });
 
 it("cwd が無い git は subcommand と在り処を名指して投げ、元の spawn の失敗を cause に持つ(issue #2722)", async () => {
@@ -48,13 +68,110 @@ it("cwd が無い git は subcommand と在り処を名指して投げ、元の 
   expect((err.cause as NodeJS.ErrnoException).code).toBe("ENOENT");
 });
 
-it("cwd があって git が PATH に無いなら、元の spawn の失敗をそのまま投げる(issue #2722)", async () => {
+it("cwd があって git が PATH に無いなら、在り処を名指さず spawn の失敗の code と文で投げる(issue #2722)", async () => {
   const cwd = await tempDir("tidepool-git-");
   vi.stubEnv("PATH", cwd);
   const err = thrown(() => git(cwd, "status"));
   expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
   expect(err.message).toContain("ENOENT");
   expect(err.cause).toBeUndefined();
+});
+
+/** 盤面の git の実行の口: 無界の `git`、有界の `workerRepoGit`、stderr を返す `gitReporting`。 */
+const runners = {
+  git: (cwd: string, ...args: string[]) => git(cwd, ...args),
+  workerRepoGit: (cwd: string, ...args: string[]) => workerRepoGit(cwd, ...args),
+  gitReporting: (cwd: string, ...args: string[]) => gitReporting(cwd, args),
+};
+const RUNNERS = Object.keys(runners) as (keyof typeof runners)[];
+
+it.each(RUNNERS)("%s は非零で終わった git を git の道具の失敗で投げ、終了コードと stderr を持つ(ADR 0433 決定3)", async (runner) => {
+  const repo = (await makeWorkspace(`git-tool-failure-${runner}`)).path;
+
+  const err = thrown(() => runners[runner](repo, "rev-parse", "--verify", "no-such-ref"));
+
+  expect(err).toBeInstanceOf(GitToolError);
+  expect(err).toMatchObject({ status: 128, message: expect.stringContaining("Command failed: git rev-parse --verify no-such-ref") });
+  expect(String((err as GitToolError).stderr)).toContain("Needed a single revision");
+});
+
+it.each(RUNNERS)("%s は起動できない git と cwd の無い git も git の道具の失敗で投げる(ADR 0433 決定3)", async (runner) => {
+  const dir = await tempDir("tidepool-git-");
+  expect(thrown(() => runners[runner](join(dir, "gone"), "status"))).toBeInstanceOf(GitToolError);
+  vi.stubEnv("PATH", dir);
+  expect(thrown(() => runners[runner](dir, "status"))).toBeInstanceOf(GitToolError);
+});
+
+it("述語の git は exit 1 を no と答え、道具の失敗(128)は no と読まずに git の道具の失敗で投げる(ADR 0433 決定3)", async () => {
+  const repo = await makeWorkspace("git-predicate-answer");
+  const first = fixtureGit(repo.path, "rev-parse", "HEAD");
+  fixtureGit(repo.path, "commit", "--allow-empty", "-q", "-m", "second");
+  const second = fixtureGit(repo.path, "rev-parse", "HEAD");
+
+  expect(isAncestor(repo, second, first)).toBe(false);
+  expect(thrown(() => isAncestor(repo, "f".repeat(40), first))).toMatchObject({ constructor: GitToolError, status: 128 });
+});
+
+it("空きが 0 の fs でも述語の「no」(exit 1)は no と答え、容量切れと言わない道具の失敗(128)は host の失敗になる(ADR 0433 決定5)", async () => {
+  const repo = await makeWorkspace("git-no-free-space");
+  const first = fixtureGit(repo.path, "rev-parse", "HEAD");
+  fixtureGit(repo.path, "commit", "--allow-empty", "-q", "-m", "second");
+  const second = fixtureGit(repo.path, "rev-parse", "HEAD");
+  fsHook.bavail = 0;
+
+  expect(isAncestor(repo, second, first)).toBe(false);
+  expect(thrown(() => isAncestor(repo, "f".repeat(40), first))).toBeInstanceOf(CheckoutHostError);
+});
+
+it.each(RUNNERS)("%s は disk が満ちて落ちた git を git の道具の失敗でなく host の失敗で投げる(ADR 0433 決定5)", async (runner) => {
+  const repo = (await makeWorkspace(`git-out-of-space-${runner}`)).path;
+  await shimGit({ fails: ["gc", "fatal: unable to write new index file: No space left on device"] });
+
+  const err = thrown(() => runners[runner](repo, "gc"));
+
+  expect(err).toBeInstanceOf(CheckoutHostError);
+  expect(err).not.toBeInstanceOf(GitToolError);
+  expect(err.message).toContain("No space left on device");
+});
+
+/** 無い repo を origin に持つ checkout —— 網に出る git の fetch は一般の失敗で落ちる。 */
+async function checkoutOfMissingRemote(name: string): Promise<{ repo: string; gone: string }> {
+  const repo = (await makeWorkspace(name)).path;
+  const gone = join(await tempDir("tidepool-git-"), "gone.git");
+  fixtureGit(repo, "remote", "add", "origin", gone);
+  return { repo, gone };
+}
+
+it("網に出る git の一般の失敗(無い remote への fetch)は git の道具の失敗にならず、今の素の Error と文で上がる(ADR 0441 決定4)", async () => {
+  const { repo, gone } = await checkoutOfMissingRemote("network-general-failure");
+
+  const err = thrown(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main"));
+
+  expect(err.constructor).toBe(Error);
+  expect(err.message).toMatch(new RegExp(`^\`git fetch\` failed \\(in ${repo}\\): fatal: '${gone}' does not appear to be a git repository`));
+});
+
+it("網に出る git が、cwd を持つ fs の空きが無い状態で落ちると host の失敗で上がる(ADR 0441 決定4 / ADR 0433 決定5)", async () => {
+  const { repo } = await checkoutOfMissingRemote("network-no-free-space");
+  fsHook.bavail = 0;
+
+  const err = thrown(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main"));
+
+  expect(err).toBeInstanceOf(CheckoutHostError);
+  // 文は網に出る git の文 —— 盤面所有の repo の path や URL を載せる argv は出さない
+  expect(err.message).toContain(`\`git fetch\` failed (in ${repo})`);
+  expect(err.message).not.toContain("--git-dir=");
+});
+
+it("網に出る git の host の失敗の文は、origin の URL の資格情報を載せない", async () => {
+  const repo = (await makeWorkspace("network-no-free-space-credential")).path;
+  fixtureGit(repo, "remote", "add", "origin", "http://user:secret@127.0.0.1:1/x.git");
+  fsHook.bavail = 0;
+
+  const err = thrown(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main"));
+
+  expect(err).toBeInstanceOf(CheckoutHostError);
+  expect(err.message).not.toContain("secret");
 });
 
 /** `source` の blob を持たない部分 clone。promisor は 401 の loopback で、index は HEAD を指す(blob は遅延 fetch でしか読めない)。 */

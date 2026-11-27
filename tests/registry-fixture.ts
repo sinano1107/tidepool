@@ -15,11 +15,8 @@ import { tempDir } from "./temp-dir.js";
  *  `registryDir` を省けば registry の無い盤面。 */
 export function registryFixedPoints(registryDir?: string): BoardStatePath[] {
   return boardStatePaths({
-    dbPath: "/nonexistent/board.sqlite",
-    workerLogDir: "/nonexistent/worker-logs",
-    apiTokenFile: "/nonexistent/api-token",
+    home: "/nonexistent/board-home",
     moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
-    codexHome: "/nonexistent/codex",
     cwd: "/nonexistent/tidepool",
     servedRoot: "/nonexistent/tidepool",
     registryDir,

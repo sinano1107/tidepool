@@ -11,25 +11,15 @@ export interface BoardStatePath {
   kind?: "registry-clone";
 }
 
-/** 盤面プロセスが固定で持つ、保護対象の在り処(ADR 0040 の5点と、ADR 0377 決定3 の registry clone)。**workspace 毎に
- *  変わる保護対象は存在しない** — 検査は「盤面側の固定リスト × workspace パス」の
- *  総当たりである。並ぶ*パス*の数は5とは限らない: GitHub token は env 未設定なら
- *  落ち、5点目の「実行 checkout」は cwd と配信元が一致しなければ2つになる。
- *  Moonshot キー(ADR 0097 決定4)は api-token と同じく既定パスを持つので常に
- *  並ぶ — キー未配置の盤面でも、配置された瞬間に無防備にならないようにする。
- *  env の読み出しそのものは合成 root(main.ts)に留め、ここは解決済みの値だけを
- *  受ける。 */
+/** 盤面プロセスが固定で持つ、保護対象の在り処(ADR 0040 / ADR 0436 決定1: 盤面の家1つ、読むだけの credential、走っている
+ *  checkout、ADR 0377 決定3 の registry clone)。**workspace 毎に変わる保護対象は存在しない** — 検査は「盤面側の固定リスト ×
+ *  workspace パス」の総当たりである。GitHub token は env 未設定なら落ち、「実行 checkout」は cwd と配信元が一致しなければ
+ *  2つになる。Moonshot キー(ADR 0097 決定4)は既定パスを持つので常に並ぶ — キー未配置の盤面でも、配置された瞬間に無防備に
+ *  ならないようにする。env の読み出しそのものは合成 root(main.ts)に留め、ここは解決済みの値だけを受ける。 */
 export interface BoardStatePathsInput {
-  /** `TIDEPOOL_DB`。SQLite のサイドカー(`-wal` / `-shm`)は同じディレクトリの
-   *  兄弟なので、判定は DB パス基準で足りる。 */
-  dbPath: string;
-  /** `TIDEPOOL_WORKER_LOGS` — stream-json 監査記録の置き場。監査対象が自分の
-   *  監査記録を書き換えられる形を塞ぐ。 */
-  workerLogDir: string;
-  /** `TIDEPOOL_API_TOKEN_FILE`(既定 `~/.tidepool/api-token`)。持つのはハッシュ
-   *  だけだが、**書ければ**自分の知るハッシュへ差し替えて人間面 credential を
-   *  偽造できる。 */
-  apiTokenFile: string;
+  /** `TIDEPOOL_HOME` — 盤面の家。db(SQLite のサイドカーを含む)・worker logs(監査記録)・人間面の token file(書ければ
+   *  credential を偽造できる)・Codex home・registry clone はすべてこの中にあるので、家1つの包含で守る。 */
+  home: string;
   /** `TIDEPOOL_GITHUB_TOKEN_FILE` — **平文**。workspace 配下に入ると work
    *  プロファイルの `allowRead` で読め、「worker は GitHub credential を一切
    *  持たない」(ADR 0024)が静かに崩れる。env 未設定 → 盤面に GitHub 識別情報が
@@ -38,25 +28,20 @@ export interface BoardStatePathsInput {
   /** `TIDEPOOL_MOONSHOT_API_KEY_FILE`(既定 `~/.tidepool/moonshot-api-key`)—
    *  **平文**(ADR 0097 決定4)。githubTokenFile と同じ罠: workspace 配下に入ると
    *  work プロファイルの `allowRead` で読め、Moonshot の従量課金キーが worker の
-   *  手に渡る。apiTokenFile と同じく**キー未配置でもパスは守る** — 置かれた瞬間に
-   *  無防備にならないよう、既定パスは常に保護対象に並ぶ。 */
+   *  手に渡る。**キー未配置でもパスは守る** — 置かれた瞬間に無防備にならないよう、
+   *  既定パスは常に保護対象に並ぶ。 */
   moonshotApiKeyFile: string;
-  /** ADR 0098: Codex ChatGPT login/cache and Board-owned hook files. */
-  codexHome: string;
   /** 盤面の実行 checkout(ADR 0040 の5点目)。盤面は `public/` の静的資産を
    *  実行中の checkout から配信するので、走っている checkout 自体が workspace に
    *  なると worker が `public/index.html` を書き換えられ、次のリロードで人間の
    *  ブラウザに届く。状態ファイルの置き場をどう動かしてもこの穴は残る。
    *
-   *  **cwd と配信元は原理的に別物**なので両方受ける: 既定の状態パス
-   *  (`board.sqlite` / `worker-logs`)が相対で解決される先は cwd だが、静的資産を
-   *  実際に配信するのはモジュールの位置から導いた checkout(server.ts の `root`)で
-   *  あり、リポジトリ外から起動すれば一致しない。ADR 0040 が「cwd」と書いたのは
-   *  両者が一致する運用を前提にした綴りであって、守りたいのは「走っている
-   *  checkout」そのものである。 */
+   *  **cwd と配信元は原理的に別物**なので両方受ける: 静的資産を実際に配信するのは
+   *  モジュールの位置から導いた checkout(server.ts の `root`)であり、リポジトリ外から
+   *  起動すれば cwd と一致しない。守りたいのは「走っている checkout」そのものである。 */
   cwd: string;
   servedRoot: string;
-  /** `TIDEPOOL_REGISTRY` — 盤面が Registry を読むだけの clone(ADR 0377 決定1・3)。registry の無い盤面では落ちる。 */
+  /** 家の中の registry clone(ADR 0377 決定1・3)。registry の無い盤面では落ちる。 */
   registryDir?: string;
 }
 
@@ -73,9 +58,9 @@ export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
     });
   }
   return [
-    { label: "board database (TIDEPOOL_DB)", path: input.dbPath },
-    { label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: input.workerLogDir },
-    { label: "human-surface token file (TIDEPOOL_API_TOKEN_FILE)", path: input.apiTokenFile },
+    // 重なりの答えは最初の1件なので、家の中の registry clone を家より前に置く —— その文は spec #3273 text E1(ADR 0377 決定3)
+    ...(input.registryDir === undefined ? [] : [{ label: "registry clone", path: input.registryDir, kind: "registry-clone" as const }]),
+    { label: "board home (TIDEPOOL_HOME)", path: input.home },
     ...(input.githubTokenFile === undefined
       ? []
       : [
@@ -88,9 +73,7 @@ export function boardStatePaths(input: BoardStatePathsInput): BoardStatePath[] {
       label: "Moonshot API key file (TIDEPOOL_MOONSHOT_API_KEY_FILE)",
       path: input.moonshotApiKeyFile,
     },
-    { label: "Codex worker home (TIDEPOOL_CODEX_HOME)", path: input.codexHome },
     ...checkouts,
-    ...(input.registryDir === undefined ? [] : [{ label: "registry clone", path: input.registryDir, kind: "registry-clone" as const }]),
   ];
 }
 
@@ -134,8 +117,8 @@ function forComparison(path: string, platform: NodeJS.Platform): string {
  *  「重なっていない」に見えるのを防ぐ。
  *
  *  **まだ存在しないパスは親を辿って realpath + 字句結合**する。盤面の保護対象は
- *  存在しないのが正常な瞬間がある(token をまだ発行していない盤面の
- *  `~/.tidepool/api-token`、登録の門の clone / 新規作成モードが指す未作成の
+ *  存在しないのが正常な瞬間がある(キーをまだ置いていない盤面の
+ *  `~/.tidepool/moonshot-api-key`、登録の門の clone / 新規作成モードが指す未作成の
  *  ディレクトリ)。ここで fail-closed に倒すと、新品の盤面が全 workspace を
  *  quarantine することになる。存在しない末端に symlink は在り得ないので、
  *  実在する最も深い祖先まで解決すれば嘘は付かれない。
@@ -178,6 +161,15 @@ export function boardStateOverlap(
         "whether it overlaps the board's own state paths is unknown, and unknown is not safe",
     };
   }
+  const overlapsState = (target: BoardStatePath): BoardStateOverlap => ({
+    reason:
+      `workspace path ${workspacePath} overlaps the board's ${target.label} ` +
+      `at ${target.path} — a worker's write radius is its workspace, so the ` +
+      "board's own state would be inside it. Move the workspace or the board's " +
+      "state so the two do not intersect",
+  });
+  // registry clone を囲む workspace は、clone を収める固定点(家)の文で言う —— 何も収めていなければ clone との重なりとして止める
+  let enclosedClone: BoardStatePath | undefined;
   for (const target of paths) {
     const candidate = resolveForComparison(target.path);
     if ("cause" in candidate) {
@@ -191,21 +183,17 @@ export function boardStateOverlap(
     const a = forComparison(workspace.resolved, platform);
     const b = forComparison(candidate.resolved, platform);
     if (contains(a, b) || contains(b, a)) {
-      if (target.kind === "registry-clone") {
+      if (target.kind !== "registry-clone") return overlapsState(target);
+      // ADR 0377 決定3: clone に居るか clone の中を指す workspace には spec #3273 text E1
+      if (contains(b, a)) {
         return {
           reason:
             `${workspacePath} overlaps the registry clone (${target.path}), which is not a workspace. ` +
             "To let agents edit the registry, clone the registry's repository to another path and register that.",
         };
       }
-      return {
-        reason:
-          `workspace path ${workspacePath} overlaps the board's ${target.label} ` +
-          `at ${target.path} — a worker's write radius is its workspace, so the ` +
-          "board's own state would be inside it. Move the workspace or the board's " +
-          "state so the two do not intersect",
-      };
+      enclosedClone ??= target;
     }
   }
-  return undefined;
+  return enclosedClone && overlapsState(enclosedClone);
 }

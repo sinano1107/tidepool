@@ -307,6 +307,19 @@ it("registry が読めない盤面の起動は組み立てを拒まず、騒い�
   error.mockRestore();
 });
 
+// ADR 0436 決定1: 盤面は常に家の中の registry clone を指す —— clone の dir が無い家は registry の無い盤面ではなく、registry が読めない盤面
+it("家の registry clone の dir が無い盤面の起動は組み立てを拒まず、registryUnreadable を1枚立てる", async () => {
+  const registryDir = join(await tempDir("tidepool-home-without-clone-"), "registry");
+  const db = openDb(":memory:");
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  const options = await buildServerOptions({ ...composition(), registryDir, registryMode: declaredRegistryMode(registryDir), workspaceName: "tidepool", defaultAgentName: "deckhand" }, db);
+
+  expect(() => options.listAgents!()).toThrow(RegistryUnreadableError);
+  expect(openQuarantineValues(db, "registryUnreadable")).toEqual([null]);
+  error.mockRestore();
+});
+
 // 盤面自身の workspace を持たずに起動した盤面は、既定の workspace 名を持たない —— 直しても再起動までは再開しない
 it("起動時に盤面自身の workspace を読めなかった盤面は、registry を直しても判定が再起動を求めて不成立のまま", async () => {
   const registryDir = await makeRegistry();
@@ -469,27 +482,6 @@ it("worker options の口の一覧は main.ts に戻っていない(ADR 0043)", 
   // 本番の合成が実際にその一覧を使っていること(呼び出しの**形**は主張しない)
   expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(\s*buildWorkerOptions\(/);
   expect(source("server-options.ts")).toMatch(/new CodexWorker\(\s*buildCodexWorkerOptions\(/);
-});
-
-/** ADR 0040 の線: worker ログの置き場と、盤面が「重なるな」と守っている
- *  パスは**同じ1つ**でなければならない —— 綴りが2つあると、守る対象と実際の
- *  置き場が黙ってずれる。#33 で `logDir` が `BoardComposition` の口になり、
- *  合成 root では `boardState` の組み立てと `buildWorkerOptions` の**2箇所**に
- *  流れるようになったので、一致をここで観測する(どちらも `string` なので
- *  取り違えても型は黙る — ADR 0041 §5 と同じ理由)。 */
-it("worker ログの置き場は、盤面が守っているパスと同じ1つである(ADR 0040)", async () => {
-  const registryDir = await makeRegistry();
-  const logDir = "/opt/tidepool/worker-logs";
-  const board = {
-    ...composition(),
-    registryDir,
-    logDir,
-    boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logDir }],
-  };
-  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, onSessionCloseStep: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
-
-  expect(options.logDir).toBe(logDir);
-  expect(options.boardState?.map((p) => p.path)).toContain(options.logDir);
 });
 
 /** `quarantineResolvers` の2つの写像を実 registry から撃つ(#1013)。手書きの lambda で

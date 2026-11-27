@@ -20,6 +20,7 @@ import {
   hashToken,
 } from "../src/auth.js";
 import type { BoardCall } from "../src/board-call.js";
+import { createBoardHome, openBoardHome, resolveBoardPlaces, startBoardOnHome } from "../src/board-home.js";
 import type { BoardStatePath } from "../src/board-state.js";
 import type { Cause } from "../src/cause.js";
 import { ClaudeCodeWorker, moonshotKeyAbsence } from "../src/claude-worker.js";
@@ -235,7 +236,7 @@ export interface Tidepool {
 }
 
 export interface BootOptions {
-  /** Existing board dir to reboot on — for restart tests. */
+  /** 起動し直す既存の盤面の家 —— 再起動のテスト用。家がまだ無ければ家を作る口で作る。 */
   dir?: string;
   /** Override the scripted WorkerAdapter identity across board restarts. */
   workerId?: string;
@@ -261,7 +262,7 @@ export interface BootOptions {
    *  `t.containers` は配線されない fake になる(`workerAdapter` と `t.worker` と同じ)。 */
   containerRuntime?: ContainerRuntime;
   /** transcript の器(ADR 0149)。session の stream を取って落としたいテストだけが渡す。
-   *  Absent → 盤面の dir に開く既定の器。 */
+   *  Absent → 盤面の家に開く既定の器。 */
   transcripts?: TranscriptStore;
   /** This board's one worker's authority profile (issue #11). */
   authority?: AuthorityProfile;
@@ -391,7 +392,8 @@ function normalizeCandidates(
  *  WorkerAdapter and GitHubClient seams. */
 export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool> {
   const dir = options.dir ?? (await mkdtemp(join(tmpdir(), "tidepool-test-")));
-  const dbPath = join(dir, "board.sqlite");
+  // ADR 0436 決定5: テストの盤面も家を作る口で家を用意し、本番と同じ家を開く口を通る
+  createBoardHome(dir);
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock, options.workerId);
   const containers =
@@ -400,11 +402,12 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const push = new FakePushClient();
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
   // 閉じるのは `server.stop()`(ADR 0107 決定4 の「setup 用に db を公開する」の形)。
-  const existingBoard = existsSync(dbPath);
-  const db = openDb(dbPath, { terminate: () => {} });
+  const existingBoard = existsSync(resolveBoardPlaces({ TIDEPOOL_HOME: dir }).dbPath);
+  const home = openBoardHome(dir, { terminate: () => {} });
+  const { db } = home;
   if (!existingBoard) rememberFixtureHeadRepos(db);
   containers.taskIdForSession = (id) => /^\d+$/.test(id) ? getEvent(db, Number(id))?.task_id ?? undefined : undefined;
-  const server = await startServer({
+  const server = await startBoardOnHome(home, () => startServer({
     db,
     port: 0,
     mcpPort: 0,
@@ -429,7 +432,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     transcripts: options.transcripts ?? new TranscriptStore(dir),
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
-    // 面接室(ADR 0273 決定1)は盤面の dir の下に作る —— テストがホームの既定の基点に書かない
+    // 面接室(ADR 0273 決定1)は盤面の家の下に作る —— テストがホームの既定の基点に書かない
     workspacesDir: join(dir, "workspaces"),
     watchdog: options.watchdog,
     github: options.github ?? github,
@@ -475,7 +478,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     githubAuth: options.githubAuth,
     githubTokenFile: options.githubTokenFile,
     boardState: options.boardState,
-  });
+  }));
   // 起動完了の poll は起動の収束の後に走る(ADR 0241 決定5)。GitHub を待たない起動の収束と poll はここで終わる ——
   // テストが盤面に何かを足す前に、起動完了の poll が空の queue を読み終えている(待つ GitHub の fake を渡した盤面は別)
   await new Promise((resolve) => setImmediate(resolve));
@@ -604,6 +607,45 @@ export async function callAsTask(t: Tidepool, taskId: string, name: string, args
     await client.close();
   }
 }
+
+/** ADR 0424 決定2・3: `verb` の応答が session の終わりで、`verb` を名指し `fragment` を載せた failure question(retry / abandon)が立ち、
+ *  `nothingRecorded` が verb の記録の無さを確かめ、`quarantined`(workspace の Quarantine の値)の資源の停止が無い。verb の前に
+ *  `t.containers.hold(taskId)` して後始末を回収済み観測の後ろに止めておけば、ここまでの停止の無さは verb が登録しないことを言う。
+ *  最後に容器を空けて後始末を待つ。 */
+export async function expectReclaimed(
+  t: Tidepool,
+  { verb, taskId, session, res, fragment, quarantined, nothingRecorded }:
+    { verb: string; taskId: string; session: string; res: any; fragment: string; quarantined: string; nothingRecorded: () => Promise<void> },
+): Promise<void> {
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toContain("this session is over");
+  expect(t.containers.forceReclaims).toEqual([session]);
+  const failure = (await questions(t)).find((question) => question.parent_id === taskId && question.question_cancel_option === "abandon" && question.status === "todo");
+  expect(failure.title).toContain(verb);
+  expect(failure.purpose).toContain(fragment);
+  expect(failure.question_items.map((item: any) => item.options)).toEqual([["retry", "abandon"]]);
+  await nothingRecorded();
+  expect(await servedQuarantineQuestion(t, "workspace", quarantined)).toBeUndefined();
+  t.containers.fireEmpty(session);
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
+}
+
+/** complete_task の回収(`expectReclaimed`): task は done でない。 */
+export const expectCompletionReclaimed = (t: Tidepool, taskId: string, session: string, res: any, fragment: string, workspace: string): Promise<void> =>
+  expectReclaimed(t, {
+    verb: "complete_task", taskId, session, res, fragment, quarantined: workspace,
+    nothingRecorded: async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${taskId}`)).json.status).not.toBe("done"),
+  });
+
+/** pose_probe の回収(`expectReclaimed`): 出題(decision log)も監査の review も無い。面接室の Quarantine の値は root の id。 */
+export const expectPoseReclaimed = (t: Tidepool, rootId: string, session: string, res: any, fragment: string): Promise<void> =>
+  expectReclaimed(t, {
+    verb: "pose_probe", taskId: rootId, session, res, fragment, quarantined: rootId,
+    nothingRecorded: async () => {
+      expect((await api(t.baseUrl, "GET", `/api/tasks/${rootId}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
+      expect((await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.type === "review")).toEqual([]);
+    },
+  });
 
 /** 応答予算(ADR 0195)。読み口の応答は、盤面が返す CallToolResult を丸ごとシリアライズした UTF-8 バイト数でこれ以下に収まる。 */
 export const RESPONSE_BUDGET_BYTES = 40_000;
@@ -1823,6 +1865,33 @@ export function auditorRcaOn(db: Db, task: Task, at: Date, worker = "auditor"): 
 export const OPUS_ROW = { provider: "anthropic" as const, model: "claude-opus-5-5", effort: "high" };
 /** registry の agent deckhand(組み込みでない)。`deckhandOnTier` が盤面の既定ティアを書く。 */
 export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, skills: ["*"], unknownFields: [], systemPrompt: "p" };
+
+const registryAgent = (name: string, provider: string, extra: Partial<AgentView> = {}): AgentView => ({
+  name,
+  version: "1",
+  authority: "standard",
+  description: `${name} agent`,
+  provider,
+  advisor: false,
+  skills: ["*"],
+  unknownFields: [],
+  systemPrompt: "p",
+  ...extra,
+});
+
+/** registry の agent 一覧の fake(可変 —— 人間が registry から agent を消した、を表す)。`unreadable` を立てると読めない。 */
+export function fakeRegistry() {
+  const agents = new Map<string, AgentView>([
+    ["deckhand", registryAgent("deckhand", "openai")],
+    ["fugu", registryAgent("fugu", "anthropic", { builtin: true })],
+  ]);
+  const state = { unreadable: false };
+  const list = () => {
+    if (state.unreadable) throw new Error("registry clone is broken");
+    return [...agents.values()];
+  };
+  return { agents, state, agentAdmin: { list } };
+}
 
 /** setup のみ: deckhand の既定ティアを盤面に書く(既定 standard —— agent_tier で1段下げられる、ADR 0410 決定1)。設定の event は
  *  「材料の記録の後に対象を変えた event」に載る(ADR 0410 決定8 / ADR 0278 追記4)ので、routing meta-review の材料を注入する前に呼ぶ。 */

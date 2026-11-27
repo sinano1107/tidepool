@@ -77,6 +77,7 @@ import {
   routingJudgmentRepairTask,
   seedZeroPaddedTree,
   sessionId,
+  shimGit,
   stubHostEnvDecoys,
   type Tidepool,
   unhandledRejectionsDuring,
@@ -1089,6 +1090,18 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
     });
 
+    it("2段目の checkout の fetch が disk の満杯で落ちれば、名前の場所の Quarantine でなく素の spawn_failed で、作りかけを残さない(ADR 0433 決定5)", async () => {
+      const f = await onBoard({ taskCheckout: await taskCheckoutWithSkill(), appServer: answerSkillsFromDisk });
+      // task の checkout は作り済み —— この後で `--update-head-ok` を持つ fetch は使い捨ての checkout を作るものだけ
+      await shimGit({ fails: ["--update-head-ok", "error: unable to write file: No space left on device"] });
+
+      await f.start(f.value);
+
+      expect(f.failures).toEqual([{ error_code: null, message: expect.stringMatching(/^the board could not prepare the throwaway checkout of main for the Codex skill check; the worker was not spawned \(no fail-open\): .*No space left on device/s) }]);
+      expect(openQuarantineValues(f.db, "workspace")).toEqual([]);
+      expect(existsSync(join(f.workspacesDir, "@containment-check"))).toBe(false);
+    });
+
     it("2段目の間に session が終われば何も書かず、使い捨ての checkout も task temp も残さない(#1973)", async () => {
       const onSpawnFailed = vi.fn();
       const onPickupStopped = vi.fn();
@@ -1232,13 +1245,13 @@ describe("CodexWorker (ADR 0098)", () => {
   it.each([
     ["registry に無い workspace 名(registry drift)", { workspace: "ghost" }, false, { quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" }],
     ["registry に無い agent 名(registry drift)", { assignee: "ghost" }, false, { quarantine: "agent", value: "ghost", reason: expect.stringContaining("ghost") }],
-    ["盤面の状態パスと重なる workspace", {}, true, { quarantine: "workspace", value: "work", reason: expect.stringContaining("board database (TIDEPOOL_DB)") }],
+    ["盤面の状態パスと重なる workspace", {}, true, { quarantine: "workspace", value: "work", reason: expect.stringContaining("board home (TIDEPOOL_HOME)") }],
   ])("%s は spawn も skill の列挙もせずに quarantine し、spawn_failed ではなく盤面の一撃で todo へ戻す(ADR 0274)", async (_case, fields, overlap, stop) => {
     const onSpawnFailed = vi.fn();
     const onPickupStopped = vi.fn();
     const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {
       onPickupStopped,
-      boardState: overlap ? (workspace) => [{ label: "board database (TIDEPOOL_DB)", path: join(workspace, "board.sqlite") }] : undefined,
+      boardState: overlap ? (workspace) => [{ label: "board home (TIDEPOOL_HOME)", path: join(workspace, "board-home") }] : undefined,
     });
     const value = registerTask(f.db, { type: "work", assignee: "codex-agent", workspace: "work", title: "stopped", purpose: "p", completion_criteria: "c", ...fields }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
     expect(f.start(value)).toBeUndefined();

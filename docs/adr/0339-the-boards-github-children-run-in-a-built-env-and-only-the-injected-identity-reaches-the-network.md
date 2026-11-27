@@ -8,6 +8,8 @@ local の verb でも `insteadOf`・`fetch.recurseSubmodules`・部分 clone の
 載り(着地なら回答の拒否、ADR 0103 決定4)、成功させる経路は足さない —— 「注入した身元以外で網に出ない」の fail-closed 側である。盤面の commit が走らせる
 hook はこの env を継承するので、hook 自身の http の git も同じエラーで落ちる。
 
+**Status 追記: 盤面の git の子は網に出るものも git の module の起動口が作り、決定1 の env は github-auth から持ち込むだけになる。local の git が `file` だけで網に出ないことは、env を持ち込む口を github-auth の外から呼ばせない lint で守る([ADR 0441](0441-the-board-starts-every-git-child-at-one-place-that-types-its-failure-once-and-network-git-only-brings-its-own-env.md) 決定2・3、2026-11-28、issue #2897)。**
+
 2026-11-01 の grilling(issue #2794 —— ADR 0334 の帰結、#2801 と同根)で決定。ADR 0024 決定1 の seam は「身元は host の ambient 認証ではなく
 盤面の設定から注入される」、決定3 は「credential が効く場所は 1 箇所」だが、実装は**継承した** env から既知の経路 1 本(設定済み credential
 helper)を消して自分の helper を足す形で、しかも認証つきの分岐だけだった。足す身元は決まっていたが、**注入した身元以外が網に出られない**とは

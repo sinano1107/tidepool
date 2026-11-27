@@ -63,6 +63,7 @@ export type DeletionBlockedReason =
   | { code: "teardown_unfinished"; task_ids: string[] }
   | { code: "unpushed_pr_content"; task_ids: string[] }
   | { code: "landing_in_progress"; task_ids: string[] }
+  | { code: "merged_pr_landing_unfinished"; task_ids: string[] }
   | { code: "board_default" }
   | { code: "open_quarantine"; question_id: string }
   | { code: "human_content_workbench"; workbench: string; branch: string; unreadable?: { place: string; error: string } }
@@ -99,6 +100,14 @@ function describeReason(reason: DeletionBlockedReason, resourceName: string): st
     return `PR root task(s) ${reason.task_ids.join(", ")} hold content the board has not pushed to their PR yet — wait for the board to push it, or answer its open PR promotion question`;
   }
   if (reason.code === "landing_in_progress") return `the board is landing task(s) ${reason.task_ids.join(", ")} right now — try again in a moment`;
+  // ADR 0434 決定2: 収束の次の回が merge 済みの根を読み終える —— 開いた昇格の question や workspace の Quarantine があれば収束はその根を飛ばすので、
+  // 待つだけでは通らない側も言う
+  if (reason.code === "merged_pr_landing_unfinished") {
+    return (
+      `the PRs of root task(s) ${reason.task_ids.join(", ")} were merged, but the board has not yet checked that their content reached the protected branch — ` +
+      "wait for its next landing round, or answer the root's open PR promotion question or the workspace's Quarantine"
+    );
+  }
   if (reason.code === "board_default") return "it is the board's default";
   // spec #3273 text B10。ADR 0373 決定14: 名前を名指す Quarantine が開いていて基準の行がある間は拒む —— 削除 → 再登録 → `repaired by hand` で
   // 比較を迂回させない

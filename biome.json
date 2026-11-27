@@ -44,6 +44,14 @@
 			"plugins": ["./no-direct-registry-load.grit", "./no-direct-registry-load-alias.grit", "./no-direct-registry-load-member.grit"]
 		},
 		{
+			"includes": ["src/**", "!src/git.ts"],
+			"plugins": ["./no-git-child-outside-git-module.grit"]
+		},
+		{
+			"includes": ["src/**", "!src/git.ts", "!src/github-auth.ts"],
+			"plugins": ["./no-network-git-outside-github-auth.grit"]
+		},
+		{
 			"includes": ["src/mcp.ts", "src/management-mcp.ts"],
 			"plugins": ["./no-raw-tool-content.grit"]
 		},

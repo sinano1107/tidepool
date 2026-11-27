@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { CheckoutHostError, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, interviewRoomPath, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
-import { commitRoomCopy, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, NamedPlaceFetchError, NamedPlaceSideError, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -14,6 +14,8 @@ import {
   checkoutOf,
   commitOnRefByHand,
   commitWork,
+  expectCompletionReclaimed,
+  expectPoseReclaimed,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -26,10 +28,10 @@ import {
   poseAccepted,
   prepareAtPickup,
   quarantineQuestion,
-  questions,
   registerWork,
   servedQuarantineQuestion,
   sessionId,
+  shimGit,
   type Tidepool,
   writeObservations,
 } from "./harness.js";
@@ -360,6 +362,17 @@ it("写しの中の git が tmp の容量切れで落ちれば host の失敗で
   expect(existsSync(join(place.path, ".git"))).toBe(true);
 });
 
+it("写しの検証の git が disk の満杯で落ちれば、写しの host の失敗の文で task の失敗になる(ADR 0433 決定5 / ADR 0364 決定2)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  await shimGit({ fails: ["--strict", "fatal: unable to write file: No space left on device"] });
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(releaseFailure(db, task)).toMatchObject({ reason: expect.stringContaining("the board cannot make its copy of the task checkout's git files: the host is out of space: ") });
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+});
+
 it("運んだ後の確かめが tmp の容量切れで落ちれば写しの host の失敗で、完了の門は欠けや破損と言わずに拒む(ADR 0388 決定1 / ADR 0364 決定2)", async () => {
   const { db, task, place } = await pickedUp();
   commitWork(place.path, "work.txt", "work\n");
@@ -410,6 +423,44 @@ it("名前の場所の objects に書けない未決着の解放は名前の場�
   expect(listChildren(db, task.id)).toEqual([]);
 });
 
+it.each([
+  // 運んだ後の確かめが名前の場所の objects の在り処を読む手(`ensureCarriedWhole` の失敗)
+  ["the carried check", "objects"],
+  // 他の task のブランチを数える手
+  ["the other-task count", "refs/heads/task/"],
+])("tip の記録で %s の git が disk の満杯に落ちれば、名前の場所の側の失敗でなく host の失敗で投げる(ADR 0433 決定5)", async (_, argument) => {
+  const { db, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  await shimGit({ fails: [argument, "error: unable to write file: No space left on device"] });
+
+  let failure: unknown;
+  try {
+    recordTaskCheckoutTip(db, place, task.id);
+  } catch (err) {
+    failure = err;
+  }
+
+  expect(failure).toBeInstanceOf(CheckoutHostError);
+  expect(failure).not.toBeInstanceOf(NamedPlaceFetchError);
+});
+
+it("名前の場所の objects に書けない tip の記録は fetch の失敗で投げ、それは名前の場所の側の失敗の子である(ADR 0433 決定4)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  const thaw = freezeObjects(named.path);
+  let failure: unknown;
+  try {
+    recordTaskCheckoutTip(db, place, task.id);
+  } catch (err) {
+    failure = err;
+  } finally {
+    thaw();
+  }
+
+  expect(failure).toBeInstanceOf(NamedPlaceFetchError);
+  expect(failure).toBeInstanceOf(NamedPlaceSideError);
+});
+
 it("WIP の objects を名前の場所に書けなければ quarantine し、task の失敗にせず checkout を残す(ADR 0367 決定4)", async () => {
   const { db, named, task, place } = await pickedUp();
   writeFileSync(join(place.path, "wip.txt"), "only in the working tree\n");
@@ -426,6 +477,20 @@ it("WIP の objects を名前の場所に書けなければ quarantine し、tas
   expect(existsSync(place.path)).toBe(true);
 });
 
+it("WIP の退避が名前の場所への fetch で disk の満杯に落ちれば、決着していない task の失敗で checkout を残し、名前の場所を quarantine しない(ADR 0433 決定5 / ADR 0364 決定2)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  writeFileSync(join(place.path, "wip.txt"), "only in the working tree\n");
+  // 解放の中の fetch は盤面所有の写しから名前の場所へ運ぶものだけ
+  await shimGit({ fails: ["fetch", "error: unable to write file: No space left on device"] });
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(releaseFailure(db, task)).toMatchObject({ path: place.path, reason: expect.stringContaining("No space left on device") });
+  expect(listChildren(db, task.id)).toMatchObject([{ type: "question", question_cancel_option: "abandon" }]);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+  expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("only in the working tree\n");
+});
+
 /** verb の時点で名前の場所の側か写しの host で tip を記録できない形。戻す手を返す。 */
 const recordFailures = {
   "named place": (named: string) => freezeObjects(named),
@@ -435,37 +500,34 @@ const recordFailures = {
   },
 } as const;
 
-it.each(["named place", "host"] as const)("complete_task は %s の側で tip を記録できなければ拒むだけで、資源を止めず task を失敗にしない(ADR 0364 決定2 / ADR 0359 決定4)", async (side) => {
+it.each(["named place", "host"] as const)("complete_task は %s の側で tip を記録できなければ拒まず、失敗の文を載せた failure question を登録して回収し、verb で資源を止めない(ADR 0424 決定2・3)", async (side) => {
   const ws = await makeWorkspace("tip-copy-gate");
   const board = (t = await bootTidepool({ workspace: ws }));
   const task = await registerWork(board, "record the tip");
   await board.clock.advance(HOUR);
   commitWork(checkoutOf(board.db, task.id), "work.txt", "work\n");
+  const session = String(sessionId(board.db, task.id));
+  board.containers.hold(task.id);
 
   const restore = recordFailures[side](ws.path);
   const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF }).finally(restore);
 
-  expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain("Retry complete_task or escalate");
-  expect((await api(board.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
-  expect(board.containers.forceReclaims).toEqual([]);
-  expect((await questions(board)).filter((question) => question.parent_id === task.id)).toEqual([]);
-  expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
+  await expectCompletionReclaimed(board, task.id, session, res, side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace", ws.name);
 });
 
-it("complete_task は人間が動かした task/<id> を retry では直らないと言って拒むだけで、workspace の Quarantine を立てない(ADR 0373 決定12 / ADR 0359 決定4)", async () => {
+it("complete_task は人間が動かした task/<id> を拒まず、動いた ref を載せた failure question を登録して回収し、verb で workspace の Quarantine を立てない(ADR 0424 決定2・3)", async () => {
   const ws = await makeWorkspace("tip-copy-moved");
   const board = (t = await bootTidepool({ workspace: ws }));
   const task = await registerWork(board, "record the tip");
   await board.clock.advance(HOUR);
   commitWork(checkoutOf(board.db, task.id), "work.txt", "work\n");
-  commitOnRefByHand(ws.path, `refs/heads/task/${task.id}`);
+  const moved = commitOnRefByHand(ws.path, `refs/heads/task/${task.id}`);
+  const session = String(sessionId(board.db, task.id));
+  board.containers.hold(task.id);
 
   const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF });
 
-  expect(res.isError).toBe(true);
-  expect(res.content[0].text).toBe(`task/${task.id} was moved outside the board. Retrying complete_task will not fix this — escalate.`);
-  expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
+  await expectCompletionReclaimed(board, task.id, session, res, `now: ${moved} refs/heads/task/${task.id}`, ws.name);
 });
 
 it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の写しを面接室に記録できなければ拒まず、失敗の文を載せた failure question を登録して回収し、verb で資源を止めない(ADR 0424 決定2・3)", async (side) => {
@@ -481,15 +543,6 @@ it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の�
   const restore = recordFailures[side](interviewRoomPath(board.db, root.id)!);
   const res = await callAsTask(board, root.id, "pose_probe", { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }).finally(restore);
 
-  expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain("this session is over");
-  expect(board.containers.forceReclaims).toEqual([session]);
-  const failure = (await questions(board)).find((question) => question.parent_id === root.id);
-  expect(failure).toMatchObject({ title: expect.stringContaining("pose_probe"), question_cancel_option: "abandon" });
-  expect(failure.purpose).toContain(side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace");
-  expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
-  expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
-  board.containers.fireEmpty(session);
-  await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
+  await expectPoseReclaimed(board, root.id, session, res, side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace");
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
 });

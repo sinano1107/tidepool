@@ -1,8 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { git, gitAnswers, isAncestor, localGitEnv, readOriginConfig, rethrowNamingMissingCwd } from "./git.js";
+import { GitOutOfSpaceError, GitToolError, git, gitAnswers, isAncestor, networkGit, readOriginConfig } from "./git.js";
 import type { RepoSlug } from "./github.js";
 import { parseGitHubRepo, repositoryLabel, sameRepository } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
@@ -205,15 +204,9 @@ export function originValue(cwd: string): string | undefined {
 
 /** `originValue` for a network call: no origin, or a missing `cwd`, throws naming `verb`. */
 function checkoutOrigin(cwd: string, verb: string): string {
-  try {
-    const origin = readOriginConfig((args) =>
-      execFileSync("git", args, { cwd, env: localGitEnv(), stdio: ["ignore", "pipe", "pipe"] }),
-    );
-    if (origin === undefined) throw new Error(`\`git ${verb}\` has no origin to reach (in ${cwd})`);
-    return origin.trim();
-  } catch (err) {
-    rethrowNamingMissingCwd(err, cwd, [verb]);
-  }
+  const origin = readOriginConfig(cwd, verb);
+  if (origin === undefined) throw new Error(`\`git ${verb}\` has no origin to reach (in ${cwd})`);
+  return origin.trim();
 }
 
 /** A non-GitHub value naming a local repository by a relative path. The board's network git runs outside the
@@ -343,7 +336,8 @@ function inBoardRepo<T>(
   const env = auth ? auth.env(destination.key) : githubChildEnv();
   const boardRepo = mkdtempSync(join(env.HOME!, "repo-"));
   try {
-    execFileSync("git", ["init", "--quiet", "--bare", boardRepo], { env, stdio: ["ignore", "pipe", "pipe"] });
+    // ADR 0441 決定2・3: init は網に出ない —— env を持ち込まず local の git で走る
+    git(boardRepo, "init", "--quiet", "--bare");
     // ADR 0339 退けた形: GIT_OBJECT_DIRECTORY で借りると、ref を持たない盤面 repo の gc が checkout の objects を全部消す
     const objects = git(checkout, "rev-parse", "--path-format=absolute", "--git-path", "objects");
     writeFileSync(join(boardRepo, "objects", "info", "alternates"), `${objects}\n`);
@@ -440,8 +434,8 @@ export class RemoteLacksObjectError extends Error {
 function runAuthedGit(call: AuthedCall, args: string[]): string {
   const { env, boardRepo, where, timeoutMs, origin } = call;
   try {
-    return execFileSync(
-      "git",
+    return networkGit(
+      boardRepo ?? env.HOME!,
       [
         ...(boardRepo ? [`--git-dir=${boardRepo}`] : []),
         ...(env.GH_TOKEN ? GIT_CREDENTIAL_ARGS : []),
@@ -449,14 +443,22 @@ function runAuthedGit(call: AuthedCall, args: string[]): string {
         ...["-c", "maintenance.auto=false", "-c", "gc.auto=0"],
         ...args,
       ],
-      { cwd: boardRepo ?? env.HOME, env, stdio: ["ignore", "pipe", "pipe"] },
+      env,
     )
       .toString()
       .trim();
   } catch (err) {
+    // ADR 0441 決定4: networkGit が型を付けるのは host の失敗と cwd が無い失敗だけ —— cwd が無い失敗はその型と文のまま通す
+    if (err instanceof GitToolError) throw err;
     const target = call.remote === HEAD_REPO_REMOTE ? ` on head repo ${repositoryLabel(origin)}` : "";
+    const stderr = (err as { stderr?: Buffer | string }).stderr?.toString();
+    // 理由は argv でなく stderr で言う —— argv は呼び出しごとに変わる盤面 repo の path と交渉の tip を持ち、同じ失敗を別の文にする
+    const message = `\`git ${args[0]}\` failed (in ${where})${target}: ${stderr?.trim() || String(err)}`;
+    // host の失敗は型のまま、文だけ網に出る git の文に包み直す —— networkGit の文は argv(盤面 repo の path、URL の資格情報)を持つ
+    if (err instanceof GitOutOfSpaceError) {
+      throw Object.assign(new GitOutOfSpaceError(`the host is out of space: ${message}`, { cause: err }), { code: (err as { code?: string }).code, stderr });
+    }
     // ADR 0334 決定4: 接続前の無音では curl 28 が無く、Operation too slow だけが出る。
-    const stderr = (err as { stderr?: Buffer }).stderr?.toString();
     if (stderr?.includes("Operation too slow")) {
       throw new Error(`\`git ${args[0]}\` stalled: no bytes for ${Math.ceil(timeoutMs / 1000)} s (in ${where})${target}`, { cause: err });
     }
@@ -469,8 +471,6 @@ function runAuthedGit(call: AuthedCall, args: string[]): string {
         { cause: err },
       );
     }
-    // 理由は argv でなく stderr で言う —— argv は呼び出しごとに変わる盤面 repo の path と交渉の tip を持ち、同じ失敗を別の文にする
-    const message = `\`git ${args[0]}\` failed (in ${where})${target}: ${stderr?.trim() || String(err)}`;
     // ADR 0409 決定3: 手元の git が前に付ける部分(`fatal: remote error:`)は翻訳されうるので、相手の文だけを照合する
     const lacking = stderr?.match(/upload-pack: not our ref ([0-9a-f]+)/)?.[1];
     if (lacking !== undefined) throw new RemoteLacksObjectError(lacking, message, { cause: err });

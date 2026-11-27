@@ -372,17 +372,21 @@ async function lostUnderRootRecord(name: string, record: TaskScopedPayload, afte
 
 const REACHED: TaskScopedPayload[] = [
   { kind: "local_merge_executed", sha: "0".repeat(40) },
-  { kind: "pr_merged", pr_number: 1 },
-  { kind: "pr_merge_observed", pr_number: 1 },
   { kind: "landing_finished", pr_number: 1, basis: "merge" },
 ];
-const NOT_REACHED: TaskScopedPayload[] = [{ kind: "nothing_to_land", base: "0".repeat(40) }, { kind: "pr_close_observed", pr_number: 1 }];
+// ADR 0434 決定1: PR の merge の記録は、merge の後に根へ merge back した内容が届いたことを言わない
+const NOT_REACHED: TaskScopedPayload[] = [
+  { kind: "nothing_to_land", base: "0".repeat(40) },
+  { kind: "pr_close_observed", pr_number: 1 },
+  { kind: "pr_merged", pr_number: 1 },
+  { kind: "pr_merge_observed", pr_number: 1 },
+];
 
 it.each(REACHED)("数える祖先が完了の後に `$kind` を持てば、編集のあった失われた task は透明 —— 子は保護ブランチへ帰り、レビューは残る(ADR 0380 決定1、pin H12)", async (record) => {
   expect(await lostUnderRootRecord(`landed-${record.kind}`, record, true)).toEqual({ lineage: { branch: undefined, outlivedForkSource: false }, review: "todo" });
 });
 
-it.each(NOT_REACHED)("`$kind` は保護ブランチに届いた記録に数えない —— 編集のあった失われた task は死んで、子は帰り先なし、レビューは倒れる(spec #3273 group H)", async (record) => {
+it.each(NOT_REACHED)("`$kind` は保護ブランチに届いた記録に数えない —— 編集のあった失われた task は死んで、子は帰り先なし、レビューは倒れる(spec #3273 group H / ADR 0434 決定1)", async (record) => {
   expect(await lostUnderRootRecord(`not-landed-${record.kind}`, record, true)).toEqual({ lineage: NO_RETURN, review: "cancelled" });
 });
 
@@ -391,7 +395,7 @@ it("失われた task 自身が完了の後に保護ブランチに届いた記�
 });
 
 it("完了の前の着地の記録では透明にならない(ADR 0380 決定1、pin H12)", async () => {
-  expect(await lostUnderRootRecord("landed-before-completion", REACHED[3]!, false)).toEqual({ lineage: NO_RETURN, review: "cancelled" });
+  expect(await lostUnderRootRecord("landed-before-completion", REACHED[1]!, false)).toEqual({ lineage: NO_RETURN, review: "cancelled" });
 });
 
 it("`task_branch_created` が作成時の sha を持たないブランチは、失われた sha と比べず編集があった側に数える(ADR 0375 決定2、pin H4)", async () => {

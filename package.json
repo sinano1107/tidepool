@@ -19,7 +19,7 @@
     "github-login": "tsx scripts/github-login.ts",
     "init-registry": "tsx scripts/init-registry.ts",
     "token": "tsx scripts/token.ts",
-    "start:live": "TIDEPOOL_REGISTRY=$HOME/tidepool-registry tsx src/main.ts",
+    "create-home": "tsx scripts/create-home.ts",
     "typecheck": "tsc --noEmit && tsc -p webui",
     "lint": "biome check --error-on-warnings",
     "lint:fix": "biome check --write",

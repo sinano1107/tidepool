@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { basename } from "node:path";
@@ -7,7 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { isNonAgentActorId } from "./actor-id.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { git, localGitEnv } from "./git.js";
+import { git, gitBytesWithInput } from "./git.js";
 import {
   authedFetch,
   authedLsRemote,
@@ -772,12 +771,7 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
     if (match) blobs.push({ sha: match[1]!, path: match[2]! });
   }
   const files = new Map<string, string>();
-  const out = execFileSync("git", ["cat-file", "--batch"], {
-    cwd: dir,
-    env: localGitEnv(),
-    stdio: ["pipe", "pipe", "pipe"],
-    input: `${blobs.map((b) => b.sha).join("\n")}\n`,
-  });
+  const out = gitBytesWithInput(`${blobs.map((b) => b.sha).join("\n")}\n`, dir, "cat-file", "--batch");
   // 出力は `<sha> blob <size>\n<content>\n` の繰り返し。本文は文字数でなく
   // バイト数で切る(マルチバイトの本文では両者がずれる)
   let offset = 0;

@@ -6,7 +6,7 @@
  *  (手順は docs/codex-cli-version-bump.md)。試すのはまだ固定していない版なので、口の版の門には常に一致を返す
  *  検査を渡し、互換性検査と preflight の版の照合には観測した版を渡して外す —— schema と他の面の照合は残る。
  *
- *  使い方: CODEX_HOME=~/.tidepool/codex systemd-run --user --scope -p Delegate=yes -- npx tsx scripts/codex-cli-conformance.ts */
+ *  使い方(CODEX_HOME の既定は盤面の家の Codex home、ADR 0436 決定1): systemd-run --user --scope -p Delegate=yes -- npx tsx scripts/codex-cli-conformance.ts */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -15,6 +15,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { platform } from "node:process";
 import { type BoardCallSpec, createBoardCalls, readOutput } from "../src/board-call.js";
+import { resolveBoardPlaces } from "../src/board-home.js";
 import { containerRuntimeFor } from "../src/cgroup-container.js";
 import { SystemClock } from "../src/clock.js";
 import {
@@ -71,7 +72,7 @@ const { call } = createBoardCalls({
   checkCliVersion: async () => ({ available: true }),
   onCliVersionMismatch: () => {},
 });
-const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".tidepool", "codex");
+const codexHome = process.env.CODEX_HOME ?? resolveBoardPlaces(process.env).codexHome;
 const env = probeEnv(codexHome);
 const pinnedVersion = execFileSync(executable, ["--version"], { encoding: "utf8" }).trim();
 const command = codexCommandThrough(call, "conformance App Server", CODEX_APP_SERVER_LIMIT_MS);

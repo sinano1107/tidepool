@@ -6,7 +6,23 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { registerTask, sessionRealEnvironmentCheckout } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, callAsTask, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, managementMcpClient, runNow, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import {
+  api,
+  bootTidepool,
+  callAsTask,
+  commitWork,
+  expectReclaimed,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HUMAN_WEBUI,
+  interviewExaminee,
+  makeWorkspace,
+  managementMcpClient,
+  runNow,
+  sessionId,
+  type Tidepool,
+  WORKER_SPAWNED,
+} from "./harness.js";
 
 /** routing meta-review の Interview の提案 question(#921 / ADR 0199 決定5 / ADR 0258 / ADR 0273 決定9)のサーバ境界: 提案 verb の op
  *  interview、approve が人間の扉で登録する interview root と修正値、pin の陳腐化、registry から消えた実環境、shadow 行の workspace 欄、
@@ -28,6 +44,8 @@ const SONNET_MAX = { provider: "anthropic", model: "claude-sonnet-5-5", effort: 
 /** registry: 名前の集合からテストが消せる(消えた実環境の approve)。 */
 let registered: Set<string>;
 let spaces: Map<string, WorkspaceConfig>;
+/** 立てると名前の解決が registry を読めずに落ちる(素の Error)。 */
+let unreadable: boolean;
 
 /** reef と lagoon を registry に持ち、既定 agent が anthropic の advisor つき entry 1つの盤面に、slot に入った routing meta-review を置く。 */
 async function boardWithRoutingReview() {
@@ -35,10 +53,12 @@ async function boardWithRoutingReview() {
   const lagoon = await makeWorkspace("lagoon");
   spaces = new Map([reef, lagoon].map((w) => [w.name, w]));
   registered = new Set(spaces.keys());
+  unreadable = false;
   const definition = { provider: [{ name: "anthropic", advisor: true }], tier: undefined };
   const board: Tidepool = await bootTidepool({
     workspace: reef,
     resolveWorkspace: (name) => {
+      if (unreadable && name !== null) throw new Error("registry clone is broken");
       const found = name === null ? reef : registered.has(name) ? spaces.get(name) : undefined;
       if (!found) throw new UnknownWorkspaceError(name!);
       return found;
@@ -242,6 +262,24 @@ it("verb は根拠を欠く提案・表に無い model の対象・表の行と�
     expect(await call(reviewId, "propose_routing_change", proposal([eventId], fields))).toEqual({ error: expect.stringContaining(refusal) });
   }
   expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === reviewId)).toEqual([]);
+});
+
+// 知らない名前の拒否(unknown workspace)は上の verb の拒否の表が今どおり言う
+it("op interview の実環境の名前を解く読みが registry を読めずに落ちると、protocol error でなく、その失敗の文を載せた failure question を登録して session を回収し、提案の question を立てない(ADR 0424 決定2)", async () => {
+  const reviewId = await boardWithRoutingReview();
+  const { eventId } = session("reef");
+  const reclaimed = String(sessionId(t.db, reviewId));
+  t.containers.hold(reviewId);
+  unreadable = true;
+
+  const res = await callAsTask(t, reviewId, "propose_routing_change", proposal([eventId]));
+  unreadable = false;
+
+  await expectReclaimed(t, {
+    verb: "propose_routing_change", taskId: reviewId, session: reclaimed, res, fragment: "registry clone is broken", quarantined: "reef",
+    nothingRecorded: async () =>
+      expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === reviewId && q.question_cancel_option === null)).toEqual([]),
+  });
 });
 
 it("受験者の session は根拠にならず、verb は本番の session だけを根拠に受ける", async () => {

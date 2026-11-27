@@ -1,5 +1,7 @@
 # agent の verb が拒否文を返すのは agent が自分で直せる失敗だけ —— 直せない失敗は盤面が failure question を登録して session を回収し、資源の停止は今の観測者に残す
 
+**Status 追記: 決定3 は registry にも当たり、決定4 の拒否文の例外は自分の agent 定義が解けない場合だけに残る —— registry を読めなかった委任の verb は回収する。決定2 の回収は共有の verb の runner の1か所に置き、`DomainError` でない throw はどの verb でも(出口の verb・読む verb も)1つの session で1回だけ回収する([ADR 0442](0442-an-agent-verb-never-stops-the-registry-and-every-untyped-throw-of-an-agent-verb-reclaims-the-session-at-the-shared-runner.md)、2026-11-28、issue #4010 / #4009)。**
+
 **Status 追記: 決定5 の「型は足さない」は verb の側に限る。無人の過程の側では、git の道具の失敗と名前の場所の状態の観測が型を持ち、資源を止めるのはその型だけになる。verb はその型でも拒否文を分けない([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定3・4、2026-11-27、issue #3938)。**
 
 2026-11-26 の triage → grilling(issue #3861、#3814 の ponytail-review の派生)で決定。`pose_probe` と `complete_task` の catch-all は、
