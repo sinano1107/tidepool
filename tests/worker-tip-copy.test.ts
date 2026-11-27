@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { CheckoutHostError, CheckoutUnreadableError } from "../src/git.js";
 import { completeTask, getTask, interviewRoomPath, listChildren, pickupTask, registerTask, type Task, type TaskType } from "../src/tasks.js";
-import { commitRoomCopy, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
+import { commitRoomCopy, NamedPlaceFetchError, NamedPlaceSideError, recordedInterviewRoom, recordTaskCheckoutTip, releaseWorkspace, type TaskCheckoutPlace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -409,6 +409,23 @@ it("名前の場所の objects に書けない未決着の解放は名前の場�
   expect(quarantineQuestion(db, "workspace", named.name)).toBeDefined();
   expect(releaseFailure(db, task)).toBeUndefined();
   expect(listChildren(db, task.id)).toEqual([]);
+});
+
+it("名前の場所の objects に書けない tip の記録は fetch の失敗で投げ、それは名前の場所の側の失敗の子である(ADR 0433 決定4)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  commitWork(place.path, "work.txt", "work\n");
+  const thaw = freezeObjects(named.path);
+  let failure: unknown;
+  try {
+    recordTaskCheckoutTip(db, place, task.id);
+  } catch (err) {
+    failure = err;
+  } finally {
+    thaw();
+  }
+
+  expect(failure).toBeInstanceOf(NamedPlaceFetchError);
+  expect(failure).toBeInstanceOf(NamedPlaceSideError);
 });
 
 it("WIP の objects を名前の場所に書けなければ quarantine し、task の失敗にせず checkout を残す(ADR 0367 決定4)", async () => {

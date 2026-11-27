@@ -239,8 +239,6 @@ it.each(["corrupt", "missing"] as const)("worktree が前の出題の写しの t
 
   if (damage === "corrupt") {
     expect(() => commitRoomCopy(db, place, root.id)).toThrow(NamedPlaceFetchError);
-    // ADR 0433 決定4: fetch の失敗は名前の場所の側の失敗の子
-    expect(() => commitRoomCopy(db, place, root.id)).toThrow(NamedPlaceSideError);
     expect(git(room.path, "rev-parse", "refs/heads/main")).toBe(protectedHead);
     expect(git(room.path, "for-each-ref", "refs/keep-around/")).toBe(keptAround);
   } else {
