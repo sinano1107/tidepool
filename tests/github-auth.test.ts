@@ -655,6 +655,15 @@ describe("盤面の網に出る git(ADR 0024 の唯一の注入経路、ADR 0339
     expect(stdout.toString().includes("password=inst-token")).toBe(answers);
   });
 
+  it("origin の無い checkout からの網に出る git は、verb と在り処を名指して投げる", async () => {
+    const repo = await tempDir("tidepool-repo-");
+    git(repo, "init", "-b", "main");
+
+    expect(() => authedLsRemote(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "refs/heads/main")).toThrow(
+      `\`git ls-remote\` has no origin to reach (in ${repo})`,
+    );
+  });
+
   it("cwd が無い呼び出しは上限つきの面でも subcommand と在り処を名指して投げる(issue #2722)", async () => {
     const missing = join(await tempDir("tidepool-authed-"), "gone");
     const expected = `\`git fetch\` cannot run: the directory ${missing} does not exist`;

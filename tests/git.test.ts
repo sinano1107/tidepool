@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { CheckoutHostError, GitToolError, git, gitReporting, isAncestor, ListingUnreadableError, localGitEnv, stashEntries, workerRepoGit } from "../src/git.js";
+import { authedFetch, GIT_NETWORK_TIMEOUT_MS } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
 import { recordedSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
@@ -124,6 +125,32 @@ it.each(RUNNERS)("%s は disk が満ちて落ちた git を git の道具の失�
   expect(err).toBeInstanceOf(CheckoutHostError);
   expect(err).not.toBeInstanceOf(GitToolError);
   expect(err.message).toContain("No space left on device");
+});
+
+/** 無い repo を origin に持つ checkout —— 網に出る git の fetch は一般の失敗で落ちる。 */
+async function checkoutOfMissingRemote(name: string): Promise<{ repo: string; gone: string }> {
+  const repo = (await makeWorkspace(name)).path;
+  const gone = join(await tempDir("tidepool-git-"), "gone.git");
+  fixtureGit(repo, "remote", "add", "origin", gone);
+  return { repo, gone };
+}
+
+it("網に出る git の一般の失敗(無い remote への fetch)は git の道具の失敗にならず、今の素の Error と文で上がる(ADR 0441 決定4)", async () => {
+  const { repo, gone } = await checkoutOfMissingRemote("network-general-failure");
+
+  const err = thrown(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main"));
+
+  expect(err.constructor).toBe(Error);
+  expect(err.message).toMatch(new RegExp(`^\`git fetch\` failed \\(in ${repo}\\): fatal: '${gone}' does not appear to be a git repository`));
+});
+
+it("網に出る git が、cwd を持つ fs の空きが無い状態で落ちると host の失敗で上がる(ADR 0441 決定4 / ADR 0433 決定5)", async () => {
+  const { repo } = await checkoutOfMissingRemote("network-no-free-space");
+  fsHook.bavail = 0;
+
+  const err = thrown(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main"));
+
+  expect(err).toBeInstanceOf(CheckoutHostError);
 });
 
 /** `source` の blob を持たない部分 clone。promisor は 401 の loopback で、index は HEAD を指す(blob は遅延 fetch でしか読めない)。 */

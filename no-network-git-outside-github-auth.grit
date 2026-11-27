@@ -1,0 +1,10 @@
+language js
+
+// ADR 0441 決定3: env を持ち込む起動口 `networkGit` は github-auth(src/github-auth.ts)だけが呼ぶ —— env を組み立てる場所は ADR 0339 決定1 の
+// 1箇所で、ほかの git は local の env(転送は file だけ)で走る。名前のままの import と呼び出し、別名の import、namespace 越しの
+// `g.networkGit` を落とす。当てない場所は biome.json の override の `includes` が外す(定義のある src/git.ts と、呼び手の src/github-auth.ts)。
+// 見えない形: 関数を値として渡された先の呼び出し、`g["networkGit"]` の添字の読み。
+or { JsReferenceIdentifier(), JsName(), JsLiteralExportName(), JsIdentifierBinding() } as $name where {
+  $name <: r"networkGit",
+  register_diagnostic(span=$name, message="Only github-auth brings its own env to git (ADR 0441 decision 3): every other board git runs on the local env through the git module's runners.", severity="error")
+}

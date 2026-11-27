@@ -1,8 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { git, gitAnswers, isAncestor, localGitEnv, readOriginConfig, rethrowNamingMissingCwd } from "./git.js";
+import { CheckoutHostError, GitToolError, git, gitAnswers, isAncestor, networkGit, readOriginConfig } from "./git.js";
 import type { RepoSlug } from "./github.js";
 import { parseGitHubRepo, repositoryLabel, sameRepository } from "./repo-access.js";
 import type { WorkspaceConfig } from "./workspace.js";
@@ -205,15 +204,9 @@ export function originValue(cwd: string): string | undefined {
 
 /** `originValue` for a network call: no origin, or a missing `cwd`, throws naming `verb`. */
 function checkoutOrigin(cwd: string, verb: string): string {
-  try {
-    const origin = readOriginConfig((args) =>
-      execFileSync("git", args, { cwd, env: localGitEnv(), stdio: ["ignore", "pipe", "pipe"] }),
-    );
-    if (origin === undefined) throw new Error(`\`git ${verb}\` has no origin to reach (in ${cwd})`);
-    return origin.trim();
-  } catch (err) {
-    rethrowNamingMissingCwd(err, cwd, [verb]);
-  }
+  const origin = readOriginConfig(cwd, verb);
+  if (origin === undefined) throw new Error(`\`git ${verb}\` has no origin to reach (in ${cwd})`);
+  return origin.trim();
 }
 
 /** A non-GitHub value naming a local repository by a relative path. The board's network git runs outside the
@@ -343,7 +336,8 @@ function inBoardRepo<T>(
   const env = auth ? auth.env(destination.key) : githubChildEnv();
   const boardRepo = mkdtempSync(join(env.HOME!, "repo-"));
   try {
-    execFileSync("git", ["init", "--quiet", "--bare", boardRepo], { env, stdio: ["ignore", "pipe", "pipe"] });
+    // init は網に出ない —— local の git で走る
+    git(boardRepo, "init", "--quiet", "--bare");
     // ADR 0339 退けた形: GIT_OBJECT_DIRECTORY で借りると、ref を持たない盤面 repo の gc が checkout の objects を全部消す
     const objects = git(checkout, "rev-parse", "--path-format=absolute", "--git-path", "objects");
     writeFileSync(join(boardRepo, "objects", "info", "alternates"), `${objects}\n`);
@@ -440,8 +434,8 @@ export class RemoteLacksObjectError extends Error {
 function runAuthedGit(call: AuthedCall, args: string[]): string {
   const { env, boardRepo, where, timeoutMs, origin } = call;
   try {
-    return execFileSync(
-      "git",
+    return networkGit(
+      boardRepo ?? env.HOME!,
       [
         ...(boardRepo ? [`--git-dir=${boardRepo}`] : []),
         ...(env.GH_TOKEN ? GIT_CREDENTIAL_ARGS : []),
@@ -449,11 +443,13 @@ function runAuthedGit(call: AuthedCall, args: string[]): string {
         ...["-c", "maintenance.auto=false", "-c", "gc.auto=0"],
         ...args,
       ],
-      { cwd: boardRepo ?? env.HOME, env, stdio: ["ignore", "pipe", "pipe"] },
+      env,
     )
       .toString()
       .trim();
   } catch (err) {
+    // ADR 0441 決定4: networkGit が型を付けるのは host の失敗と cwd が無い失敗だけ —— その型のまま通す
+    if (err instanceof CheckoutHostError || err instanceof GitToolError) throw err;
     const target = call.remote === HEAD_REPO_REMOTE ? ` on head repo ${repositoryLabel(origin)}` : "";
     // ADR 0334 決定4: 接続前の無音では curl 28 が無く、Operation too slow だけが出る。
     const stderr = (err as { stderr?: Buffer }).stderr?.toString();
