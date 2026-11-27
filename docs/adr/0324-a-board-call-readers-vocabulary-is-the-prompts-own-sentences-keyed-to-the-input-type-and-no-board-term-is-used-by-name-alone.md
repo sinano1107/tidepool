@@ -1,5 +1,7 @@
 # Board call の読み手が知る語は prompt の文と入力の中身だけで、欄の説明は入力の型に鍵で結んで1か所に置く
 
+**Status 追記: 決定3 の範囲と定義の置き場は [ADR 0438](0438-board-written-prose-says-only-what-changes-the-readers-choice-among-acts-it-holds-and-a-board-term-carries-its-definition-in-the-sentence-that-uses-it.md) 決定2〜4 が広げる(2026-11-27、issue #3977)** —— 盤面の語を名前だけで使わない規則は、Board call の 4 本に限らず盤面が書いた文すべてに当たる。語の定義は語ごとに 1 か所の出所が持ち、欄の record の文もそこから挿す。欄が何かは引き続き決定1 の record が持つ。
+
 2026-10-29 の triage → grilling(issue #2681、#2675 / PR #2680 の code review で出た族の根)で決定。振り返り Board call の読み手(帰責の
 判事・Behavior の起草)が知るものは、3行の system prompt と設定の層を全部落とした環境(ADR 0303 決定1)の下では **user prompt の文と
 JSON の入力**だけである。その入力欄の説明を2つの client が別々に綴り(4本の prompt)、入力の形が変わるたびに手で両方を直して
