@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Router } from "express";
 import { z } from "zod";
-import type { AgentAdmin } from "./agent-create.js";
+import type { AgentAdmin, AgentView } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -45,7 +45,7 @@ import {
   searchMemory,
   searchMemoryEntries,
 } from "./memory.js";
-import { type MetaReviewSubject, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
+import { injectedMaterial, type MetaReviewSubject, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineAgent } from "./quarantine.js";
 import {
@@ -436,6 +436,32 @@ function reclaimUnfixable(deps: McpDeps, task: Task, verb: string, err: unknown,
   );
 }
 
+/** ADR 0424 決定2: 盤面に材料の注入の記録が無い meta-review は worker に直せない —— 回収する。domain の完了は同じ検査で拒むまま
+ *  (ADR 0278 追記4)で、verb でだけ回収に替える。 */
+function injectedMaterialOrReclaim(deps: McpDeps, task: Task, subject: MetaReviewSubject, verb: string): void {
+  try {
+    injectedMaterial(deps.db, task.id, subject);
+  } catch (err) {
+    reclaimUnfixable(deps, task, verb, err);
+  }
+}
+
+/** ADR 0424 決定2: registry の読みが落ちるのは worker に直せない —— 読みの失敗を回収に替えた registry の一覧の読み口(registry の無い
+ *  盤面では無い)。記録の transaction の中で呼ばない: 回収の書き込みが巻き戻る。 */
+function registryReadOrReclaim(deps: McpDeps, task: Task, verb: string): (() => AgentView[]) | undefined {
+  const list = deps.agentAdmin?.list;
+  return (
+    list &&
+    (() => {
+      try {
+        return list();
+      } catch (err) {
+        reclaimUnfixable(deps, task, verb, err);
+      }
+    })
+  );
+}
+
 /** 回収の経路1本(時間切れと ADR 0424 の回収が共有する)。 */
 function reclaimSession(deps: McpDeps, task: Task, title: string, reason: string, workspace: RunPlace | undefined): never {
   registerFailureAndMarkTeardown(deps.db, task, title, reason, deps.clock.now(), KEPT_TASK_CHECKOUT.retry);
@@ -663,13 +689,17 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
   // ADR 0310 決定4: 材料が停止の RCA の verb の文は材料の停止を指す
   const stopRca = attributedTaskId !== null && materialStop(deps.db, attributedTaskId) !== undefined;
-  /** `done` へ決着させる種別ごとの完了の verb の handler(門は持たない —— ADR 0363 決定3): 完了した task の id と status を返す。 */
+  /** `done` へ決着させる種別ごとの完了の verb の handler(門は持たない —— ADR 0363 決定3): 完了した task の id と status を返す。
+   *  `before` は記録の transaction の外で走り(回収の書き込みを巻き戻さない)、その値を `complete` が受ける。 */
   const completing =
-    <I>(complete: (db: Db, task: Task, input: I, actorId: string, now: Date, origin: "worker") => Task) =>
+    <I, B = undefined>(complete: (db: Db, task: Task, input: I, actorId: string, now: Date, origin: "worker", before: B) => Task, before?: (task: Task) => B) =>
     async (input: I) =>
-      runReleasingVerb(deps, attributedTaskId, (task) => (actorId, now) => {
-        const done = complete(deps.db, task, input, actorId, now, "worker");
-        return { id: done.id, status: done.status };
+      runReleasingVerb(deps, attributedTaskId, (task) => {
+        const prepared = before?.(task) as B;
+        return (actorId, now) => {
+          const done = complete(deps.db, task, input, actorId, now, "worker", prepared);
+          return { id: done.id, status: done.status };
+        };
       });
 
   server.registerTool(
@@ -990,7 +1020,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      completing(completeMemoryReview),
+      completing(completeMemoryReview, (task) => injectedMaterialOrReclaim(deps, task, "memory", "complete_memory_review")),
     );
   }
 
@@ -1023,8 +1053,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      completing((db, task, input: Parameters<typeof completeRoutingReview>[2], actorId, now, origin) =>
-        completeRoutingReview(db, task, input, actorId, now, origin, routingPrecedents(db, task.id), deps.agentAdmin?.list?.()),
+      completing(
+        (db, task, input: Parameters<typeof completeRoutingReview>[2], actorId, now, origin, agents: AgentView[] | undefined) =>
+          completeRoutingReview(db, task, input, actorId, now, origin, routingPrecedents(db, task.id), agents),
+        (task) => {
+          injectedMaterialOrReclaim(deps, task, "routing", "complete_routing_review");
+          return registryReadOrReclaim(deps, task, "complete_routing_review")?.();
+        },
       ),
     );
   }
@@ -1686,7 +1721,16 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     },
     async (input) =>
       run((reader, now) =>
-        proposeRoutingChange(deps.db, reader.taskId, input, reader.agent, now, deps.agentAdmin?.list, (name) => assertWorkspaceKnown(name, deps.resolveWorkspace, deps.workspace)),
+        proposeRoutingChange(
+          deps.db,
+          reader.taskId,
+          input,
+          reader.agent,
+          now,
+          // 読みは op agent_tier が一覧を要る所でだけ —— それより前の入力の拒否は回収に変わらない
+          registryReadOrReclaim(deps, getTask(deps.db, reader.taskId)!, "propose_routing_change"),
+          (name) => assertWorkspaceKnown(name, deps.resolveWorkspace, deps.workspace),
+        ),
       ),
   );
 }
