@@ -52,8 +52,9 @@ export const PROMOTION_RULE =
   "retire it with invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still " +
   "change the judgment — there is no threshold or deadline.";
 
-/** tier が何かの半文(ADR 0324 決定3): 配分評価は setting の出所の半文を、起草は `TIER_DEFINITION_RULE` を後に続ける。 */
-export const TIER_QUALITY_FLOOR = "The tier is the quality floor this session ran at";
+/** tier が何かの汎用の半文(ADR 0324 決定3): session を指さない —— 起草の入力に tier は無い(#3935)。配分評価は自分の入力の
+ *  `tier` / `setting.source.tier` の半文を、起草は `TIER_DEFINITION_RULE` を後に続ける。 */
+export const TIER_QUALITY_FLOOR = "A tier is the quality floor a session runs at";
 
 /** 段の定義の置き場(ADR 0200 決定7): Behavior の起草側(RCA の propose_from_material・Board call)と memory meta-review が同じ文を載せる。 */
 export const TIER_DEFINITION_RULE =

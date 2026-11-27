@@ -48,7 +48,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(prompt).toContain("accepted");
   expect(prompt).toContain('"model": "sonnet"');
   expect(prompt).toContain('"tier": "economy"');
-  expect(prompt).toContain("The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor.");
+  expect(prompt).toContain("A tier is the quality floor a session runs at; tier is the one this session ran at, and setting.source.tier identifies who set that floor.");
   // 欄そのものの null は観測なしで、いずれの方向の証拠にもならない(ADR 0083 追記10 / ADR 0317 決定6)
   expect(prompt).toContain(
     'A null usage (the session filed no consumption report), actions (the action counts were not observed), model_swaps, refusals, or advisor.usage (the advisor\'s share of the consumption could not be measured) means that value was not observed — never zero, never "did nothing", never zero cost. Do not read it as evidence either way.',
