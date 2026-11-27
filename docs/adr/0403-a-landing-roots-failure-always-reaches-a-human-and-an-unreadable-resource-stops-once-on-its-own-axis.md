@@ -1,5 +1,7 @@
 # 着地の根の失敗は必ず人間に届き、読めない資源はその資源の軸で1回だけ止まる
 
+**Status 追記: 決定5 の「重複を避ける判定は収束の失敗の境界と poll の catch だけに置く」は、列挙をやめる —— 止まりを立て済みの型を受けた無人の catch はすべて自分の question を足さず、判定は型で行う。後始末はその止まりの受理を待ち、枠を握った後の pickup は todo へ戻す([ADR 0444](0444-an-unattended-catch-adds-no-question-of-its-own-to-a-failure-that-already-stopped-its-resource-and-teardown-waits-for-that-stop.md) 決定1〜4、2026-11-28、issue #4017)。**
+
 **Status 追記: 決定5 の「読み込みの1点が止まりを立てる」は、盤面が自分から動く経路と人間の要求に限る —— agent の verb の読みは止まりを立てず、読めなかった verb は session を回収する。registry の観測者は pickup の門と後始末である([ADR 0442](0442-an-agent-verb-never-stops-the-registry-and-every-untyped-throw-of-an-agent-verb-reclaims-the-session-at-the-shared-runner.md) 決定1・2、2026-11-28、issue #4010)。**
 
 **Status 追記: 決定3 の昇格失敗 question は、無人 merge の最後の同期区間で型の付かない失敗にも立つ —— `merge_failed` にしない([ADR 0433](0433-only-a-typed-resource-failure-stops-a-resource-and-a-board-bug-in-an-unattended-process-goes-where-its-stage-sends-an-unattributable-failure.md) 決定8、2026-11-27、issue #3938)。**
