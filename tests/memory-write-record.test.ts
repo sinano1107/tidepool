@@ -40,7 +40,7 @@ const metaReview = { activity: "meta_review" as const, name: "auditor" };
 function board() {
   const db = openDb(":memory:");
   const task = (title: string, extra: Partial<Parameters<typeof registerTask>[1]> = {}): Task =>
-    registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace: "charts", ...extra }, at, ...HUMAN_WEBUI);
+    registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c", workspace: extra.parent_id ? undefined : "charts", ...extra }, at, ...HUMAN_WEBUI);
   const knowledge = (title: string, scope: string | null = "charts") =>
     recordKnowledge(db, { scope, path: "build/tests", title, text: `${title}.`, source: { commit: "0a46a46" }, author: worker }, "worker", at).entry_id;
   const rows = () => listLog(db).filter((e) => e.payload.kind === "memory_written");

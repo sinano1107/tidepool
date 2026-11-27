@@ -132,13 +132,16 @@ it("登録の扉(WebUI の Register API・管理MCP)は interview を新しい�
   }
 });
 
-it("worker の MCP からは interview を登録できない —— 分解の子は type も Interview の欄も持たず、名指しても work の子になる(ADR 0273 決定2 / ADR 0021)", async () => {
+it("worker の decompose は type と Interview の欄を tool error で拒み、子を登録しない(ADR 0273 決定2)", async () => {
   t = await boot();
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
   const child = { ...CHILD, type: "interview", hypothesis: "h", tier: "frontier", interview_targets: [opus46] };
-  expect((await callAsTask(t, work.id, "decompose", { reason: "measure", children: [child] })).isError).toBeFalsy();
+  const result = await callAsTask(t, work.id, "decompose", { reason: "measure", children: [child] });
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toContain("Unrecognized keys");
+  for (const key of ["type", "hypothesis", "interview_targets"]) expect(result.content[0].text).toContain(`"${key}"`);
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect(board.filter((task: any) => task.parent_id === work.id).map((task: any) => task.type)).toEqual(["work"]);
+  expect(board.filter((task: any) => task.parent_id === work.id)).toEqual([]);
   expect(board.map((task: any) => task.type)).not.toContain("interview");
 });
 
