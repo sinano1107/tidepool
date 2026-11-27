@@ -218,7 +218,7 @@ export function prRootIdsWithUnpushedContentInWorkspace(db: Db, resolve: Workspa
 /** ADR 0434 決定2: PR の merge を記録したが着地がまだ終わっていない根 —— 収束は次の回で必ず読み終える(内容が無ければ `landing_finished`、
  *  残れば失敗の question)ので、待てば通る。運ぶ内容の有無は問わず記録だけで読む(ADR 0421 決定3)。断念が効いている根は、収束が何もしないので
  *  数えない(ADR 0421 決定4)。 */
-export function mergedPrRootIdsAwaitingLandingInWorkspace(db: Db, workspaceName: string): string[] {
+export function mergedPrRootIdsWithUnfinishedLandingInWorkspace(db: Db, workspaceName: string): string[] {
   return doneTaskIdsInWorkspace(db, workspaceName).filter(
     (id) => rootPrOutcome(db, id)?.state === "MERGED" && !landingEnded(db, id) && !declineInForce(db, id, "pr_promotion_retry"),
   );

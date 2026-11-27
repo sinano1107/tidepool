@@ -3,23 +3,24 @@ import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
-import { quarantineChecks, startWorkThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
+import { appendEvent, type TaskScopedPayload } from "../src/events.js";
+import { startWorkThroughHumanDoor, submitAnswer } from "../src/human-verbs.js";
 import { createLanding, type Landing, landingState } from "../src/landing.js";
 import { openQuarantineQuestion } from "../src/quarantine.js";
 import { questionKindOf } from "../src/question-kind.js";
 import { startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { getTask, hasTaskBranch, listBoard, listChildren, logDecision, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, fillEmptyWorkspace, getTask, hasTaskBranch, listBoard, listChildren, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { commitTriage, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { queueReturnHandler, spawnFailureHandler } from "../src/watchdog.js";
 import { refreshProtectedBranch, resolveTaskBranchLineage, type WorkspaceConfig } from "../src/workspace.js";
 import { createWorkspace, deleteWorkspace } from "../src/workspace-create.js";
 import { FakeGitHubClient, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
 import {
   answerPromotion,
+  answerWorkspaceQuarantine,
   attachUnsettledChild,
   boardEvents,
   commitThroughTaskCheckout,
@@ -241,6 +242,23 @@ it("merge を観測して着地が終わっていない祖先のブランチが�
   expect(getTask(c.db, openQuarantineQuestion(c.db, "workspace", "reef")!.id)!.purpose).toContain(`was: ${rootTip} refs/heads/task/${c.root.id}`);
 });
 
+// ADR 0421 Status 追記(#3895): 子は根の記録を継がない —— merge の後に完了した子は自分で根になり、根の到達の記録は子の内容が届いたことを言わない
+it("到達の記録を持つ根の下で、削除の扉が着地を終えた子は帰り先の無い系譜に数え、その下の work の子はその子を名指して拒まれる", async () => {
+  const { db, clock } = await openBoard();
+  const root = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c", workspace: "reef" }, clock.now(), ...HUMAN_WEBUI);
+  const child = registerTask(db, { type: "work", title: "child", purpose: "p", completion_criteria: "c", parent_id: root.id }, clock.now(), ...HUMAN_WEBUI);
+  fillEmptyWorkspace(db, child.id, "reef");
+  const board = (taskId: string, payload: TaskScopedPayload) => appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: clock.now() });
+  for (const task of [root, child]) {
+    board(task.id, { kind: "task_branch_created", sha: "0".repeat(40), workspace: "reef" });
+    completeTask(db, getTask(db, task.id)!, FULL_HANDOFF, "worker", clock.now(), "worker");
+  }
+  board(root.id, { kind: "landing_finished", pr_number: 1, basis: "merge" });
+  board(child.id, { kind: "landing_ended_workspace_deleted", workspace: "reef" });
+
+  expect(() => workChild(db, clock, child.id)).toThrow(`no work task grows here: ${deletedReason(getTask(db, child.id)!)}`);
+});
+
 // ADR 0434 決定1〜3(#3921 の実測の形): 収束が push する前に修理を merge back した根の PR を GitHub が merge しても、その修理は届いていない
 it("push の前に修理を merge back した根の PR が merge されても、扉は収束が根を読み終えるまで拒み、断念と答えた後に通して確認がその根を名指し、同じ checkout で登録し直した名前で根の下の work の子は帰り先なしで拒まれる", async () => {
   const c = await reefWithPrRootAndChild("escalate");
@@ -267,7 +285,7 @@ it("push の前に修理を merge back した根の PR が merge されても、
   expect(() => workChild(c.db, c.clock, c.root.id)).toThrow(`no work task grows here: ${deletedReason(c.root)}`);
 });
 
-// ADR 0434 不変条件: 扉は記録だけで読むので、名前の場所に根のブランチが無くても拒む。それでも収束は Quarantine を出し、人間の回答で抜けられる
+// ADR 0434 決定2: 扉は記録だけで読むので、名前の場所に根のブランチが無くても拒む。それでも収束は Quarantine を出し、人間の回答で抜けられる
 it("ブランチの無い merge 済みの根でも扉は拒み、収束が出す workspace の Quarantine に `restore the baseline` と答えれば、収束の次の回が着地を終えて扉が通る", async () => {
   const c = await mergedRootAndChild();
   git(c.workspace.path, "branch", "-D", `task/${c.root.id}`);
@@ -277,14 +295,7 @@ it("ブランチの無い merge 済みの根でも扉は拒み、収束が出す
   await c.landing.converge();
   const quarantine = openQuarantineQuestion(c.db, "workspace", "reef")!;
   expect(getTask(c.db, quarantine.id)!.purpose).toContain(`refs/heads/task/${c.root.id}`);
-  await submitAnswer(
-    { db: c.db, pollNow: () => {}, landing: c.landing, quarantineChecks: quarantineChecks({ quarantineResolvers: {}, db: c.db, workspace: c.workspace }) },
-    getTask(c.db, quarantine.id)!,
-    ["restore the baseline"],
-    undefined,
-    () => c.clock.now(),
-    "webui",
-  );
+  await answerWorkspaceQuarantine(c, getTask(c.db, quarantine.id)!, undefined, "restore the baseline");
   const verdicts = await c.landing.converge();
 
   expect(verdicts.find(({ taskId }) => taskId === c.root.id)?.verdict).toMatchObject({ kind: "nothing_to_land" });

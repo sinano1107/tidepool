@@ -196,7 +196,7 @@ it("DELETE /api/workspaces/:name は PR の merge を記録したが着地がま
 
   await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
 
-  expect(refs[0]?.listMergedPrRootIdsAwaitingLanding("lagoon")).toEqual([work.id]);
+  expect(refs[0]?.listMergedPrRootIdsWithUnfinishedLanding("lagoon")).toEqual([work.id]);
 });
 
 it("DELETE refuses a workspace referenced only through an unsettled task's ancestor", async () => {

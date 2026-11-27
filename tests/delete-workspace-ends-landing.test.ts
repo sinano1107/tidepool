@@ -161,7 +161,13 @@ it("盤面の外の merge を観測して収束がまだ着地を終えていな
   await c.landing.tick("outside_merge");
   expect(landingState(c.db, getTask(c.db, c.root.id)!)).toBe("merge_observed");
 
-  await expect(c.door(false)).rejects.toMatchObject({ name: "DeletionBlockedError", reasons: [{ code: "merged_pr_landing_unfinished", task_ids: [c.root.id] }] });
+  await expect(c.door(false)).rejects.toMatchObject({
+    name: "DeletionBlockedError",
+    message:
+      `workspace "reef" cannot be deleted: the PRs of root task(s) ${c.root.id} were merged, but the board has not yet checked that their content reached ` +
+      "the protected branch — wait for its next landing round, or answer the root's open PR promotion question or the workspace's Quarantine",
+    reasons: [{ code: "merged_pr_landing_unfinished", task_ids: [c.root.id] }],
+  });
   expect([c.root, c.child].map((task) => landingState(c.db, getTask(c.db, task.id)!))).not.toContain("workspace_deleted");
   await c.landing.converge();
 
