@@ -412,7 +412,7 @@ async function teardown(
 }
 
 /** 後始末が tree rule を当てる走る場所(無ければ当てない)。ADR 0363 決定2: 走った後の drift(解決できない名前)の観測者は work では
- *  決着の種類を問わず後始末 1 人で、再起動の復旧も同じ経路 —— verb は拒むだけで登録しない。Interview の root と受験者は面接室を
+ *  決着の種類を問わず後始末 1 人で、再起動の復旧も同じ経路 —— verb は登録しない(拒むか回収する、ADR 0424 決定2・3)。Interview の root と受験者は面接室を
  *  解放し、実環境を解かない(ADR 0363 決定1〜3 の Status 追記)。process を1つも持たなかった session の drift も同じく登録する ——
  *  止めた pickup の門が開いた question は登録口が冪等なのでそのまま(ADR 0366 決定1・3)。準備の後で止まった task の checkout は今日どおり退避する。 */
 function runPlaceToRelease({ db, clock, resolve }: TeardownDeps, task: Task): WorkspaceConfig | undefined {

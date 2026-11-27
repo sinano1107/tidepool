@@ -421,21 +421,24 @@ it("親の work branch が gitlink を進めていても、子の tip が触っ�
   expect((await api(t.baseUrl, "GET", `/api/tasks/${child.id}`)).json.status).toBe("done");
 });
 
-it("記録した tip と fork 元の merge-base が取れなければ、complete_task は拒まず failure question を登録して回収する(ADR 0362 決定2 / ADR 0424 決定2・3)", async () => {
+it("記録した tip が fork 元と履歴を共有しなければ、complete_task は fork 元へ積み直す手を言って拒み、session は続く(ADR 0362 決定2 / ADR 0424 決定1)", async () => {
   const ws = await makeWorkspace("settings-no-merge-base");
   t = await bootTidepool({ workspace: ws });
   const task = await registerWork(t, "rewrite the history");
   await t.clock.advance(HOUR);
   const checkout = checkoutOf(t.db, task.id);
+  const fork = git(ws.path, "rev-parse", `task/${task.id}`);
   // 保護ブランチと履歴を共有しない tip
-  const orphan = git(checkout, "commit-tree", git(checkout, "rev-parse", "HEAD^{tree}"), "-m", "orphan");
-  git(checkout, "reset", "--hard", orphan);
-  const session = String(sessionId(t.db, task.id));
-  t.containers.hold(task.id);
+  git(checkout, "reset", "--hard", git(checkout, "commit-tree", git(checkout, "rev-parse", "HEAD^{tree}"), "-m", "orphan"));
 
   const result = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
 
-  await expectCompletionReclaimed(t, task.id, session, result, orphan, ws.name);
+  expect(result.isError).toBe(true);
+  expect(result.content[0].text).toBe(
+    `the task branch tip shares no history with its fork source ${fork} — rebase your commits onto it and commit, then call complete_task again`,
+  );
+  expect(t.containers.forceReclaims).toEqual([]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
 });
 
 it("workspace が Quarantine 中でも dirty な work の完了は拒み、commit 後の呼び直しは通る(ADR 0350 決定1)", async () => {
@@ -478,14 +481,6 @@ async function committedThenDrifted(title: string) {
 }
 
 const quarantineQuestions = async () => (await questions(t)).filter((q: any) => q.question_quarantine_kind !== null);
-
-it("実行中に名前が registry から消えた(drift)work の complete_task は拒まず、消えた名前を載せた failure question を登録して回収し、verb で Quarantine を立てない(ADR 0424 決定2・3)", async () => {
-  const { ws, task, session } = await committedThenDrifted("finish after the registry lost the workspace");
-
-  const res = await callAsTask(t, task.id, "complete_task", { handoff: fullHandoff });
-
-  await expectCompletionReclaimed(t, task.id, session, res, `unknown workspace: ${ws.name}`, ws.name);
-});
 
 it("issue #3094 の再現: drift の後の完了は回収され、後始末が Quarantine を1枚立て、worker の commit は checkout にだけ残って記録の task branch に入らない(ADR 0363 決定1・4 / ADR 0424 決定3)", async () => {
   const { ws, task, checkout, session } = await committedThenDrifted("ship while the registry loses the workspace");

@@ -15,6 +15,7 @@ import {
   commitOnRefByHand,
   commitWork,
   expectCompletionReclaimed,
+  expectPoseReclaimed,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -27,7 +28,6 @@ import {
   poseAccepted,
   prepareAtPickup,
   quarantineQuestion,
-  questions,
   registerWork,
   servedQuarantineQuestion,
   sessionId,
@@ -479,15 +479,6 @@ it.each(["named place", "host"] as const)("pose_probe は %s の側で出題の�
   const restore = recordFailures[side](interviewRoomPath(board.db, root.id)!);
   const res = await callAsTask(board, root.id, "pose_probe", { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }).finally(restore);
 
-  expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain("this session is over");
-  expect(board.containers.forceReclaims).toEqual([session]);
-  const failure = (await questions(board)).find((question) => question.parent_id === root.id);
-  expect(failure).toMatchObject({ title: expect.stringContaining("pose_probe"), question_cancel_option: "abandon" });
-  expect(failure.purpose).toContain(side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace");
-  expect((await api(board.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((event: { kind: string }) => event.kind === "decision_logged")).toEqual([]);
-  expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
-  board.containers.fireEmpty(session);
-  await vi.waitFor(async () => expect((await api(board.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined(), { timeout: GIT_FIXTURE_TEST_TIMEOUT });
+  await expectPoseReclaimed(board, root.id, session, res, side === "host" ? "missing-temp-directory" : "cannot be fetched into the named workspace");
   expect(await servedQuarantineQuestion(board, "workspace", root.id)).toBeUndefined();
 });

@@ -1,9 +1,9 @@
-import { rmSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { appendEvent } from "../src/events.js";
-import { CheckoutUnreadableError, WorktreeStatusError } from "../src/git.js";
+import { WorktreeStatusError } from "../src/git.js";
 import {
   api,
   bootTidepool,
@@ -29,8 +29,9 @@ import {
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
-// 実の stack では狙って起こせない、完了の門が tip を記録した後の検査の失敗だけを投げる口 —— 既定は素通し
-const hook = vi.hoisted(() => ({ view: undefined as Error | undefined, delta: undefined as Error | undefined }));
+// 実の stack では狙って起こせない失敗(完了の門が tip を記録した後の検査、記録の transaction)だけを投げる口 —— 既定は素通し
+const UNHOOKED = { view: undefined, delta: undefined, record: undefined };
+const hook = vi.hoisted(() => ({ view: undefined as Error | undefined, delta: undefined as Error | undefined, record: undefined as Error | undefined }));
 vi.mock("../src/git.js", async (importOriginal) => {
   const git = await importOriginal<typeof import("../src/git.js")>();
   const boardViewStatus = ((...args: Parameters<typeof git.boardViewStatus>) => {
@@ -47,10 +48,18 @@ vi.mock("../src/sandbox.js", async (importOriginal) => {
   }) as typeof sandbox.treeDeltaEntries;
   return { ...sandbox, treeDeltaEntries };
 });
+vi.mock("../src/tasks.js", async (importOriginal) => {
+  const tasks = await importOriginal<typeof import("../src/tasks.js")>();
+  const completeTask = ((...args: Parameters<typeof tasks.completeTask>) => {
+    if (hook.record) throw hook.record;
+    return tasks.completeTask(...args);
+  }) as typeof tasks.completeTask;
+  return { ...tasks, completeTask };
+});
 
 let t: Tidepool | undefined;
 afterEach(async () => {
-  Object.assign(hook, { view: undefined, delta: undefined });
+  Object.assign(hook, UNHOOKED);
   await t?.stop();
   t = undefined;
 });
@@ -93,17 +102,31 @@ it("記録の上で task の checkout が開いていなければ、complete_tas
   await expectCompletionReclaimed(board, task.id, session, res, `the task checkout of ${task.id} is not open`, ws.name);
 });
 
-it.each([
-  ["the worktree status", () => new WorktreeStatusError("fatal: the worktree cannot be listed"), "fatal: the worktree cannot be listed"],
-  ["the task checkout", () => new CheckoutUnreadableError("the task checkout cannot be read: the worktree cannot be listed"), "the task checkout cannot be read: the worktree cannot be listed"],
-] as const)("完了の門が tip を記録した後の検査で %s を読めなければ、complete_task は総称の文でなく直し方を言って拒み、session は続く(ADR 0424 決定1)", async (_, cause, fragment) => {
-  const { ws, board, task } = await committedWork("complete-check-worker-stage");
-  hook.view = cause();
+it("完了の門が tip を記録した後の検査で task の checkout の既知の残骸を読めなければ、complete_task は総称の文でなく直し方を言って拒み、session は続く(ADR 0424 決定1)", async () => {
+  const { ws, board, task, checkout } = await committedWork("complete-check-unreadable-entry");
+  // 既知の残骸の path(`.claude/agents` ほか)の祖先を辿れない checkout —— lstat が EACCES で落ちる
+  const claude = join(checkout, ".claude");
+  mkdirSync(claude);
+  chmodSync(claude, 0o000);
+
+  const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF }).finally(() => chmodSync(claude, 0o755));
+
+  expect(res.isError).toBe(true);
+  expect(res.content[0].text).toContain(`the task checkout at ${checkout} cannot be read`);
+  expect(res.content[0].text).toContain("Restore your task branch and call complete_task again, or escalate.");
+  expect(board.containers.forceReclaims).toEqual([]);
+  expect((await api(board.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+  expect(await servedQuarantineQuestion(board, "workspace", ws.name)).toBeUndefined();
+});
+
+it("完了の門が tip を記録した後の検査で worktree の status を読めなければ、complete_task は総称の文でなく直し方を言って拒み、session は続く(ADR 0424 決定1)", async () => {
+  const { ws, board, task } = await committedWork("complete-check-worktree-status");
+  hook.view = new WorktreeStatusError("fatal: the worktree cannot be listed");
 
   const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF });
 
   expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain(fragment);
+  expect(res.content[0].text).toContain("fatal: the worktree cannot be listed");
   expect(res.content[0].text).toContain("Restore your task branch and call complete_task again, or escalate.");
   expect(board.containers.forceReclaims).toEqual([]);
   expect((await api(board.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
@@ -122,7 +145,7 @@ it("完了の門が tip を記録した後の検査で名前の場所の側が�
   await expectCompletionReclaimed(board, task.id, session, res, "the named workspace cannot diff the recorded tip", ws.name);
 });
 
-it("他の task のブランチの commit を merge した tip の complete_task は、回収せず自分の commit だけで作り直す手を言って拒み、session は続く(ADR 0417 決定3 / ADR 0424 決定1)", async () => {
+it("他の task のブランチの commit を merge した tip の complete_task は、回収せずに拒み、session は続く —— 拒否の文は門の domain テストが言う(ADR 0417 決定3 / ADR 0424 決定1)", async () => {
   const { ws, board, task, checkout } = await committedWork("complete-other-task-commits");
   const other = await registerWork(board, "the other root");
   seedOtherTaskBranch(board.db, ws, other.id);
@@ -132,8 +155,18 @@ it("他の task のブランチの commit を merge した tip の complete_task
   const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF });
 
   expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain(`the task branch tip contains commits of task/${other.id}`);
-  expect(res.content[0].text).toContain("Rebuild the task branch with only your own commits");
   expect(board.containers.forceReclaims).toEqual([]);
   expect((await api(board.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+});
+
+it("記録の transaction が型の無い失敗で落ちれば、complete_task は巻き戻った後に failure question を登録して回収し、done にしない(ADR 0424 決定2・3)", async () => {
+  const { ws, board, task } = await committedWork("complete-record-transaction");
+  const session = String(sessionId(board.db, task.id));
+  board.containers.hold(task.id);
+  hook.record = new Error("the record transaction could not write the completion");
+
+  const res = await callAsTask(board, task.id, "complete_task", { handoff: FULL_HANDOFF });
+  hook.record = undefined;
+
+  await expectCompletionReclaimed(board, task.id, session, res, "the record transaction could not write the completion", ws.name);
 });
