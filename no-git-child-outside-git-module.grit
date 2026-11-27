@@ -6,7 +6,8 @@ language js
 // `npm run` で走らせる道具で、人間の身元で走る。Codex の canary の `cp.spawnSync("git", …)` は sandbox で走る script の文字列の中にあり、
 // 構文木上は呼び出しにならないので当たらない。
 // 見えない形: 変数や定数に入れた command 名(`const bin = "git"`)、絶対 path の command 名(`"/usr/bin/git"`)、別名の import
-// (`import { spawnSync as run }`)、`exec` / `execSync` に渡す shell の文字列(`"git status"`)。
+// (`import { spawnSync as run }`)、`promisify(execFile)` で包んだ関数(`execFileAsync("git", …)`)、`exec` / `execSync` に渡す shell の
+// 文字列(`"git status"`)。
 JsCallExpression(callee=$fn, arguments=JsCallArguments(args=[$cmd, ...])) as $call where {
   $fn <: or { `execFileSync`, `spawnSync`, `execFile`, `spawn`, `$_.execFileSync`, `$_.spawnSync`, `$_.execFile`, `$_.spawn` },
   $cmd <: r"[\"'`]git[\"'`]",

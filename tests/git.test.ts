@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { CheckoutHostError, GitToolError, git, gitReporting, isAncestor, ListingUnreadableError, localGitEnv, stashEntries, workerRepoGit } from "../src/git.js";
+import { CheckoutHostError, GitToolError, git, gitReporting, isAncestor, ListingUnreadableError, stashEntries, withBoardGit, workerRepoGit } from "../src/git.js";
 import { authedFetch, GIT_NETWORK_TIMEOUT_MS } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
 import { recordedSettingsDisposition } from "../src/sandbox.js";
@@ -39,17 +39,24 @@ function thrown(fn: () => unknown): Error {
   throw new Error("did not throw");
 }
 
-it("local git ignores global and system config even when ambient or supplied env opts in (ADR 0356 決定5)", () => {
-  vi.stubEnv("GIT_CONFIG_GLOBAL", "/ambient.gitconfig");
-  vi.stubEnv("GIT_CONFIG_PARAMETERS", "'core.hooksPath=/ambient/hooks'");
-  vi.stubEnv("GIT_DIR", "/ambient.git");
-  const env = localGitEnv({ GIT_CONFIG_NOSYSTEM: "0" });
-  expect(env).toMatchObject({
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-  });
-  expect(env.GIT_CONFIG_PARAMETERS).toBeUndefined();
-  expect(env.GIT_DIR).toBeUndefined();
+it("local git ignores global and system config even when ambient or supplied env opts in (ADR 0356 決定5)", async () => {
+  const repo = (await makeWorkspace("local-git-env")).path;
+  const dir = await tempDir("tidepool-git-");
+  const config = (key: string) => {
+    const file = join(dir, `${key}.gitconfig`);
+    writeFileSync(file, `[tidepool]\n\t${key} = leaked\n`);
+    return file;
+  };
+  vi.stubEnv("GIT_CONFIG_GLOBAL", config("global"));
+  vi.stubEnv("GIT_CONFIG_SYSTEM", config("ambientSystem"));
+  vi.stubEnv("GIT_CONFIG_PARAMETERS", "'tidepool.parameters=leaked'");
+  vi.stubEnv("GIT_DIR", join(dir, "ambient.git"));
+
+  const ambient = git(repo, "config", "--list");
+  const supplied = withBoardGit(repo, (view) => view(["config", "--list"], { GIT_CONFIG_NOSYSTEM: "0", GIT_CONFIG_SYSTEM: config("suppliedSystem") }));
+
+  expect(ambient).toContain("core.");
+  expect([ambient, supplied].filter((listed) => listed.includes("leaked"))).toEqual([]);
 });
 
 it("cwd が無い git は subcommand と在り処を名指して投げ、元の spawn の失敗を cause に持つ(issue #2722)", async () => {
@@ -151,6 +158,20 @@ it("網に出る git が、cwd を持つ fs の空きが無い状態で落ちる
   const err = thrown(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main"));
 
   expect(err).toBeInstanceOf(CheckoutHostError);
+  // 文は網に出る git の文 —— 盤面所有の repo の path や URL を載せる argv は出さない
+  expect(err.message).toContain(`\`git fetch\` failed (in ${repo})`);
+  expect(err.message).not.toContain("--git-dir=");
+});
+
+it("網に出る git の host の失敗の文は、origin の URL の資格情報を載せない", async () => {
+  const repo = (await makeWorkspace("network-no-free-space-credential")).path;
+  fixtureGit(repo, "remote", "add", "origin", "http://user:secret@127.0.0.1:1/x.git");
+  fsHook.bavail = 0;
+
+  const err = thrown(() => authedFetch(undefined, repo, GIT_NETWORK_TIMEOUT_MS, "main"));
+
+  expect(err).toBeInstanceOf(CheckoutHostError);
+  expect(err.message).not.toContain("secret");
 });
 
 /** `source` の blob を持たない部分 clone。promisor は 401 の loopback で、index は HEAD を指す(blob は遅延 fetch でしか読めない)。 */
