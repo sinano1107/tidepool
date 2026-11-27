@@ -321,7 +321,21 @@ it("分岐した main は網に出ないと測れないので、食い違いの 
   expect(networkTo(calls, moved.repo!)).toEqual([]);
 });
 
-it.each(["entrance", "parent read"] as const)("親の issue が別の workspace にある子の再 pickup は、%s で食い違いを読んでも同じ question で止まる (ADR 0419 決定1・2、#3922)", async (when) => {
+/** 分解元の issue(#49)の返事を返す前に止める —— 自分の issue の読みは止めない。 */
+class OriginHeldGitHub extends DestinationCheckingGitHub {
+  constructor(private readonly holdOrigin?: () => Promise<void>) {
+    super();
+  }
+  override async getIssueWithState(ref: IssueRef) {
+    const issue = await super.getIssueWithState(ref);
+    if (ref.number === 49) await this.holdOrigin?.();
+    return issue;
+  }
+}
+
+// ADR 0384 決定2・4: an issue-backed registration whose parent's tree does not match becomes a root with that parent as its origin, and
+// the pickup reads the origin's issue in the origin's workspace
+it.each(["entrance", "origin read"] as const)("分解元の issue が別の workspace にある根の再 pickup は、%s で食い違いを読んでも同じ question で止まる (ADR 0419 決定1・2、#3922)", async (when) => {
   const { db, clock } = await openBoard();
   const name = `cross-${when.replace(" ", "-")}`;
   const { workspace: old } = await makeRemoteBackedWorkspace(`${name}-old`);
@@ -330,32 +344,33 @@ it.each(["entrance", "parent read"] as const)("親の issue が別の workspace 
   const reef = await registeredReef(old);
   setWorkspaceEntry(reef.registryDir, "lagoon", "path", lagoon.path);
   setWorkspaceEntry(reef.registryDir, "lagoon", "repo", lagoon.repo!);
-  const parent = registerTask(db, { type: "work", workspace: "lagoon", github_issue_number: 49, assignee: HUMAN_ACTOR_ID }, clock.now(), ...HUMAN_WEBUI);
-  const task = registerTask(db, { type: "work", title: "child", purpose: "why", completion_criteria: "done", parent_id: parent.id, workspace: "reef" }, clock.now(), ...HUMAN_WEBUI);
+  const origin = registerTask(db, { type: "work", workspace: "lagoon", github_issue_number: 49, assignee: HUMAN_ACTOR_ID }, clock.now(), ...HUMAN_WEBUI);
+  const task = registerTask(db, { type: "work", workspace: "reef", github_issue_number: 50, parent_id: origin.id, decompose_reason: "the reef side of the work" }, clock.now(), ...HUMAN_WEBUI);
+  expect(task).toMatchObject({ parent_id: null, origin_task_id: origin.id, workspace: "reef" });
   await commitThroughTaskCheckout(db, clock, reef.resolve("reef"), task, "work.txt", "from the first pickup\n");
-  const github = new DestinationCheckingGitHub();
-  github.scriptIssue(49, { title: "parent issue", body: "the parent's work", comments: [] });
   const window = awaitWindow();
-  if (when === "parent read") github.scriptIssueGate(window.hold());
-  else await reRegisterBeforeRequeue(db, reef, moved, [parent, task]);
+  const github = new OriginHeldGitHub(when === "origin read" ? window.hold : undefined);
+  github.scriptIssue(49, { title: "origin issue", body: "the origin's work", comments: [] });
+  github.scriptIssue(50, { title: "own issue", body: "the reef work", comments: [] });
+  if (when === "entrance") await reRegisterBeforeRequeue(db, reef, moved, [origin, task]);
   vi.spyOn(console, "error").mockImplementation(() => {});
   const { scheduler, worker } = schedulerOn(db, clock, reef.resolve("reef"), reef.resolve, reef.admin.workspacesBaseDir, { github });
   const pickups = () => listEvents(db, task.id).filter(({ kind }) => kind === "task_picked_up").length;
   const pickedBefore = pickups();
 
   const picking = scheduler.rerunPoll();
-  if (when === "parent read") {
+  if (when === "origin read") {
     try {
-      await vi.waitFor(() => expect(github.issueFetches).toEqual([{ path: lagoon.path, number: 49 }]));
-      await reRegisterBeforeRequeue(db, reef, moved, [parent, task]);
+      await window.entered;
+      await reRegisterBeforeRequeue(db, reef, moved, [origin, task]);
     } finally {
       window.open();
     }
   }
   await picking;
 
-  expect(github.issueFetches).toEqual(when === "entrance" ? [] : [{ path: lagoon.path, number: 49 }]);
-  // the parent's issue read stops it before pickupTask, not the preparation's floor
+  expect(github.issueFetches).toEqual(when === "entrance" ? [] : [{ path: old.path, number: 50 }, { path: lagoon.path, number: 49 }]);
+  // the origin's issue read stops it before pickupTask, not the preparation's floor
   expect(pickups()).toBe(pickedBefore);
   expectRepoFailure(db, task, old.repo!, moved.repo!, worker);
 });
