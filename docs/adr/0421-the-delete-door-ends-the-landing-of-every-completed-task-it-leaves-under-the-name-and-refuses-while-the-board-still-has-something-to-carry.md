@@ -1,6 +1,6 @@
 # 削除の扉は、名前に残す完了 task の着地を終える —— 盤面がその名前でまだ運ぶものを持つ間は拒む
 
-**Status 追記: Status 追記と決定3・5 の「到達の記録」は、git で確かめた後に書く記録(`landing_finished` / `local_merge_executed`)だけになる —— PR の merge の記録(`pr_merged` / `pr_merge_observed`)は根のブランチの内容が届いたことを言わない。決定4 の拒む集合に、PR の merge を記録したが着地がまだ終わっていない根が入る(運ぶ内容の有無を問わない、断念が効いている根は数えない)。決定1 の確認は、扉を通る merge 済みの根も名指す([ADR 0434](0434-only-a-record-written-after-git-confirms-it-says-a-tasks-content-reached-and-the-delete-door-refuses-a-merged-root-whose-landing-is-unfinished.md) 決定1〜3、2026-11-27、issue #3921 / #3949)。**
+**Status 追記: Status 追記と決定3・5 の「到達の記録」は、着地が終わったことを確かめた記録(`landing_finished` / `local_merge_executed`)だけになる —— PR の merge の記録(`pr_merged` / `pr_merge_observed`)は根のブランチの内容が届いたことを言わない。決定4 の拒む集合に、PR の merge を記録したが着地がまだ終わっていない根が入る(運ぶ内容の有無を問わない、断念が効いている根は数えない)。決定1 の確認は、扉を通る merge 済みの根も名指す([ADR 0434](0434-only-a-record-written-after-git-confirms-it-says-a-tasks-content-reached-and-the-delete-door-refuses-a-merged-root-whose-landing-is-unfinished.md) 決定1〜3、2026-11-27、issue #3921 / #3949)。**
 
 **Status 追記: 決定3 の「削除で着地が終わった task」は、終わりの記録より前に、その task 自身が内容の保護ブランチへの到達の記録(`local_merge_executed` / `pr_merged` / `pr_merge_observed` / `landing_finished` —— ADR 0380 決定1 が数える種類)を持つものを数えない。子は根の記録を継がない —— merge の記録を持つ根でも、merge の後に merge back した修理の内容は届いていないことがあり(ADR 0241 決定1 の「merge 済みでまだ運ぶ内容がある」)、merge の後に完了した子は自分で根になるので、根の記録は子の内容が届いたことを言わない。記録で決められない側は拒む側に倒す。決定5 の「着地済み」には、この到達の記録を持つ task も入る(2026-11-26、issue #3895)。**
 
