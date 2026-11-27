@@ -10,7 +10,7 @@ import { rereadsProtectedTip } from "./harness-containment.js";
 import type { ProcessContainers } from "./process-container.js";
 import { parseWorkspaceContainmentValue, quarantineStop, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
-import { getTask, openedPlaceNames, type PickupStopped, type QueueReturnPayload, type ResourceStopDefaults, registerFailureQuestion, registerTask, returnToQueue, type Task, type TaskType, taskIsStopped, unrowedTarget } from "./tasks.js";
+import { getTask, openedPlaceNames, type PickupStopped, type QueueReturnPayload, type ResourceStopDefaults, registerFailureQuestion, registerRepoDisagreementQuestion, registerTask, returnToQueue, type Task, type TaskType, taskIsStopped, unrowedTarget } from "./tasks.js";
 import {
   deferToSessionRest,
   markTeardown,
@@ -242,6 +242,10 @@ export function spawnFailureHandler(
 }
 
 function registerSpawnFailureQuestion(db: Db, task: Task, failure: SpawnFailure, now: Date): void {
+  if (failure.kind === "repo-disagreement") {
+    registerRepoDisagreementQuestion(db, task, failure.message, now);
+    return;
+  }
   // 同じ tree を読み直すだけの retry は選択肢に出さない。ADR 0379 帰結: Codex の Interview の task だけは host の設定の skill が原因でありうる
   const hostMayBeTheCause = failure.kind === "unhideable-task-skills" && !rereadsProtectedTip(task);
   const retry = hostMayBeTheCause ? `If the skill is configured on the host, remove it there and answer "retry"; a skill carried by this checkout fails the same way again. ` : null;

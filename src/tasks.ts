@@ -2067,6 +2067,12 @@ export function registerFailureQuestion(
   );
 }
 
+/** ADR 0419 決定1・5: the one stop of a task whose recorded repo disagrees with the declaration, on every pickup path. Abandon is the
+ *  only exit —— a retry reads the same records, and undoing the re-registration needs the delete door, which refuses this unsettled task. */
+export function registerRepoDisagreementQuestion(db: Db, task: Task, disagreement: string, now: Date): void {
+  registerFailureQuestion(db, task, `the workspace's repo changed under this task: ${task.title}`, disagreement, now, null);
+}
+
 /** The unfinished-descendants sweep shared by both cancel paths (ADR 0006 /
  *  issue #130): collect the target and every one of its unfinished descendants
  *  and mark each cancelled, appending `payload` (built by the caller to name

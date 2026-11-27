@@ -157,6 +157,7 @@ import {
   openLocalMergeQuestionIds,
   readableInterviewRooms,
   registerFailureQuestion,
+  registerRepoDisagreementQuestion,
   registerTask,
   releaseOwedBy,
   retireLandingDecisions,
@@ -3194,12 +3195,6 @@ type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
  *  ADR 0351 決定2: 基準は切れない —— 行が無いか NULL なら最初の撮り、あれば盤面が書く前に除外無しで比べる。以後の書き込みは口が畳む。
  *  比較は読む場所の後半(`reads`、ADR 0329 決定10・11)より前 —— 走る場所の違反は読む場所を書く前に止まる。 */
 export async function prepareWorkspaceAtPickup(db: Db, workspace: WorkspaceConfig, task: Task, board: PickupPreparation): Promise<void> {
-  const checkRepo = pickupRepoCheck(db, task, board.now, board.resolveRegistered);
-  if (checkRepo) {
-    workspace = checkRepo(workspace);
-    // ADR 0399 決定5: a stopped task should not leave the new registration's first baseline behind.
-    if (!holdsBaseline(db, workspace.name)) workspaceNetworkDestination(workspace);
-  }
   // ADR 0411 決定5: task の checkout は閉包を全部持つ複製 —— shallow な名前の場所は、基準の比較か最初の撮り・origin の fetch・タスクブランチの
   // 作成・checkout の作成より前に止める
   assertNotShallow(workspace.path);
@@ -3674,6 +3669,32 @@ export class DeclaredRepoMismatchError extends DomainError {}
 export function pickupRepoCheck(db: Db, task: Task, now: () => Date, resolveRegistered: WorkspaceResolver | undefined) {
   if (interviewRootIdOf(db, task) !== undefined || !hasTaskBranch(db, task.id)) return undefined;
   return (workspace: WorkspaceConfig) => withDeclaredRepoCheck(db, withRememberedRepoCheck(db, workspace, now, resolveRegistered), task.id);
+}
+
+/** ADR 0419 決定1・3: the pickup entrance. A compared task (`pickupRepoCheck`) gets the place its issue reads and its preparation use —— it
+ *  compares again at every destination read (ADR 0399 決定3) —— or, when its record disagrees with the declaration, the entrance writes
+ *  its one stop and returns undefined: no network, no record, no workspace Quarantine. The before-open predicates run first, so a
+ *  workspace measured broken without the network stops as the workspace (`PickupGateError`); a diverged main needs the fetch and is
+ *  measured by a later pickup (#3922). Any other task gets `{}` and is not resolved here. undefined: stopped, a drifted name included. */
+export function pickupEntrance(
+  db: Db,
+  task: Task,
+  resolve: (taskWorkspace: string | null) => WorkspaceConfig,
+  now: () => Date,
+  fixedPoints?: BoardStatePath[],
+): { place?: WorkspaceConfig } | undefined {
+  const guard = pickupRepoCheck(db, task, now, resolve);
+  if (!guard) return {};
+  const place = resolveOrQuarantine(db, resolve, task.workspace, now());
+  if (!place) return undefined;
+  const checked = guard(place);
+  fireBeforeOpenPredicates(checked, checkoutPickupPredicates(checked, fixedPoints));
+  const disagreement = declaredRepoDisagreement(db, task.id, { ...checked.checkRememberedRepo!(checked), name: checked.name });
+  if (disagreement === undefined) return { place: checked };
+  db.transaction(() => {
+    const row = getTask(db, task.id);
+    if (row?.status === "todo" && row.assignee === task.assignee) registerRepoDisagreementQuestion(db, row, disagreement, now());
+  })();
 }
 
 /** ADR 0399 決定3 / ADR 0378 決定7: every destination read for `taskId` compares its declared repo and head repo records with the

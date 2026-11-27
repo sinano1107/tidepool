@@ -7,8 +7,9 @@ import type { TeardownAction } from "./teardown.js";
 
 export type SpawnFailure = Pick<Extract<EventPayload, { kind: "spawn_failed" }>, "error_code" | "message"> & {
   /** 同じ tree を読む限り retry が同じ失敗になる task の失敗(ADR 0360 決定3 / ADR 0379 決定4)と、
-   *  帰り先の無い系譜の task の fork 元(ADR 0421 決定3 / ADR 0380 決定3)。event には載せない。 */
-  kind?: "unhideable-task-settings" | "unhideable-task-skills" | "no-return-lineage";
+   *  帰り先の無い系譜の task の fork 元(ADR 0421 決定3 / ADR 0380 決定3)。event には載せない。
+   *  `repo-disagreement` は spawn の失敗でなく、入口の後の登録し直しで止まった pickup(ADR 0419 決定1・2)—— question は入口のもの。 */
+  kind?: "unhideable-task-settings" | "unhideable-task-skills" | "no-return-lineage" | "repo-disagreement";
 };
 
 /** 盤面の env から名指しで写す(ADR 0358 決定2)—— 盤面に無い名前は鍵ごと載せない。 */
