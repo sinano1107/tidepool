@@ -30,6 +30,7 @@ import {
   registerWork,
   servedQuarantineQuestion,
   sessionId,
+  shimGit,
   type Tidepool,
   writeObservations,
 } from "./harness.js";
@@ -424,6 +425,20 @@ it("WIP の objects を名前の場所に書けなければ quarantine し、tas
   expect(releaseFailure(db, task)).toBeUndefined();
   expect(listChildren(db, task.id)).toEqual([]);
   expect(existsSync(place.path)).toBe(true);
+});
+
+it("WIP の退避が名前の場所への fetch で disk の満杯に落ちれば、決着していない task の失敗で checkout を残し、名前の場所を quarantine しない(ADR 0433 決定5 / ADR 0364 決定2)", async () => {
+  const { db, named, task, place } = await pickedUp();
+  writeFileSync(join(place.path, "wip.txt"), "only in the working tree\n");
+  // 解放の中の fetch は盤面所有の写しから名前の場所へ運ぶものだけ
+  await shimGit({ fails: ["fetch", "error: unable to write file: No space left on device"] });
+
+  releaseWorkspace(db, place, task, NOW);
+
+  expect(releaseFailure(db, task)).toMatchObject({ path: place.path, reason: expect.stringContaining("No space left on device") });
+  expect(listChildren(db, task.id)).toMatchObject([{ type: "question", question_cancel_option: "abandon" }]);
+  expect(quarantineQuestion(db, "workspace", named.name)).toBeUndefined();
+  expect(readFileSync(join(place.path, "wip.txt"), "utf8")).toBe("only in the working tree\n");
 });
 
 /** verb の時点で名前の場所の側か写しの host で tip を記録できない形。戻す手を返す。 */

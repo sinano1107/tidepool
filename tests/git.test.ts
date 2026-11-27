@@ -2,11 +2,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { git, ListingUnreadableError, localGitEnv, stashEntries } from "../src/git.js";
+import { CheckoutHostError, GitToolError, git, gitReporting, isAncestor, ListingUnreadableError, localGitEnv, stashEntries, workerRepoGit } from "../src/git.js";
 import { loadRegistry } from "../src/registry.js";
 import { recordedSettingsDisposition } from "../src/sandbox.js";
 import { humanAskpass, startDenyingHttpRemote } from "./git-http-remote.js";
-import { git as fixtureGit, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace } from "./harness.js";
+import { git as fixtureGit, GIT_FIXTURE_TEST_TIMEOUT, makeWorkspace, shimGit } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -55,6 +55,52 @@ it("cwd があって git が PATH に無いなら、元の spawn の失敗をそ
   expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
   expect(err.message).toContain("ENOENT");
   expect(err.cause).toBeUndefined();
+});
+
+/** 盤面の git の実行の口: 無界の `git`、有界の `workerRepoGit`、stderr を返す `gitReporting`。 */
+const runners = {
+  git: (cwd: string, ...args: string[]) => git(cwd, ...args),
+  workerRepoGit: (cwd: string, ...args: string[]) => workerRepoGit(cwd, ...args),
+  gitReporting: (cwd: string, ...args: string[]) => gitReporting(cwd, args),
+};
+const RUNNERS = Object.keys(runners) as (keyof typeof runners)[];
+
+it.each(RUNNERS)("%s は非零で終わった git を git の道具の失敗で投げ、終了コードと stderr を持つ(ADR 0433 決定3)", async (runner) => {
+  const repo = (await makeWorkspace(`git-tool-failure-${runner}`)).path;
+
+  const err = thrown(() => runners[runner](repo, "rev-parse", "--verify", "no-such-ref"));
+
+  expect(err).toBeInstanceOf(GitToolError);
+  expect(err).toMatchObject({ status: 128, message: expect.stringContaining("Command failed: git rev-parse --verify no-such-ref") });
+  expect(String((err as GitToolError).stderr)).toContain("Needed a single revision");
+});
+
+it.each(RUNNERS)("%s は起動できない git と cwd の無い git も git の道具の失敗で投げる(ADR 0433 決定3)", async (runner) => {
+  const dir = await tempDir("tidepool-git-");
+  expect(thrown(() => runners[runner](join(dir, "gone"), "status"))).toBeInstanceOf(GitToolError);
+  vi.stubEnv("PATH", dir);
+  expect(thrown(() => runners[runner](dir, "status"))).toBeInstanceOf(GitToolError);
+});
+
+it("述語の git は exit 1 を no と答え、道具の失敗(128)は no と読まずに git の道具の失敗で投げる(ADR 0433 決定3)", async () => {
+  const repo = await makeWorkspace("git-predicate-answer");
+  const first = fixtureGit(repo.path, "rev-parse", "HEAD");
+  fixtureGit(repo.path, "commit", "--allow-empty", "-q", "-m", "second");
+  const second = fixtureGit(repo.path, "rev-parse", "HEAD");
+
+  expect(isAncestor(repo, second, first)).toBe(false);
+  expect(thrown(() => isAncestor(repo, "f".repeat(40), first))).toMatchObject({ constructor: GitToolError, status: 128 });
+});
+
+it.each(RUNNERS)("%s は disk が満ちて落ちた git を git の道具の失敗でなく host の失敗で投げる(ADR 0433 決定5)", async (runner) => {
+  const repo = (await makeWorkspace(`git-out-of-space-${runner}`)).path;
+  await shimGit({ fails: ["gc", "fatal: unable to write new index file: No space left on device"] });
+
+  const err = thrown(() => runners[runner](repo, "gc"));
+
+  expect(err).toBeInstanceOf(CheckoutHostError);
+  expect(err).not.toBeInstanceOf(GitToolError);
+  expect(err.message).toContain("No space left on device");
 });
 
 /** `source` の blob を持たない部分 clone。promisor は 401 の loopback で、index は HEAD を指す(blob は遅延 fetch でしか読めない)。 */

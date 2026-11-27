@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask, taskCheckoutPath } from "../src/tasks.js";
-import { refreshProtectedBranch, releaseWorkspace } from "../src/workspace.js";
+import { NamedPlaceSideError, refreshProtectedBranch, releaseWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -152,5 +152,19 @@ it("ローカルの保護ブランチがリモートより先行しているだ�
   );
   expect(git(workspace.path, "show", "main:by-hand.txt")).toBe("committed on the host");
   expect(git(workspace.path, "branch", "--list", `task/${task.id}`)).toBe("");
+  db.close();
+});
+
+it.each(["ahead", "diverged"] as const)("保護ブランチがリモートより %s の名前の場所の休止は、名前の場所の側の失敗で拒む(ADR 0433 決定4)", async (shape) => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
+  writeFileSync(join(workspace.path, "by-hand.txt"), "committed on the host\n");
+  git(workspace.path, "add", "-A");
+  git(workspace.path, "commit", "-m", "out-of-band local work");
+  if (shape === "diverged") publish("merged.txt", "landed on the remote\n", "merge on the remote");
+  const db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "work", purpose: "pick up", completion_criteria: "never runs" }, new Date("2026-10-19T00:00:00.000Z"), ...HUMAN_WEBUI);
+
+  // pickup の門は名前の場所の失敗を `PickupGateError` で包む
+  await expect(prepareAtPickup(db, workspace, task)).rejects.toMatchObject({ cause: expect.any(NamedPlaceSideError) });
   db.close();
 });

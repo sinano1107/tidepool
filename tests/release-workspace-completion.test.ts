@@ -12,9 +12,11 @@ import {
   boardRefWriter,
   completionTreeGateApplies,
   NamedPlaceFetchError,
+  NamedPlaceSideError,
   quarantineWorkspace,
   type RunPlace,
   recordTaskCheckoutTip,
+  redoOwedReleases,
   releaseWorkspace,
   type WorkspaceConfig,
   workspaceNeedsHuman,
@@ -162,6 +164,16 @@ it.each(["stale", "unreadable", "matching"])("旧版で完了した task は wor
       expect(git(ws.path, "ls-tree", "--name-only", parentBranch, "--", "child.txt")).toBe("");
       expect(readFileSync(join(place.path, "child.txt"), "utf8")).toBe("child work\n");
     }
+  } finally {
+    db.close();
+  }
+});
+
+it("旧版で完了した task の tip を確かめられない解放のやり直しは、名前の場所の側の失敗で投げる(ADR 0433 決定4・6)", async () => {
+  const { db, task, ws } = await completedChild("stale");
+  try {
+    expect(() => redoOwedReleases(db, ws, ws.name, NOW, () => true)).toThrow(NamedPlaceSideError);
+    expect(getTask(db, task.id)?.status).toBe("done");
   } finally {
     db.close();
   }

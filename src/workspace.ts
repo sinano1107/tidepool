@@ -39,6 +39,7 @@ import {
   CheckoutUnreadableError,
   diffTreeEntries,
   displayWorktreePath,
+  GitToolError,
   git,
   gitAnswers,
   gitListing,
@@ -771,9 +772,13 @@ export class RoomCopyGitlinkError extends Error {
   }
 }
 
+/** ADR 0433 決定4: 盤面が名前の場所の状態を観測して投げる失敗 —— 名前の場所を直せば通る。fetch の失敗(`NamedPlaceFetchError`)の読み手は
+ *  子の型だけを読む: 文の整形と拒否が違う。 */
+export class NamedPlaceSideError extends Error {}
+
 /** ADR 0364 決定2 / ADR 0411 決定3: 盤面所有の写しから名前の場所へ tip を fetch する段と、検証済みの写しで名前の場所の値と比べる段の失敗 ——
  *  名前の場所の側(解放なら quarantine、verb なら拒むだけ)。 */
-export class NamedPlaceFetchError extends Error {}
+export class NamedPlaceFetchError extends NamedPlaceSideError {}
 
 /** ADR 0411 決定2・3: 作業台の tip の検証を通った写し(名前の場所の objects を借りる、`judgeWorkbench`)で名前の場所の値と比べる手 `compare` を
  *  撃つ —— 素の git の失敗は名前の場所の側(上限超過と型のある失敗はそのまま)。 */
@@ -781,8 +786,9 @@ function comparedWithNamedPlace<T>(named: WorkspaceConfig, compare: () => T): T 
   try {
     return compare();
   } catch (cause) {
-    if ((cause as Error | null)?.constructor !== Error || typeof (cause as { status?: unknown }).status !== "number") throw cause;
-    throw new NamedPlaceFetchError(`workspace ${named.name}: the board cannot compare the workbench's tip with the named workspace: ${(cause as Error).message}`, { cause });
+    // 起動できなかった・cwd が無い git(終了コードが無い)は包まない
+    if (!(cause instanceof GitToolError) || typeof cause.status !== "number") throw cause;
+    throw new NamedPlaceFetchError(`workspace ${named.name}: the board cannot compare the workbench's tip with the named workspace: ${cause.message}`, { cause });
   }
 }
 
@@ -1263,7 +1269,8 @@ function fetchFromBoardCopy(namedPlace: WorkspaceConfig, repo: string, ref: stri
     workerRepoGit(namedPlace.path, "fetch", ...FETCH_FLAGS, repo, ref);
     git(namedPlace.path, "cat-file", "-e", `${sha}^{commit}`);
   } catch (cause) {
-    if (cause instanceof WorkerTreeGitTimeoutError) throw cause; // ADR 0357 決定2: 上限超過は worker の repo の故障
+    // ADR 0357 決定2: 上限超過は worker の repo の故障。ADR 0433 決定5: disk が満ちた失敗は段ごとの host の線
+    if (cause instanceof WorkerTreeGitTimeoutError || cause instanceof CheckoutHostError) throw cause;
     throw new NamedPlaceFetchError(`workspace ${namedPlace.name}: ${description} ${sha} cannot be fetched into the named workspace: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
 }
@@ -1271,7 +1278,7 @@ function fetchFromBoardCopy(namedPlace: WorkspaceConfig, repo: string, ref: stri
 /** ADR 0423 決定3: 親に書く正確な object の型を名前の場所で確かめる。ls-tree や ^{tree} はタグを剥がして読む。 */
 function assertRecordedParentCommit(named: WorkspaceConfig, parent: string): void {
   if (git(named.path, "--no-replace-objects", "cat-file", "-t", parent) !== "commit") {
-    throw new Error(`workspace ${named.name}: recorded parent ${parent} is not a commit`);
+    throw new NamedPlaceSideError(`workspace ${named.name}: recorded parent ${parent} is not a commit`);
   }
 }
 
@@ -4242,7 +4249,7 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
     // HEAD は受理の比較が拒む(ADR 0373 決定1)
     if (headValue(workspace) !== symrefValue(`refs/heads/${branch}`)) checkoutThroughGate(db, workspace, branch);
   } catch (cause) {
-    throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new NamedPlaceSideError(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
   if (!remoteBacked) return;
   const ref = remoteTrackingRef(branch);
@@ -4257,9 +4264,9 @@ function parkOnProtectedBranch(db: Db, workspace: WorkspaceConfig): void {
     }
     if (!isAncestor(workspace, remoteSha, localSha)) throw new Error("the local and remote histories diverged");
   } catch (cause) {
-    throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    throw new NamedPlaceSideError(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
-  throw new Error(
+  throw new NamedPlaceSideError(
     `workspace ${workspace.name}: local '${branch}' is ahead of ${ref} — out-of-band local ` +
       "commits were never pushed, so parking here would show a state the remote does not have",
   );
@@ -4596,7 +4603,7 @@ function bringTaskCheckout(
       // ADR 0359 決定1: 旧版の完了では tip が記録にあるとは限らない。確認できなければ checkout を残す
       if (!gateRecordedTip && tipLookupFailure === undefined &&
         (!recorded || observation?.observation === "committed" || observation?.observation === "unreadable")) {
-        throw new Error(
+        throw new NamedPlaceSideError(
           `The task completed under an earlier board version and its recorded tip could not be verified against the task checkout at ${checkout}. ` +
           "Inspect the retained checkout and restore the intended completion tip before answering.",
         );
@@ -4762,7 +4769,7 @@ function mergeBackInto(
 function mergeBackConflict(workspace: WorkspaceConfig, base: string, source: string, target: string, raisedBy: "release" | "acceptance", humanWork: boolean): Error {
   const exit = (merge: string) =>
     `To discard ${source}'s work instead, record that with \`git merge -s ours ${merge}\`. ` + (raisedBy === "release" ? "Then answer" : "Then answer again.");
-  return new Error(workbenchConflict(workspace, base, { subject: source, carried: `refs/heads/${source}`, target, exit, humanWork }, raisedBy === "release" ? "" : "."));
+  return new NamedPlaceSideError(workbenchConflict(workspace, base, { subject: source, carried: `refs/heads/${source}`, target, exit, humanWork }, raisedBy === "release" ? "" : "."));
 }
 
 /** text A1 / A2 の共通の形: (書く先, 運ばれる側) の作業台を開き、その在り処・そこで打つ merge・tip の条件を言って `exit` で終える。開けなければ
