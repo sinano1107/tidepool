@@ -626,6 +626,8 @@ export interface WorkspaceDeletionReferences {
   listUnpushedPrRootIds(name: string): string[];
   /** 着地の執行中の task の id(ADR 0421 決定4 追記)。 */
   listLandingInProgressTaskIds(name: string): string[];
+  /** PR の merge を記録したが着地がまだ終わっていない根の id(ADR 0434 決定2)。 */
+  listMergedPrRootIdsWithUnfinishedLanding(name: string): string[];
   /** GitHub に残る PR の head が、盤面が push していない内容を欠く PR の根の id —— 断念した根も数える(ADR 0421 帰結)。確認の一覧が読む。 */
   listPrRootIdsLackingUnpushedContent(name: string): string[];
   /** 盤面の既定 workspace 名。一致すれば消せない —— 既定はポインタである。 */
@@ -642,10 +644,13 @@ export async function deleteWorkspace(
   const tearingDown = doneTaskIdsInWorkspace(deps.db, input.name, { teardownUnfinished: true });
   const unpushed = deps.listUnpushedPrRootIds(input.name);
   const beingLandedAtEntry = deps.listLandingInProgressTaskIds(input.name);
+  const mergedAtEntry = deps.listMergedPrRootIdsWithUnfinishedLanding(input.name);
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   // ADR 0421 決定4 追記: 執行中は await の後にも読み直す —— その間に始まった執行と終わりの記録を競らせない。ここから終える transaction まで
   // await は無い(registry の commit も同期)ので、拒めば registry の行も基準の行も書かない
   const beingLanded = [...new Set([...beingLandedAtEntry, ...deps.listLandingInProgressTaskIds(input.name)])];
+  // ADR 0434 決定2: await の間に観測した merge も、終わりの記録が先に立つと帰り先なしになる(決定1)ので読み直す
+  const merged = [...new Set([...mergedAtEntry, ...deps.listMergedPrRootIdsWithUnfinishedLanding(input.name)])];
   const registry = loadRegistryOrStop(deps.db, deps.registry, deps.clock);
   const entry = ownEntry(registry.workspaces, input.name);
   if (!entry) throw new UnknownWorkspaceError(input.name);
@@ -659,6 +664,7 @@ export async function deleteWorkspace(
   if (tearingDown.length > 0) reasons.push({ code: "teardown_unfinished", task_ids: tearingDown });
   if (unpushed.length > 0) reasons.push({ code: "unpushed_pr_content", task_ids: unpushed });
   if (beingLanded.length > 0) reasons.push({ code: "landing_in_progress", task_ids: beingLanded });
+  if (merged.length > 0) reasons.push({ code: "merged_pr_landing_unfinished", task_ids: merged });
   if (deps.defaultWorkspaceName === input.name) reasons.push({ code: "board_default" });
   // ADR 0373 決定14: 見つかっている違反を 削除 → 再登録 → `repaired by hand` で比べずに通さない —— 基準の行を持つ間だけ拒む
   const [openQuarantine] = openQuarantinesNaming(deps.db, input.name);
