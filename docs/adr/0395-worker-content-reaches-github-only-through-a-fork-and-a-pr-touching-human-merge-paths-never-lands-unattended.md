@@ -1,5 +1,7 @@
 # worker の内容は PR の出元 repo(fork)を通ってだけ GitHub に出て、人間が merge する path に当たる PR は無人で着地しない
 
+**Status 追記: 決定4 の外せない既定に `.claude/agents/**` と `.codex/agents/**` が加わる** —— agent が名指した subagent 定義は保護ブランチから読んで worker に届けるので、無人 merge で載った定義を正本にしない([ADR 0446](0446-a-subagent-definition-the-agent-names-reaches-the-worker-rebuilt-from-the-keys-the-board-allows.md) 決定3、2026-11-28、issue #4038)。
+
 **Status 追記: 決定3 の宣言の扉が「写しのまだ無いタスクブランチだけ送る」(#3605 の追記)の写しは、宣言中の fork に盤面が最後に push した値の記録で、fork ごとに repo id で持ち、出元 repo の差し替えでも外しでも消さない。前に使った fork へ戻る扉と、外した後に置き直す扉も、盤面が一度送ったタスクブランチを送り直さない。決定2 の覚えた出元 repo の畳みは、前方向も行を書くだけになり、行き先の検査が畳む([ADR 0422](0422-what-the-board-last-pushed-to-a-head-repo-is-kept-per-fork-by-repository-id-and-a-head-repo-change-does-not-forget-it.md)、2026-11-26、issue #3851)。**
 
 **Status 追記: 決定3 の「出元 repo が宣言されたとき `task/*` を出元 repo へ送る」から、宣言の repo の記録が今の宣言と食い違う task のブランチを外す —— 別の repo で登録し直した名前の checkout に残る、旧い repo の内容である。出元 repo の記録の食い違いでは外さない([ADR 0419](0419-a-repo-disagreement-is-read-from-the-records-at-the-entrance-of-a-task-bound-operation-and-a-first-branch-cut-compares-the-record-of-its-fork-source.md) 決定7、2026-11-25、issue #3849)。**

@@ -1,6 +1,6 @@
 # Claude worker の CLI 状態は盤面所有で spawn ごとに新規、checkout の subagent 定義は名前で閉じる —— 口は settings.json だけではなかった
 
-**Status 追記: 決定2 の「checkout の subagent 定義は worker に届けない」は agent が名指した定義を除き、決定3 の信号は文言だけ変わる** —— 名指した定義は盤面が許す鍵だけで組み直して届ける([ADR 0446](0446-a-subagent-definition-the-agent-names-reaches-the-worker-rebuilt-from-the-keys-the-board-allows.md)、2026-11-28、issue #4038)。閉じた理由(定義が床の軸に触る)はそのまま残る。
+**Status 追記: 決定2 の「checkout の subagent 定義は worker に届けない」は agent が名指した定義を除き、決定3 の信号は文言だけ変わる** —— 名指した定義は保護ブランチから読み、盤面が許す鍵だけで組み直して届ける([ADR 0446](0446-a-subagent-definition-the-agent-names-reaches-the-worker-rebuilt-from-the-keys-the-board-allows.md)、2026-11-28、issue #4038)。閉じた理由(定義が床の軸に触る)はそのまま残る。
 
 **Status 追記: 決定1 の「`CLAUDE_CODE_SANDBOXED` を spawn env から常に delete」は [ADR 0358](0358-a-worker-shaped-process-receives-only-what-the-board-enumerates-env-is-built-and-codex-config-layers-outside-the-enumeration-fail-the-capability.md) で「盤面が組み立てる env の列挙に無い」と読み、worker の形の Board call(#3002)も同じ env を受け取る** —— 「その process が読む host 側の状態は盤面が持つ」の線を env と Codex の config 層へ広げた(2026-11-07、issue #2998 / #3017)。
 
