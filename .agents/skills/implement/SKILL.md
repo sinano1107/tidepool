@@ -28,14 +28,16 @@ Stay in this thread for all three:
 
 1. Read the issue, its resolving comments, and every ADR it references. `GLOSSARY.md` supplies the vocabulary for test names and interfaces.
 2. Create the branch: `issue-<n>-<slug>` — never commit wherever `HEAD` happens to be.
-3. Name the seams the work will be tested at and confirm them with the user. Pick from the three seams ADR 0107 names, and state each behaviour at the lowest seam it shows at. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask — so the agreement has to exist before the dispatch, and the agreed seams travel in the prompt. Handing a criterion to an existing test instead is a claim, and ADR 0107 決定3 makes it the attractive one — break the implementation and watch the test you named go red before you name it. One that stays green was never the evidence.
+3. Decide the seams the work will be tested at. Pick from the three seams ADR 0107 names, and state each behaviour at the lowest seam it shows at. The choice is yours: do not ask the user to confirm it. The seams travel in the dispatch prompt — `/tdd` writes tests only at the seams it is handed — and go in the pull request. Handing a criterion to an existing test instead is a claim, and ADR 0107 決定3 makes it the attractive one — break the implementation and watch the test you named go red before you name it. One that stays green was never the evidence.
 
 ## The implementation sub-agent
 
-Dispatch one `ponytail-implementer` sub-agent at the decided implementation model and effort. Give it the issue number and resolving comments, agreed test seams, governing ADRs, and the current branch. Instruct it to read `GLOSSARY.md`, implement with `/tdd` one red-green slice at a time, run the touched test files and typecheck. Follow `AGENTS.md` for the Node version and test permissions; the full suite runs in CI after the PR opens (ADR 0155).
+Dispatch one `ponytail-implementer` sub-agent at the decided implementation model and effort. Give it the issue number and resolving comments, the test seams, governing ADRs, and the current branch. Instruct it to read `GLOSSARY.md`, implement with `/tdd` one red-green slice at a time, run the touched test files and typecheck. Follow `AGENTS.md` for the Node version and test permissions; the full suite runs in CI after the PR opens (ADR 0155).
 
 - **Claude Code:** select `.claude/agents/ponytail-implementer.md`, passing the decided model and effort.
-- **Codex:** select `.codex/agents/ponytail-implementer.toml`, passing the decided model and effort. If this client cannot select custom agent types, pass that file's `developer_instructions` to an ordinary sub-agent with the same task and settings.
+- **Codex:** select `.codex/agents/ponytail-implementer.toml`, passing the decided model and effort.
+
+When `ponytail-implementer` cannot be selected, stop before dispatching and report that it could not be. Do not hand its instructions to an ordinary sub-agent, and do not implement in this thread: the implementation is always written under ponytail.
 
 The agent definition owns its standing behavior and completion steps. Pass the implementation task rather than restating those instructions.
 
@@ -47,13 +49,13 @@ Back in this thread, run `/code-review` on both axes (Standards + Spec) against 
 
 Add one line to each review sub-agent's brief: "Separately, list anything wrong you noticed that the diff did not cause — where, and whether you observed it or only suspect it." Those notes feed the filing step below.
 
-Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. A seam agreed before dispatch is not one: when a finding shows a behaviour stated above its lowest seam, take it back to the user instead of citing the agreement. Every other call is yours, and it is accountable because it goes in the pull request.
+Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. A finding that a behaviour is stated above its lowest seam is yours, like the seams were: move the test down when the behaviour shows at the lower seam, and when it does not, say why in the pull request. Every other call is yours too, and it is accountable because it goes in the pull request.
 
 Send the findings you decided to apply to the same implementation agent, continued rather than re-dispatched, so the fixes are written under ponytail and its one commit is the next stage. When that agent can no longer be reached, dispatch a new `ponytail-implementer` with the findings and the branch, and record it with the delegation decision in the PR (below).
 
 ## Filing what the run found
 
-Before opening the PR, gather everything the run surfaced, wherever it came from: the implementation agent's report (what it skipped or did not check included — check it yourself or file it as suspected), the review sub-agents' notes on what the diff did not cause, every review finding you left unapplied because it lies outside the issue, and what you noticed yourself — reading the issue and ADRs, agreeing the seams, applying findings. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
+Before opening the PR, gather everything the run surfaced, wherever it came from: the implementation agent's report (what it skipped or did not check included — check it yourself or file it as suspected), the review sub-agents' notes on what the diff did not cause, every review finding you left unapplied because it lies outside the issue, and what you noticed yourself — reading the issue and ADRs, deciding the seams, applying findings. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
 
 - **Belongs to an existing open issue** — comment there.
 - **Hits a closed issue** — closed as not planned means "not worth an issue", and the reason cites it. Closed as completed: what you found is a leftover or regression of it, so treat it as new, citing the closed issue.

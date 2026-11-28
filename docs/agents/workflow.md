@@ -61,6 +61,8 @@ After compaction, reload the active phase's instructions and ponytail level when
 
 `/implement <issue> [decision already taken]` — pass the delegation decision when it exists, omit it to have the skill run `/implementation-delegation` itself. See [the skill](../../.agents/skills/implement/SKILL.md) for what one run does.
 
+The run decides the test seams itself, without asking the human. The seams on offer are the three in ADR 0107 — server boundary (`bootTidepool`), domain layer (exported functions, asserted through exports), schema layer (SQL, migrations only) — and a behaviour is stated once, at the lowest seam it shows at.
+
 Tests need the Node version and sandbox permission described in `AGENTS.md`.
 
 The full suite runs in CI, not in the run's stages — see the skill's "Waiting for CI" (ADR 0155).
@@ -69,7 +71,6 @@ One issue per session, cleared between them. Two implementation sessions in one 
 
 ## Where a human is required
 
-- **Agreeing the seams**, before the first test. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask. The seams on offer are the three in ADR 0107 — server boundary (`bootTidepool`), domain layer (exported functions, asserted through exports), schema layer (SQL, migrations only) — and a behaviour is stated once, at the lowest seam it shows at.
 - **Merging the pull request.** The skill stops at an open PR with CI green and never merges, closes, or ticks acceptance criteria.
 
 Closing the originating issue is **not** one of them: the PR carries `Closes #<issue>` and merging
