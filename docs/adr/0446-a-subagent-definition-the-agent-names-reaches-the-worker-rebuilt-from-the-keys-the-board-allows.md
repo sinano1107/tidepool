@@ -1,5 +1,7 @@
 # agent が名指した subagent 定義は、保護ブランチから盤面が許す鍵だけで組み直して worker に届ける —— 門の1周は `/implement` で回る
 
+**Status 追記: 門の1周は subagent 定義を使わない —— 盤面の worker は `/implement` を使わず、実装専門の agent が装備した skill で書く([ADR 0447](0447-a-board-worker-does-not-run-implement-a-specialist-agent-implements-with-an-equipped-skill-and-review-perspectives-live-in-the-reviewers-definition.md)、2026-11-28、issue #4034)。この ADR の決定は、subagent 定義を worker に届けるときのものとして残り、門の後に回る(#4038)。冒頭の「門の1周は `/implement` で回る」の前提は ADR 0447 で置き換わった。**
+
 2026-11-28 の grilling(issue #4038)で決定。門(#1879)の1周は、worker が `/implement` で tidepool 自身の issue を実装する形で
 回すと決めた。`/implement` は実装を必ず `ponytail-implementer` に書かせ、選べなければ止まる(#4039)。
 
