@@ -1,6 +1,6 @@
 # skill アクセスは agent frontmatter の許可リスト — 強制は spawn 前列挙の補集合 deny
 
-**Status 追記: agent frontmatter に任意欄 `subagents` が加わる** —— checkout の subagent 定義のうち worker に届けてよい名前の列で、欄が無ければ何も届かない。決定2 の「参照であって在庫の主張ではない」はこの欄にも掛かる([ADR 0446](0446-a-subagent-definition-the-agent-names-reaches-the-worker-rebuilt-from-the-keys-the-board-allows.md)、2026-11-28、issue #4038)。
+**Status 追記: agent frontmatter に任意欄 `subagents` が加わる** —— subagent 定義のうち worker に届けてよい名前の列で(定義は保護ブランチから読む)、欄が無ければ何も届かない。決定2 の「参照であって在庫の主張ではない」はこの欄にも掛かる([ADR 0446](0446-a-subagent-definition-the-agent-names-reaches-the-worker-rebuilt-from-the-keys-the-board-allows.md)、2026-11-28、issue #4038)。
 
 **Status 追記: 決定5 の「`[]` は ping 不要」は skill の deny についてだけ残る** —— checkout の subagent 定義を名前で閉じるために、列挙 ping は allowlist に依らず常に撃つ([ADR 0354](0354-a-claude-workers-cli-state-is-board-owned-and-fresh-per-spawn-and-a-checkouts-subagent-definitions-are-denied-by-name.md) 決定2、2026-11-06、issue #2936)。`--disable-slash-commands` はそのまま。
 
