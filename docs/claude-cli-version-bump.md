@@ -109,6 +109,17 @@ limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/b
 The Codex rows of this canary and of the interview-room canary are read in
 [Raising the pinned Codex CLI version](codex-cli-version-bump.md).
 
+Then check that the worker can still start no background task (#4035). The worker's env sets
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`. If the new binary no longer has that name, the env does
+nothing and nothing reports it. The count must not be 0:
+
+```bash
+limactl shell tidepool -- bash -lc 'grep -a -c CLAUDE_CODE_DISABLE_BACKGROUND_TASKS ~/.local/share/claude/versions/<new version>'
+```
+
+If it is 0, find out how the new version turns background tasks off, then change the env in the same
+PR as the pin.
+
 **Not covered.** Three surfaces cannot be reproduced on demand, so they are unverified. The first
 two are left to the existing fail-closed handling (ADR 0186 決定7, ADR 0187 決定5):
 
