@@ -448,6 +448,18 @@ const DISABLE_PROMPT_CACHING = "DISABLE_PROMPT_CACHING";
  *  同じ理由で1か所に名付ける —— env 関数のどこかで綴りを誤れば、黙って開く。 */
 const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
 
+/** worker の CLI が管理するバックグラウンド task を閉じる env(#4035)。`ADVISOR_DISABLE_ENV` と同じ理由で
+ *  1か所に名付ける。2.1.332 で測った: 閉じないと subagent が起こしたバックグラウンド Bash が subagent の
+ *  ターンの終わりで切られ、それでも `result: success` で終わる。閉じると Bash と Task の
+ *  `run_in_background` が schema から消え、init 行の `tools` は変わらない。 */
+const BACKGROUND_TASKS_DISABLE_ENV = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
+
+/** 前面の Bash 1回の上限(#4035)。CLI の既定の上限は10分で、背景 task を閉じた worker では10分を超える
+ *  テストを走らせる道が無くなる。60分は work の watchdog(90分、ADR 0041)の内側に置く。既定の timeout
+ *  (2分)は変えない —— 止まったコマンドを早く落とし、長く走らせるときは model が `timeout` を渡す。
+ *  2.1.332 で測った: この上限なら11分の前面コマンドが完走し、10分の stream idle timeout にも当たらない。 */
+const BASH_MAX_TIMEOUT_MS = 60 * 60_000;
+
 /** Board call と Moonshot の認証 probe は worker session ではないので advisor を持たず(ADR 0044)、CLI は自分で更新しない
  *  (ADR 0186 決定4)。 */
 const BOARD_CLI_CLOSED = { [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" } as const;
@@ -651,6 +663,13 @@ const EXPECT_FILES_OUTSIDE_OF_PATTERNS = { key: "sparse.expectFilesOutsideOfPatt
  *  6. `sparse.expectFilesOutsideOfPatterns=true` as `GIT_CONFIG_*` entry 0
  *     (ADR 0293 / ADR 0037 機構2): the sandbox's settings stub must not clear a
  *     sparse S bit. The host's own `GIT_CONFIG_*` is not in the enumeration.
+ *  7. `BACKGROUND_TASKS_DISABLE_ENV` — no CLI-managed background task (#4035):
+ *     one a subagent starts is cut at the subagent's turn end while the
+ *     session still ends in `success`, so unfinished work would be recorded
+ *     as complete. Commands run in the foreground instead.
+ *  8. `BASH_MAX_TIMEOUT_MS` at 60 minutes, so a foreground command can run
+ *     past the CLI's default 10-minute cap now that it cannot go to the
+ *     background (#4035).
  *
  *  Not in the enumeration, so whatever the host exports never arrives: the
  *  refusal-swap stoppers (a refusal's same-model retry and model swap stay
@@ -684,6 +703,8 @@ export function workerSpawnEnv(
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
+    [BACKGROUND_TASKS_DISABLE_ENV]: "1",
+    BASH_MAX_TIMEOUT_MS: String(BASH_MAX_TIMEOUT_MS),
     ...(advisor === undefined ? { [ADVISOR_DISABLE_ENV]: "1" } : {}),
     // ADR 0293 / ADR 0037 機構2: the sandbox's settings stub must not clear the task checkout's sparse S bit.
     GIT_CONFIG_COUNT: "1",
