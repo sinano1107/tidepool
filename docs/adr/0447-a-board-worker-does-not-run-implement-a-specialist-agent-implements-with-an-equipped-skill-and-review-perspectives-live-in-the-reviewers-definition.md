@@ -23,7 +23,7 @@ issue を実装する」形で回すと決め、そのために checkout の sub
    - tako ではない。tako の本文は構造的に空(ADR 0117 決定3 —— generalist で、手順は skill に置く)。
    - ponytail は `disable-model-invocation` で、model が Skill tool から読み込まない(設計の手順の最中に読み込まれないための意図)。
      なので agent 定義が「装備する skill」を宣言し、盤面が spawn 時にその本文を注入する形を第1案にする。必ず読むものは注入する、の
-     線(ADR 0180)に乗る。ADR 0025 の帰結が「別機能」として残した装備にあたる。
+     先例(ADR 0180 の memory の meta-review の材料)に倣う。ADR 0025 の帰結が「別機能」として残した装備にあたる。
    - 装備の機構と、注入する本文の出所(保護ブランチから読むか)は #4046 が決める。本文を registry に写す形と、Read させる形は、
      それぞれ重複と信頼の穴を持つ。
 3. **レビューの観点は reviewer の定義が持つ。**
@@ -57,3 +57,5 @@ issue を実装する」形で回すと決め、そのために checkout の sub
   #4046 の装備の機構を待つことである。
 - #1879 のコメント「門の1周は今の `/implement` で回す」は、この ADR で置き換わる。
 - `/tdd` と `/implement` の seam の変更(#4039)は残す —— 新しい agent も headless で `/tdd` を使う。
+- `/implement` がレビュー以外に持つ仕事(seam を PR に書く、run で見つけたことの起票、PR 本文、CI 待ち)の行き先は、#4034 が1つずつ
+  決める。
